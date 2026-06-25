@@ -1,0 +1,103 @@
+name: rakshakai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rakshakai
+      POSTGRES_USER: rakshakai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rakshakai -d rakshakai"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./ai-service
+    environment:
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in .env.docker}
+      YOLO_CONFIG_DIR: /models
+      YOLO_MODEL_NAME: yolov8n.pt
+      YOLO_MIN_CONFIDENCE: "0.50"
+      YOLO_IMAGE_SIZE: "640"
+      YOLO_MAX_DETECTIONS: "30"
+      YOLO_DEVICE: cpu
+    volumes:
+      - ai-model-cache:/models
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      PORT: "5000"
+      NODE_ENV: development
+      DATABASE_URL: postgresql://rakshakai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@postgres:5432/rakshakai
+      PG_SSL_MODE: disable
+      PG_MIGRATION_RETRIES: "20"
+      PG_MIGRATION_RETRY_MS: "1500"
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env.docker}
+      SEED_POLICE_PASSWORD: ${SEED_POLICE_PASSWORD:?Set SEED_POLICE_PASSWORD in .env.docker}
+      SEED_CITIZEN_PASSWORD: ${SEED_CITIZEN_PASSWORD:?Set SEED_CITIZEN_PASSWORD in .env.docker}
+      AI_SERVICE_URL: http://ai-service:8000
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in .env.docker}
+      AI_SERVICE_TIMEOUT_MS: "12000"
+      AI_HEALTH_TIMEOUT_MS: "5000"
+      OSRM_BASE_URL: https://router.project-osrm.org
+      NOMINATIM_BASE_URL: https://nominatim.openstreetmap.org
+      MAP_COUNTRY_CODES: in
+      MAP_USER_AGENT: RakshakAI/1.0 docker-command-center
+      CORS_ORIGIN: http://localhost:3000
+      FRONTEND_ORIGINS: http://127.0.0.1:3000
+      JSON_BODY_LIMIT: 1.5mb
+      API_RATE_LIMIT: "600"
+      AUTH_RATE_LIMIT: "10"
+      PASSWORD_CHANGE_RATE_LIMIT: "10"
+      TRUST_PROXY: "1"
+    command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && node server.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    ports:
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  ai-model-cache:

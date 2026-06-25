@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RakshakAI Command Center</title>
+  </head>
+  <body>
+    <section class="portal-login" id="portalLogin">
+      <div class="portal-card">
+        <div class="portal-info">
+          <div class="portal-brand">
+            <span>R</span>
+            <div>
+              <strong>RakshakAI</strong>
+              <small>Public Safety Intelligence Platform</small>
+            </div>
+          </div>
+          <div class="portal-copy">
+            <span class="portal-badge"><span></span> Authorized personnel portal</span>
+            <h1>Unified public safety operations.</h1>
+            <p>Secure access to real-time camera intelligence, GIS coordination, missing-person reports, incident response, and emergency alerts.</p>
+          </div>
+          <div class="portal-capabilities" aria-label="Platform capabilities">
+            <div><span>01</span><p><strong>Operational awareness</strong><small>Live camera and AI-assisted monitoring</small></p></div>
+            <div><span>02</span><p><strong>Coordinated response</strong><small>GIS routing, incidents, and dispatch</small></p></div>
+            <div><span>03</span><p><strong>Secure by role</strong><small>Admin, police, and citizen access controls</small></p></div>
+          </div>
+          <p class="portal-security"><span></span> Protected command environment · Activity is monitored</p>
+        </div>
+        <div class="portal-panel">
+          <form id="loginForm" class="login-form auth-form" data-auth-panel="login" autocomplete="off">
+            <div class="auth-heading">
+              <span class="auth-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2"/><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M12 14v2"/></svg>
+              </span>
+              <span class="eyebrow">Secure sign in</span>
+              <h2>Welcome back</h2>
+              <p>Enter your registered command-center credentials.</p>
+            </div>
+            <label>
+              Email
+              <input type="email" name="email" placeholder="Enter registered email" autocomplete="off" required />
+            </label>
+            <label>
+              Password
+              <span class="password-field">
+                <input type="password" name="password" placeholder="Enter password" autocomplete="off" required />
+                <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </span>
+            </label>
+            <button class="primary auth-submit" type="submit">Sign in securely <span aria-hidden="true">→</span></button>
+            <p class="login-error" id="loginError" role="status"></p>
+            <div class="auth-divider"><span>Citizen access</span></div>
+            <p class="auth-switch">Need to submit a public report? <button type="button" data-auth-mode="register">Create an account</button></p>
+            <p class="auth-assurance"><span></span> Encrypted session · Role-based access</p>
+          </form>
+          <form id="registerForm" class="login-form auth-form app-hidden" data-auth-panel="register">
+            <div class="auth-heading">
+              <span class="auth-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
+              </span>
+              <span class="eyebrow">Citizen portal</span>
+              <h2>Create your account</h2>
+              <p>Register to submit and track public safety reports.</p>
+            </div>
+            <label>
+              Name
+              <input type="text" name="name" placeholder="Full name" autocomplete="name" required />
+            </label>
+            <label>
+              Email
+              <input type="email" name="email" placeholder="name@example.com" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <span class="password-field">
+                <input type="password" name="password" placeholder="Minimum 6 characters" autocomplete="new-password" required />
+                <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </span>
+            </label>
+            <label>
+              Role
+              <select name="role" required>
+                <option value="Citizen">Citizen</option>
+                <option value="Police Officer">Police Officer</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </label>
+            <button class="primary auth-submit" type="submit">Create account <span aria-hidden="true">→</span></button>
+            <p class="login-error" id="registerError" role="status"></p>
+            <p class="auth-switch">Already registered? <button type="button" data-auth-mode="login">Return to sign in</button></p>
+            <p class="auth-assurance"><span></span> Your evidence and reports are handled securely</p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <div class="app-shell app-hidden" id="appShell">
+      <aside class="sidebar">
+        <div class="brand"><span>R</span><div><strong>RakshakAI</strong><small>Public Safety Command</small></div></div>
+        <div class="sidebar-status"><span class="status-beacon"></span><div><strong>Operations online</strong><small>Secure monitoring network</small></div></div>
+        <span class="nav-label">Operations</span>
+        <nav class="navigation">
+          <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
+          <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
+          <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
+          <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
+          <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
+          <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
+          <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
+          <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
+          <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
+        </nav>
+        <div class="role-box">Active role: <strong id="currentUser">Connecting...</strong></div>
+      </aside>
+      <main class="workspace">
+        <header class="topbar">
+          <div><span class="eyebrow page-eyebrow">RakshakAI Operations</span><h1 id="viewTitle">Sector 7 Safety Grid</h1></div>
+          <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="logoutButton" class="ghost">Logout</button></div>
+        </header>
+        <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
+
+        <section class="view active" data-panel="dashboard">
+          <section class="command-hero">
+            <div class="command-hero-copy">
+              <span class="hero-kicker">Unified operational intelligence</span>
+              <h2>Know what needs attention, the moment it happens.</h2>
+              <p>Monitor public-safety reports, camera sources, alerts, GIS routing, and response activity from one secure workspace.</p>
+            </div>
+            <div class="command-health">
+              <span class="health-icon"><span></span></span>
+              <div><strong id="systemHealthTitle">Systems operational</strong><small id="systemHealthDetail">AI, GIS, cameras, and dispatch are ready</small></div>
+            </div>
+          </section>
+          <div class="dashboard-metrics">
+            <article class="summary-card metric-missing"><div class="metric-heading"><span>Missing Persons</span><i>MP</i></div><strong id="missingMetric">--</strong><small>Registered cases</small></article>
+            <article class="summary-card metric-alert"><div class="metric-heading"><span>Active Alerts</span><i>AL</i></div><strong id="alertMetric">--</strong><small>Open alerts</small></article>
+            <article class="summary-card metric-camera"><div class="metric-heading"><span>Active Cameras</span><i>CM</i></div><strong id="cameraMetric">--</strong><small id="cameraStatus">Loading</small></article>
+            <article class="summary-card metric-zone"><div class="metric-heading"><span>Monitored Zones</span><i>GZ</i></div><strong id="zoneMetric">--</strong><small>GIS sectors</small></article>
+          </div>
+          <section class="panel quick-controls">
+            <div class="panel-head"><div><span class="eyebrow">Command Shortcuts</span><h2>Quick Controls</h2></div></div>
+            <div class="quick-control-grid">
+              <button type="button" class="quick-control" data-view-jump="gis"><span>GIS</span><strong>GIS Monitoring</strong></button>
+              <button type="button" class="quick-control" data-view-jump="cctv"><span>CCTV</span><strong>CCTV Feeds</strong></button>
+              <button type="button" class="quick-control" data-view-jump="live-vision"><span>LV</span><strong>Live Vision</strong></button>
+              <button type="button" class="quick-control" data-view-jump="missing"><span>MP</span><strong>Missing Persons</strong></button>
+            </div>
+          </section>
+          <section class="panel source-panel">
+            <div class="panel-head"><div><span class="eyebrow">Camera Sources</span><h2>Unified Source Control</h2></div></div>
+            <div id="sourceSelector" class="source-selector"></div>
+          </section>
+          <div class="dashboard-grid operations-grid">
+            <section class="panel"><div class="panel-head"><div><span class="eyebrow">Operations Queue</span><h2>Live Incidents</h2></div><div class="panel-actions"><span id="queueCount" class="chip">-- active</span><button id="createIncident" class="ghost">Open Incident</button></div></div><div id="incidentList" class="stack"></div></section>
+            <section class="panel"><div class="panel-head"><div><span class="eyebrow">Emergency Response</span><h2>Dispatch Timeline</h2></div></div><ol id="timeline" class="timeline"></ol><div id="routeSummary" class="route-summary">Route engine ready for nearest unit navigation.</div><div class="actions"><button id="assignIncident" class="ghost">Assign Unit</button><button id="routeIncident" class="ghost">Suggest Route</button><button id="closeIncident" class="ghost">Close Incident</button><button id="runAiScan" class="primary">Run AI Scan</button></div></section>
+          </div>
+        </section>
+
+        <section class="view" data-panel="incident-command">
+          <div class="command-page-head">
+            <div><span class="eyebrow">Unified Response Workflow</span><h2>Incident Command</h2><p>Review intelligence, verify reports, dispatch units, and manage the complete response lifecycle.</p></div>
+            <button id="refreshCommand" class="ghost" type="button">Refresh Command Data</button>
+          </div>
+          <div class="command-kpis">
+            <article><span>Active Incidents</span><strong id="commandActiveMetric">0</strong><small>Open operational cases</small></article>
+            <article><span>Pending Review</span><strong id="commandReviewMetric">0</strong><small>AI alerts and citizen reports</small></article>
+            <article><span>Units Available</span><strong id="commandUnitsMetric">0</strong><small>Ready for dispatch</small></article>
+            <article><span>Average Response ETA</span><strong id="commandEtaMetric">--</strong><small>Assigned incidents</small></article>
+          </div>
+          <div class="incident-command-layout">
+            <section class="panel command-queue-panel">
+              <div class="panel-head"><div><span class="eyebrow">Operational Queue</span><h2>Active Incidents</h2></div></div>
+              <div id="commandIncidentQueue" class="command-incident-table"></div>
+            </section>
+            <section class="panel command-detail-panel">
+              <div class="panel-head"><div><span class="eyebrow">Selected Case</span><h2>Incident Details</h2></div></div>
+              <div id="commandIncidentDetail" class="command-detail-empty">Select an incident to view command actions.</div>
+            </section>
+          </div>
+          <div class="incident-command-layout command-map-row">
+            <section class="panel">
+              <div class="panel-head"><div><span class="eyebrow">Command Map</span><h2>Incidents & Response Units</h2></div></div>
+              <div id="commandMap" class="event-map large command-map" data-satellite-map data-map-lat="28.6139" data-map-lng="77.2295" data-map-zoom="12"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><span class="eyebrow">Review Queue</span><h2>Pending Verification</h2></div></div>
+              <div id="commandReviewQueue" class="command-review-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-panel="gis">
+          <div class="gis-layout">
+            <section class="panel">
+              <div class="panel-head">
+                <div><span class="eyebrow">GIS Monitoring</span><h2>Operational Navigation</h2></div>
+                <div class="panel-actions">
+                  <button id="toggleMapLayer" class="ghost" type="button">Satellite View</button>
+                  <button id="useMyLocation" class="ghost" type="button">Use My Location</button>
+                  <button id="setMapStart" class="ghost" type="button">Set Start</button>
+                  <button id="navigateMap" class="primary" type="button">Navigate</button>
+                  <button id="recalculateRoute" class="ghost" type="button">Recalculate</button>
+                  <button id="openExternalRoute" class="ghost" type="button" disabled>Open Full Route</button>
+                  <button id="clearMapRoute" class="ghost" type="button">Clear Route</button>
+                </div>
+              </div>
+              <div id="gisMap" class="event-map large" data-satellite-map data-map-lat="28.6139" data-map-lng="77.2295" data-map-zoom="12"><span class="heat heat-two"></span></div>
+              <p id="mapNavigationStatus" class="form-status" aria-live="polite">Search or click the map to choose a destination.</p>
+            </section>
+            <aside class="navigation-panel">
+              <div class="navigation-metrics">
+                <article><span>Distance</span><strong id="routeDistance">--</strong></article>
+                <article><span>ETA</span><strong id="routeEta">--</strong></article>
+              </div>
+              <section class="panel">
+                <span class="eyebrow">Route Details</span>
+                <h2 id="routeProvider">No route</h2>
+                <div id="routePoints" class="route-points">Start and destination not selected.</div>
+                <div class="route-metadata">
+                  <small id="routeStartCoordinates">Start: --</small>
+                  <small id="routeDestinationCoordinates">Destination: --</small>
+                  <small id="routeCalculatedAt">Calculated: --</small>
+                </div>
+                <ol id="routeSteps" class="route-steps"><li>Choose a destination to begin.</li></ol>
+              </section>
+              <section class="panel"><h2>Zone Status</h2><div id="zoneTable" class="zone-table"></div></section>
+            </aside>
+          </div>
+        </section>
+        <section class="view" data-panel="cctv">
+          <section class="panel source-panel">
+            <div class="panel-head"><div><span class="eyebrow">Camera Sources</span><h2>Monitoring Modes</h2></div></div>
+            <div id="sourceSelectorCctv" class="source-selector"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div><span class="eyebrow">CCTV Monitoring</span><h2>Camera Matrix</h2></div></div>
+            <div id="cameraGridLarge" class="camera-grid large-grid"></div>
+          </section>
+        </section>
+        <section class="view" data-panel="live-vision">
+          <div class="live-vision-layout">
+            <section class="panel live-camera-panel">
+              <div class="panel-head">
+                <div><span class="eyebrow">Phone Camera Mode</span><h2>Rakshak Live Vision</h2></div>
+                <label class="emergency-toggle"><input id="emergencyMode" type="checkbox" /> Emergency Mode</label>
+              </div>
+              <div class="live-video-wrap">
+                <video id="liveVisionVideo" playsinline muted></video>
+                <div id="liveDetectionBoxes" class="detection-boxes" aria-hidden="true"></div>
+                <div id="liveVisionPlaceholder" class="live-placeholder">Camera inactive</div>
+              </div>
+              <canvas id="liveVisionCanvas" hidden></canvas>
+              <div class="live-actions">
+                <button id="startLiveVision" class="primary" type="button">Start Camera</button>
+                <button id="stopLiveVision" class="ghost" type="button" disabled>Stop Camera</button>
+                <button id="retryLiveVision" class="ghost" type="button">Retry</button>
+                <label class="live-interval-control">Analyze every
+                  <select id="liveVisionInterval">
+                    <option value="800">0.8 sec</option>
+                    <option value="1000" selected>1.0 sec</option>
+                    <option value="1500">1.5 sec</option>
+                  </select>
+                </label>
+                <button id="toggleLiveVisionMute" class="ghost" type="button">Mute alerts</button>
+              </div>
+              <p id="liveVisionError" class="form-status error" aria-live="polite"></p>
+            </section>
+            <section class="panel live-status-panel">
+              <div class="status-card">
+                <span class="eyebrow">Detection Status</span>
+                <strong id="liveDetectionState">Idle</strong>
+                <small id="liveDetectionDetail">Start camera to begin frame analysis.</small>
+              </div>
+              <div class="status-card">
+                <span class="eyebrow">Latest Alert</span>
+                <strong id="liveLatestAlert">No alerts yet</strong>
+                <small id="liveLatestAlertDetail">Threat alerts from this source will appear here.</small>
+              </div>
+              <div class="status-card">
+                <span class="eyebrow">AI Service</span>
+                <strong id="liveSourceHealth">Checking AI status</strong>
+                <small id="liveAiHealthDetail">Configure AI_SERVICE_URL to enable real detection.</small>
+              </div>
+              <div class="status-card">
+                <span class="eyebrow">Capability Notice</span>
+                <strong>Object/person detection only</strong>
+                <small>Face matching is not enabled. Person identity is not inferred. Investigation-assist only; human review required.</small>
+              </div>
+              <div class="status-card live-performance-card">
+                <span class="eyebrow">Performance</span>
+                <div class="live-performance-grid">
+                  <span>FPS <strong id="liveVisionFps">0.0</strong></span>
+                  <span>Inference <strong id="liveInferenceMs">-- ms</strong></span>
+                </div>
+                <small id="liveLastAnalyzed">No frame analyzed yet.</small>
+              </div>
+            </section>
+          </div>
+          <section class="panel live-history-panel">
+            <div class="panel-head"><div><span class="eyebrow">Review Log</span><h2>Detection Notifications</h2></div></div>
+            <div id="liveNotificationHistory" class="live-notification-history"><div class="empty-state">No detections recorded in this camera session.</div></div>
+          </section>
+        </section>
+        <section class="view" data-panel="missing"><div class="dashboard-grid single"><section class="panel"><span class="eyebrow">Citizen Intake</span><h2>Submit Missing Person / Object Report</h2><form id="missingForm" class="form missing-report-form"><label>Report Type<select name="reportType"><option value="missing_person">Missing Person</option><option value="missing_object">Missing Object</option><option value="emergency_report">Emergency Report</option></select></label><label>Urgency Level<select name="urgency"><option value="medium">Normal Urgency</option><option value="high">High Urgency</option><option value="critical">Critical Emergency</option><option value="low">Low Urgency</option></select></label><label>Person/Object Name<input name="personName" value="Aarav Sharma" placeholder="Enter missing person or object name" required /></label><label>Age / Estimated Age<input name="age" value="8" type="number" min="0" placeholder="Enter age if person, or leave blank for object" /></label><label>Last Seen Location<input name="lastSeen" value="Gate A, Sector 7" placeholder="Enter last seen location" required /></label><div class="form-coordinate-row"><label>Latitude<input name="lat" type="number" step="any" placeholder="Latitude" /></label><label>Longitude<input name="lng" type="number" step="any" placeholder="Longitude" /></label></div><label>Description / Identifying Details<input name="description" placeholder="Add clothing, color, object details, contact notes, or other useful information" /></label><label class="file-drop" for="personFile"><span>Upload Photo or Evidence</span><strong id="fileName">No file selected</strong><input id="personFile" name="personFile" type="file" accept="image/*,video/*" /></label><div id="filePreview" class="file-preview" hidden></div><div class="form-actions"><button id="registerReportBtn" class="primary" type="submit">Submit Report for Review</button></div><p id="missingFormStatus" class="form-status" aria-live="polite"></p></form></section><section id="caseQueuePanel" class="panel"><h2>My Submitted Reports</h2><div id="caseList" class="stack"></div></section></div></section>
+        <section class="view" data-panel="alerts">
+          <section class="alert-console">
+            <div class="alert-console-head">
+              <div>
+                <h2>Emergency Alerts</h2>
+                <p>Real-time incident notifications and response status</p>
+              </div>
+              <button id="clearAlerts" class="ghost alert-clear" type="button">Clear All</button>
+            </div>
+            <form id="manualAlertForm" class="manual-alert-form">
+              <div class="manual-alert-row">
+                <label>
+                  Type
+                  <select name="type">
+                    <option value="Emergency Broadcast">Emergency Broadcast</option>
+                    <option value="Crowd Control">Crowd Control</option>
+                    <option value="Medical">Medical</option>
+                    <option value="Security">Security</option>
+                    <option value="Weather">Weather</option>
+                    <option value="TEST_ALERT">TEST_ALERT</option>
+                  </select>
+                </label>
+                <label>
+                  Severity
+                  <select name="severity">
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+                <label>
+                  Zone
+                  <input name="zone" list="alertZones" value="All Zones" required />
+                </label>
+              </div>
+              <label class="manual-alert-message">
+                Message
+                <input name="message" value="Crowd control announcement required near main entry" maxlength="160" required />
+              </label>
+              <div class="manual-alert-row manual-alert-footer">
+                <label>
+                  Latitude
+                  <input name="lat" type="number" step="0.0001" placeholder="28.6139" />
+                </label>
+                <label>
+                  Longitude
+                  <input name="lng" type="number" step="0.0001" placeholder="77.2295" />
+                </label>
+                <button id="sendAlert" class="primary alert-create" type="submit">Send Alert</button>
+              </div>
+              <p class="login-error" id="manualAlertError"></p>
+              <datalist id="alertZones">
+                <option value="All Zones"></option>
+                <option value="Red Zone"></option>
+                <option value="Main Entry"></option>
+                <option value="Gate A"></option>
+                <option value="Food Court"></option>
+                <option value="Medical Camp"></option>
+                <option value="Parking Zone B"></option>
+                <option value="Transit Hub"></option>
+                <option value="zone-1"></option>
+              </datalist>
+            </form>
+            <div id="alertFilters" class="alert-filters" aria-label="Alert severity filters"></div>
+            <div id="alertGrid" class="alert-list"></div>
+          </section>
+        </section>
+        <section class="view" data-panel="history">
+          <div class="dashboard-grid single">
+            <section class="panel">
+              <div class="panel-head">
+                <div><span class="eyebrow">Closed Cases</span><h2>Incident History</h2></div>
+                <div class="panel-actions"><span id="historyCount" class="chip">-- closed</span><button id="clearHistory" class="ghost alert-clear" type="button">Clear History</button></div>
+              </div>
+              <div id="historyList" class="stack"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><div><span class="eyebrow">Response Review</span><h2>Resolution Analytics</h2></div></div>
+              <div id="historyStats" class="history-stats"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="settings">
+          <div class="dashboard-grid single">
+            <section class="panel security-settings">
+              <div class="panel-head">
+                <div><span class="eyebrow">Account Security</span><h2>Change Admin Password</h2></div>
+                <span class="chip">Admin only</span>
+              </div>
+              <p class="settings-copy">Use a unique password with at least 10 characters, uppercase, lowercase, and a number. You will be signed out after the change.</p>
+              <form id="changePasswordForm" class="password-change-form">
+                <label>Current password
+                  <span class="password-field">
+                    <input type="password" name="currentPassword" autocomplete="current-password" required />
+                    <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </span>
+                </label>
+                <label>New password
+                  <span class="password-field">
+                    <input type="password" name="newPassword" autocomplete="new-password" minlength="10" required />
+                    <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </span>
+                </label>
+                <label>Confirm new password
+                  <span class="password-field">
+                    <input type="password" name="confirmPassword" autocomplete="new-password" minlength="10" required />
+                    <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </span>
+                </label>
+                <div class="password-change-actions">
+                  <button class="primary" type="submit">Update Password</button>
+                  <span id="changePasswordStatus" class="form-status" role="status"></span>
+                </div>
+              </form>
+            </section>
+            <section class="panel"><h2>Device Health</h2><div id="deviceList" class="stack"></div></section>
+            <section class="panel"><h2>Audit Logs</h2><div id="auditList" class="stack"></div></section>
+            <section class="panel"><div class="panel-head"><div><span class="eyebrow">Production Readiness</span><h2>Real Service Integrations</h2></div></div><div id="integrationList" class="integration-list"></div></section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "rakshakai-local-product",
+  "version": "1.0.0",
+  "description": "RakshakAI local full-stack MVP",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others --names BACKEND,FRONTEND --prefix-colors blue,green \"npm run backend:dev\" \"npm run frontend:dev\"",
+    "start": "concurrently --kill-others --names BACKEND,FRONTEND --prefix-colors blue,green \"npm run backend:start\" \"npm run frontend:dev\"",
+    "check": "node --check backend/server.js && node --check frontend/src/app.js",
+    "test": "npm --prefix backend test",
+    "test:security": "npm --prefix backend run test:security",
+    "docker:config": "docker compose --env-file .env.docker config",
+    "docker:up": "docker compose --env-file .env.docker up --build -d",
+    "docker:down": "docker compose --env-file .env.docker down",
+    "docker:logs": "docker compose --env-file .env.docker logs -f",
+    "backend:start": "cd backend && npm run start",
+    "backend:dev": "cd backend && npm run dev",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}
