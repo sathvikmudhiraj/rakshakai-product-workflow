@@ -4,24 +4,27 @@
   "description": "RakshakAI local full-stack MVP",
   "private": true,
   "scripts": {
+    "postinstall": "npm --prefix backend install && npm --prefix frontend install",
     "dev": "concurrently --kill-others --names BACKEND,FRONTEND --prefix-colors blue,green \"npm run backend:dev\" \"npm run frontend:dev\"",
     "start": "concurrently --kill-others --names BACKEND,FRONTEND --prefix-colors blue,green \"npm run backend:start\" \"npm run frontend:dev\"",
     "check": "node --check backend/server.js && node --check frontend/src/app.js",
-    "test": "npm --prefix backend test",
+    "test": "npm --prefix backend test && node --test frontend/tests/*.test.js",
     "test:security": "npm --prefix backend run test:security",
+    "reset:demo-users": "npm --prefix backend run reset:demo-users",
     "docker:config": "docker compose --env-file .env.docker config",
-    "docker:up": "docker compose --env-file .env.docker up --build -d",
-    "docker:down": "docker compose --env-file .env.docker down",
+    "docker:preflight": "powershell -ExecutionPolicy Bypass -File scripts/docker-preflight.ps1",
+    "docker:up": "powershell -ExecutionPolicy Bypass -File scripts/docker-up.ps1",
+    "docker:up:osrm": "docker compose --env-file .env.docker --profile osrm up -d --build",
+    "docker:down": "docker compose --env-file .env.docker stop",
     "docker:logs": "docker compose --env-file .env.docker logs -f",
+    "backup:json": "powershell -ExecutionPolicy Bypass -File scripts/backup-json.ps1",
     "backend:start": "cd backend && npm run start",
     "backend:dev": "cd backend && npm run dev",
     "frontend:dev": "cd frontend && npm run dev",
     "frontend:build": "cd frontend && npm run build"
   },
-  "dependencies": {
-    "leaflet": "^1.9.4"
-  },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.3",
+    "jsdom": "^29.1.1"
   }
 }

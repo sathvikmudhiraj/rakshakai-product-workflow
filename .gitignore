@@ -6,6 +6,7 @@
 
 .env
 .env.*
+.env.docker
 backend/.env
 frontend/.env
 ai-service/.env
@@ -20,9 +21,15 @@ server-out.log
 server-err.log
 npm-debug.log*
 
-backend/data/db.json
+backups/
 
 ai-service/*.pt
+
+# Local GIS/OSRM datasets are large generated artifacts.
+*.osm.pbf
+*.osrm
+*.osrm.*
+docker/osrm-data/
 
 dist/
 build/
