@@ -11,10 +11,52 @@ const aiContract = require("../services/ai.service");
 
 const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rakshakai-security-"));
 const testDatabase = path.join(testDirectory, "db.json");
-const sourceDatabase = path.join(__dirname, "..", "data", "db.json");
+const backendSourceDatabase = path.join(__dirname, "..", "data", "db.json");
+const rootSourceDatabase = path.join(__dirname, "..", "..", "data", "db.json");
+const sourceDatabase = fs.existsSync(backendSourceDatabase)
+  ? backendSourceDatabase
+  : rootSourceDatabase;
 const TEST_PASSWORD = "RakshakAI-Test-123!";
 
 const database = JSON.parse(fs.readFileSync(sourceDatabase, "utf8"));
+if (!Array.isArray(database.responseUnits) || !database.responseUnits.length) {
+  database.responseUnits = [
+    {
+      id: "unit_p04",
+      unitCode: "P-01",
+      name: "Patancheru Patrol 01",
+      officerName: "Inspector Kavya Rao",
+      vehicleType: "Patrol SUV",
+      unitType: "police_patrol",
+      status: "available",
+      lat: 17.5285,
+      lng: 78.2636,
+      zone: "Industrial Area",
+      beat: "Industrial Area",
+      jurisdiction: "Patancheru",
+      source: "demo_seed",
+      isDemo: true,
+      operational: true
+    },
+    {
+      id: "unit_p05",
+      unitCode: "P-02",
+      name: "BHEL Patrol 02",
+      officerName: "Sub Inspector Meera Singh",
+      vehicleType: "Patrol SUV",
+      unitType: "police_patrol",
+      status: "available",
+      lat: 17.4933,
+      lng: 78.3915,
+      zone: "BHEL Township",
+      beat: "BHEL Township",
+      jurisdiction: "Ramachandrapuram",
+      source: "demo_seed",
+      isDemo: true,
+      operational: true
+    }
+  ];
+}
 const passwordHash = bcrypt.hashSync(TEST_PASSWORD, 4);
 database.users.forEach((user) => {
   user.passwordHash = passwordHash;
