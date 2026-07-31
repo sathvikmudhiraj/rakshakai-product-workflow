@@ -21,6 +21,31 @@ Press `Ctrl+C` once to stop both services.
 
 If port `3000` or `5000` is already occupied, stop the older app process and run the command again.
 
+## Local Demo Data
+
+By default, leave `DATABASE_URL` empty to run with `backend/data/db.json`.
+If you configure PostgreSQL for development, run migrations first:
+
+```powershell
+npm --prefix backend run migrate
+```
+
+Reset the local/demo accounts only in development:
+
+```powershell
+npm run reset:demo-users
+```
+
+Demo credentials:
+
+```text
+admin@rakshakai.local / demo123
+police@rakshakai.local / demo123
+citizen@rakshakai.local / demo123
+```
+
+The reset script refuses to run when `NODE_ENV=production`.
+
 ## Run the AI Service
 
 ```powershell
@@ -36,6 +61,29 @@ AI health: `http://localhost:8000/health`
 
 After the AI service starts, restart the backend. Authenticated Admin and Police
 users can check `http://localhost:5000/api/ai/health`.
+
+If `AI_SERVICE_URL` is empty or the service is down, the backend stays online and
+the UI reports the AI service as offline. Operational AI/CCTV/Live Vision remains
+restricted to Admin and Police users.
+
+## CCTV Camera Registry
+
+CCTV Monitoring separates simulated demo feeds from real authorized camera
+configuration. Seeded demo feeds are marked as `DEMO CAMERA / SIMULATED FEED`
+and use `sourceType=demo_seed` with `isDemo=true`.
+
+Real CCTV requires authorized RTSP, HLS, ONVIF, NVR, DVR, or webcam
+configuration by an Admin. Stream URLs and credentials are stored backend-side
+only and are never returned to the frontend API. Do not use unauthorized public
+CCTV streams.
+
+Browsers do not play RTSP directly. Production RTSP cameras require a backend
+stream proxy or transcoder to HLS, WebRTC, or MJPEG before live browser viewing.
+Until that exists, the UI shows camera health, safe metadata, and snapshot/proxy
+status instead of pretending the RTSP stream is directly viewable.
+
+AI camera detections are possible observations. Admin or Police users must
+review and verify observations before an operational incident is created.
 
 ## Health Check
 
@@ -82,7 +130,7 @@ and production-secret requirements.
 - Login/register with roles
 - Role-based dashboard UI
 - GIS/map monitoring
-- CCTV demo feeds and camera source management
+- CCTV demo feed separation and secure real camera registry
 - Rakshak Live Vision phone-camera SOS mode
 - Missing person and evidence reporting
 - Alerts and incident response
@@ -130,3 +178,32 @@ The public Nominatim, OpenStreetMap tile, and OSRM services are appropriate for
 development and low-volume demonstrations. For a production command center,
 self-host these services or use a provider with an SLA and suitable usage
 limits.
+
+The browser loads map images from:
+
+```text
+https://tile.openstreetmap.org
+https://server.arcgisonline.com
+```
+
+The production CSP also permits the standard OpenStreetMap subdomain tile hosts
+`https://a.tile.openstreetmap.org`, `https://b.tile.openstreetmap.org`, and
+`https://c.tile.openstreetmap.org` so OSM templates can switch to subdomains
+without weakening the policy. Browser code must call RakshakAI `/api/maps/*`
+endpoints for routing/geocoding; OSRM and Nominatim remain backend-only.
+
+Production routing should use a private OSRM service:
+
+```text
+GIS_ROUTING_PROVIDER=self_hosted
+OSRM_BASE_URL=http://osrm:5000
+PUBLIC_OSRM_FALLBACK=false
+ROUTE_TIMEOUT_MS=3000
+```
+
+With `PUBLIC_OSRM_FALLBACK=false`, RakshakAI never silently sends route
+requests to the public OSRM service. If the private OSRM service is offline or a
+route falls outside the loaded regional extract, the backend returns the
+existing approximate fallback route and keeps dispatch workflows available.
+Docker setup and one-time regional data preparation are documented in
+[DOCKER.md](DOCKER.md).

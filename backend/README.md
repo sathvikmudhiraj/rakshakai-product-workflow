@@ -67,14 +67,20 @@ public Nominatim service are serialized to at most one request per second.
 Configuration:
 
 ```env
-OSRM_BASE_URL=https://router.project-osrm.org
+GIS_ROUTING_PROVIDER=self_hosted
+OSRM_BASE_URL=http://osrm:5000
+PUBLIC_OSRM_FALLBACK=false
+ROUTE_TIMEOUT_MS=3000
 NOMINATIM_BASE_URL=https://nominatim.openstreetmap.org
 MAP_COUNTRY_CODES=in
 MAP_USER_AGENT=RakshakAI/1.0 public-safety-command-center
 ```
 
-Use self-hosted Nominatim/OSRM and a commercial or self-hosted tile service for
-high-volume production usage.
+Use self-hosted OSRM for production routing. Public OSRM may be enabled only for
+local demonstrations by setting `GIS_ROUTING_PROVIDER=public` and
+`PUBLIC_OSRM_FALLBACK=true`. When public fallback is disabled, OSRM outages or
+requests outside the loaded extract return the existing approximate fallback
+route instead of a 500 response.
 
 ## Incident Command API
 

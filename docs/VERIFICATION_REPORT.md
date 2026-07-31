@@ -161,11 +161,11 @@ Plate OCR: disabled
 ```
 PORT=5000
 NODE_ENV=development
-DATABASE_URL=postgresql://... (Neon PostgreSQL)
-JWT_SECRET=be2aeed178bb2524... (64-char hex)
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE
+JWT_SECRET=replace-with-at-least-32-random-characters
 AI_SERVICE_URL=http://127.0.0.1:8000
-AI_SERVICE_API_KEY=(not configured)
-CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:4173,http://localhost:4173
+AI_SERVICE_API_KEY=replace-with-a-random-api-key
+CORS_ORIGIN=http://localhost:3000
 ```
 
 ---
