@@ -16,9 +16,13 @@ const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
-const { readDatabase, userFromReq, hasRole } = require("./services/core.service");
+const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData } = require("./services/core.service");
 const { getDatabaseMode, query } = require("./services/postgres.service");
+const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
+const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
+const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = require("./services/routeNormalization.service");
 const { legacyHandler } = require("./services/legacyRoute.service");
+const { helmetDirectives } = require("../csp.config.cjs");
 
 const app = express();
 app.disable("x-powered-by");
@@ -28,8 +32,8 @@ const geocodeCache = new Map();
 let geocodeQueue = Promise.resolve();
 let lastGeocodeRequestAt = 0;
 const gisHealth = {
-  geocoder: { status: "unknown", lastSuccess: null, lastError: null },
-  routing: { status: "unknown", lastSuccess: null, lastError: null },
+  geocoder: { provider: "nominatim", configured: true, reachable: null, status: "unknown", lastSuccess: null, lastError: null },
+  routing: { provider: routingProvider(), configured: false, reachable: null, mode: "approximate-fallback", status: "unknown", lastSuccess: null, lastError: null },
   lastSuccessfulRoute: null,
   lastRouteError: null
 };
@@ -88,10 +92,20 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true,
   message: { error: "Too many login attempts. Please wait and try again." }
 });
+const geocodeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.GEOCODE_RATE_LIMIT || 30),
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many place searches. Please wait and try again.", code: "GEOCODER_RATE_LIMIT" }
+});
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: helmetDirectives()
+  }
 }));
 app.use(generalLimiter);
 app.use((req, res, next) => {
@@ -120,12 +134,29 @@ app.use(validateJson);
 app.get("/api/health", async (req, res) => {
   try {
     if (getDatabaseMode() === "postgres") await query("SELECT 1");
+    const routingStatus = gisHealth.routing.status === "connected"
+      ? "connected"
+      : "approximate-fallback";
     res.json({
       status: "ok",
       service: "RakshakAI Backend",
       database: getDatabaseMode(),
       auth: "jwt",
       incidentMode: "deduplicated-command-center",
+      routing: {
+        provider: routingProvider(),
+        configured: Boolean(String(process.env.OSRM_BASE_URL || "").trim()),
+        reachable: gisHealth.routing.reachable,
+        status: routingStatus,
+        mode: routingStatus,
+        osrmRequiredForStartup: false
+      },
+      geocoder: {
+        provider: "nominatim",
+        configured: true,
+        reachable: gisHealth.geocoder.reachable,
+        status: gisHealth.geocoder.status
+      },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -170,9 +201,7 @@ function validPoint(point) {
 }
 
 function distanceKmBetween(start, destination) {
-  const latScale = 111.32;
-  const lngScale = 111.32 * Math.cos(((start.lat + destination.lat) / 2) * Math.PI / 180);
-  return Math.hypot((destination.lat - start.lat) * latScale, (destination.lng - start.lng) * lngScale);
+  return haversineDistanceKm(start, destination);
 }
 
 function geocodeConfidence(item) {
@@ -202,15 +231,18 @@ function cachedGeocode(key) {
   return item.value;
 }
 
-function rememberGeocode(key, value) {
+function rememberGeocode(key, value, ttlMs = 10 * 60 * 1000) {
   if (geocodeCache.size >= 200) geocodeCache.delete(geocodeCache.keys().next().value);
-  geocodeCache.set(key, { value, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+  geocodeCache.set(key, { value, expiresAt: Date.now() + ttlMs });
   return value;
 }
 
 function nominatimJson(pathname, params) {
   const base = String(process.env.NOMINATIM_BASE_URL || "https://nominatim.openstreetmap.org").trim().replace(/\/+$/, "");
   const url = new URL(`${base}${pathname}`);
+  if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+    throw Object.assign(new Error("Geocoding provider must use HTTPS"), { status: 502, code: "GEOCODER_CONFIGURATION" });
+  }
   Object.entries(params).forEach(([key, value]) => {
     if (key !== "requestId") url.searchParams.set(key, String(value));
   });
@@ -228,12 +260,25 @@ function nominatimJson(pathname, params) {
           "User-Agent": process.env.MAP_USER_AGENT || "RakshakAI/1.0 public-safety-command-center"
         }
       });
-      if (!response.ok) throw new Error(`Geocoding service returned HTTP ${response.status}`);
+      if (!response.ok) {
+        throw Object.assign(new Error(`Geocoding service returned HTTP ${response.status}`), {
+          status: response.status === 429 ? 503 : 502,
+          code: response.status === 429 ? "GEOCODER_RATE_LIMIT" : "GEOCODER_UNAVAILABLE"
+        });
+      }
       const data = await response.json();
-      gisHealth.geocoder = { status: "connected", lastSuccess: new Date().toISOString(), lastError: null };
+      gisHealth.geocoder = { ...gisHealth.geocoder, reachable: true, status: "connected", lastSuccess: new Date().toISOString(), lastError: null };
       return data;
     } catch (error) {
-      gisHealth.geocoder = { status: "degraded", lastSuccess: gisHealth.geocoder.lastSuccess, lastError: error.message };
+      if (error.name === "AbortError") {
+        error.status = 504;
+        error.code = "GEOCODER_TIMEOUT";
+        error.message = "Place search provider timed out";
+      } else {
+        error.status ||= 502;
+        error.code ||= "GEOCODER_UNAVAILABLE";
+      }
+      gisHealth.geocoder = { ...gisHealth.geocoder, reachable: false, status: "degraded", lastError: error.message };
       console.warn(`[GIS ${params.requestId || "no-request-id"}] Geocoder error: ${error.message}`);
       throw error;
     } finally {
@@ -244,81 +289,73 @@ function nominatimJson(pathname, params) {
   return task;
 }
 
-function straightLineRoute(start, destination) {
-  const distanceKm = distanceKmBetween(start, destination);
-  return {
-    provider: "local-fallback",
-    approximate: true,
-    distanceKm: Number(distanceKm.toFixed(2)),
-    durationMinutes: null,
-    geometry: [
-      [start.lat, start.lng],
-      [destination.lat, destination.lng]
-    ],
-    steps: ["Approximate distance only, not driving route."],
-    message: "Approximate distance only, not driving route.",
-    calculatedAt: new Date().toISOString(),
-    requestedStart: start,
-    requestedDestination: destination
-  };
+function straightLineRoute(start, destination, warning = routeUnavailableWarning()) {
+  return approximateRouteResponse(start, destination, warning);
 }
 
 async function buildRoute(start, destination, mode = "driving", requestId = "no-request-id") {
-  const base = String(process.env.OSRM_BASE_URL || "https://router.project-osrm.org").trim();
+  let routingConfig;
+  try {
+    routingConfig = resolveOsrmBaseUrl();
+  } catch (error) {
+    gisHealth.routing = { ...gisHealth.routing, provider: routingProvider(), configured: false, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
+    gisHealth.lastRouteError = { requestId, message: error.message, timestamp: new Date().toISOString() };
+    return straightLineRoute(start, destination, routeUnavailableWarning());
+  }
   const profile = mode === "walking" ? "foot" : "driving";
-  const url = `${base.replace(/\/$/, "")}/route/v1/${profile}/${start.lng},${start.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true`;
+  const url = `${routingConfig.baseUrl.replace(/\/$/, "")}/route/v1/${profile}/${start.lng},${start.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true&alternatives=true`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), routeTimeoutMs());
   try {
     const response = await fetch(url, { signal: controller.signal });
     const data = await response.json();
-    const route = data.routes?.[0];
-    const coordinates = route?.geometry?.coordinates;
-    if (!response.ok || !route) throw new Error("Route unavailable");
-    if (!Number.isFinite(Number(route.distance)) || Number(route.distance) <= 0) throw new Error("Route distance is invalid");
-    if (!Number.isFinite(Number(route.duration)) || Number(route.duration) <= 0) throw new Error("Route duration is invalid");
-    if (!Array.isArray(coordinates) || coordinates.length < 2) throw new Error("Route geometry is invalid");
-    const endpoint = validPoint({ lat: coordinates.at(-1)?.[1], lng: coordinates.at(-1)?.[0] });
-    if (!endpoint || distanceKmBetween(endpoint, destination) > 0.5) throw new Error("Route does not reach the requested destination");
-    const steps = (route.legs || [])
-      .flatMap((leg) => leg.steps || [])
-      .map((step) => {
-        const name = step.name ? ` on ${step.name}` : "";
-        return `${step.maneuver?.type || "Continue"}${name}`;
-      })
-      .slice(0, 8);
+    if (!response.ok) throw new Error("Route unavailable");
+    const routeOptions = normalizeOsrmRoutes(data, start, destination);
+    if (!routeOptions.length) throw new Error("Route unavailable");
+    const calculatedAt = new Date().toISOString();
+    routeOptions.forEach((route) => {
+      route.calculatedAt = calculatedAt;
+      route.requestedStart = start;
+      route.requestedDestination = destination;
+    });
     const result = {
       provider: "osrm",
+      isApproximate: false,
       approximate: false,
-      distanceKm: Number((route.distance / 1000).toFixed(2)),
-      durationMinutes: Math.max(1, Math.round(route.duration / 60)),
-      geometry: coordinates.map(([lng, lat]) => [lat, lng]),
-      steps: steps.length ? steps : ["Follow route", "Arrive at destination"],
-      calculatedAt: new Date().toISOString(),
-      requestedStart: start,
-      requestedDestination: destination
+      selectedRouteId: routeOptions[0].id,
+      routes: routeOptions,
+      ...routeOptions[0],
+      provider: "osrm",
+      routeType: "osrm",
+      routeLabel: routeOptions[0].label,
+      routeOptions,
+      alternateRoutes: routeOptions.slice(1),
+      alternativesSupported: routeOptions.length > 1,
+      alternativeMessage: routeOptions.length > 1
+        ? `${routeOptions.length} route options returned by current routing service.`
+        : "Alternative routes unavailable from current routing service."
     };
-    gisHealth.routing = { status: "connected", lastSuccess: result.calculatedAt, lastError: null };
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: true, mode: "osrm", status: "connected", lastSuccess: result.calculatedAt, lastError: null };
     gisHealth.lastSuccessfulRoute = { requestId, calculatedAt: result.calculatedAt, distanceKm: result.distanceKm };
     return result;
   } catch (error) {
-    gisHealth.routing = { status: "degraded", lastSuccess: gisHealth.routing.lastSuccess, lastError: error.message };
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
     gisHealth.lastRouteError = { requestId, message: error.message, timestamp: new Date().toISOString() };
     console.warn(`[GIS ${requestId}] Routing error: ${error.message}`);
-    return straightLineRoute(start, destination);
+    return straightLineRoute(start, destination, routeUnavailableWarning(routingConfig.provider));
   } finally {
     clearTimeout(timeout);
   }
 }
 
-app.get("/api/maps/search", async (req, res, next) => {
+app.get("/api/maps/search", geocodeLimiter, async (req, res, next) => {
   try {
     await requireMapUser(req);
     const search = String(req.query.q || "").trim().slice(0, 160);
     if (search.length < 2) return res.status(400).json({ error: "Enter at least two characters to search" });
     const cacheKey = `search:${search.toLowerCase()}`;
     const cached = cachedGeocode(cacheKey);
-    if (cached) return res.json({ results: cached, cached: true });
+    if (cached) return res.json({ provider: "nominatim", results: cached, cached: true });
     const data = await nominatimJson("/search", {
       q: search,
       format: "jsonv2",
@@ -327,24 +364,16 @@ app.get("/api/maps/search", async (req, res, next) => {
       countrycodes: process.env.MAP_COUNTRY_CODES || "in",
       requestId: req.requestId
     });
-    const results = (Array.isArray(data) ? data : []).map((item) => {
-      const point = validPoint({ lat: item.lat, lng: item.lon });
-      const quality = geocodeConfidence(item);
-      if (!point) return null;
-      return {
-        id: String(item.place_id || `${item.lat},${item.lon}`),
-        name: String(item.display_name || "").slice(0, 300),
-        displayName: String(item.display_name || "").slice(0, 300),
-        shortName: String(item.name || item.display_name || "").split(",")[0].slice(0, 120),
-        category: String(item.category || "place").replaceAll("_", " ").slice(0, 80),
-        type: String(item.type || item.category || "place").replaceAll("_", " ").slice(0, 80),
-        ...point,
-        ...quality,
-        locationStatus: quality.confidence === "low" ? "Approximate" : "Verified"
-      };
-    }).filter(Boolean);
-    if (results.some((item) => item.confidence !== "low")) rememberGeocode(cacheKey, results);
-    return res.json({ results, cached: false, requestId: req.requestId });
+    const results = normalizeNominatimResults(data).map((place) => ({
+      ...place,
+      name: place.label,
+      displayName: place.label,
+      shortName: place.shortLabel,
+      confidence: place.importance >= 0.6 ? "high" : place.importance >= 0.35 ? "medium" : "low",
+      locationStatus: "Provider result"
+    }));
+    rememberGeocode(cacheKey, results);
+    return res.json({ provider: "nominatim", results, cached: false, requestId: req.requestId });
   } catch (error) {
     next(error);
   }
@@ -366,19 +395,30 @@ app.get("/api/maps/reverse", async (req, res, next) => {
       zoom: 18,
       requestId: req.requestId
     });
-    const quality = geocodeConfidence(data);
-    const place = {
-      name: String(data.display_name || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`).slice(0, 300),
-      displayName: String(data.display_name || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`).slice(0, 300),
-      shortName: String(data.name || data.display_name || "Selected location").split(",")[0].slice(0, 120),
-      category: String(data.category || "place").replaceAll("_", " ").slice(0, 80),
-      type: String(data.type || data.category || "place").replaceAll("_", " ").slice(0, 80),
+    const normalized = normalizeNominatimResult(data);
+    const place = normalized ? {
+      ...normalized,
+      name: normalized.label,
+      displayName: normalized.label,
+      shortName: normalized.shortLabel,
+      confidence: normalized.importance >= 0.6 ? "high" : normalized.importance >= 0.35 ? "medium" : "low",
+      locationStatus: "Provider result"
+    } : {
+      label: `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`,
+      shortLabel: "Selected location",
+      name: `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`,
+      displayName: `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`,
+      shortName: "Selected location",
       lat: point.lat,
       lng: point.lng,
-      ...quality,
-      locationStatus: "Approximate"
+      type: "other",
+      provider: "nominatim",
+      importance: 0,
+      address: { city: "", town: "", district: "", state: "", postcode: "", country: "" },
+      confidence: "low",
+      locationStatus: "Coordinates only"
     };
-    if (place.confidence !== "low") rememberGeocode(cacheKey, place);
+    rememberGeocode(cacheKey, place, 24 * 60 * 60 * 1000);
     return res.json({ place, cached: false, requestId: req.requestId });
   } catch (error) {
     next(error);
@@ -418,6 +458,12 @@ app.post("/api/register", legacyHandler("/api/register"));
 app.post("/api/logout", legacyHandler("/api/logout"));
 app.get("/api/admin/users", legacyHandler("/api/admin/users"));
 app.post("/api/admin/users", legacyHandler("/api/admin/users"));
+app.get("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
+app.post("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
+app.patch("/api/admin/police-users/:id", legacyHandler((req) => `/api/admin/police-users/${req.params.id}`));
+app.patch("/api/admin/police-users/:id/activate", legacyHandler((req) => `/api/admin/police-users/${req.params.id}/activate`));
+app.patch("/api/admin/police-users/:id/deactivate", legacyHandler((req) => `/api/admin/police-users/${req.params.id}/deactivate`));
+app.post("/api/admin/police-users/:id/reset-password", legacyHandler((req) => `/api/admin/police-users/${req.params.id}/reset-password`));
 app.get("/api/dashboard", incidentController.dashboard);
 app.get("/api/dashboard/summary", incidentController.dashboardSummary);
 app.get("/api/route", incidentController.route);
@@ -426,24 +472,42 @@ app.use("/api/incidents", incidentRoutes);
 app.use("/api/alerts", alertRoutes);
 app.post("/api/alerts/:id/review", legacyHandler((req) => `/api/alerts/${req.params.id}/review`));
 app.post("/api/reports/:id/create-incident", legacyHandler((req) => `/api/reports/${req.params.id}/create-incident`));
+app.post("/api/reports/:id/reject", legacyHandler((req) => `/api/reports/${req.params.id}/reject`));
 app.post("/api/incidents/:id/assign-nearest", legacyHandler((req) => `/api/incidents/${req.params.id}/assign-nearest`));
 app.post("/api/send-alert", legacyHandler("/api/send-alert"));
 app.use("/api/cameras", cameraRoutes);
+app.post("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-feeds", legacyHandler("/api/camera-feeds"));
 app.patch("/api/camera-sources/:id/config", legacyHandler((req) => `/api/camera-sources/${req.params.id}/config`));
 app.post("/api/camera-sources/:id/test", legacyHandler((req) => `/api/camera-sources/${req.params.id}/test`));
+app.post("/api/camera-sources/:id/analyze", legacyHandler((req) => `/api/camera-sources/${req.params.id}/analyze`));
+app.delete("/api/camera-sources/:id", legacyHandler((req) => `/api/camera-sources/${req.params.id}`));
 app.use("/api/ai", aiRoutes);
 app.post("/api/rakshak/analyze-frame", require("./controllers/ai.controller").analyzeFrame);
 app.use("/api/missing-persons", missingPersonRoutes);
 app.get("/api/reports", legacyHandler("/api/reports"));
 app.post("/api/report-missing", legacyHandler("/api/report-missing"));
+app.get("/api/video-evidence", legacyHandler("/api/video-evidence"));
+app.post("/api/video-evidence", legacyHandler("/api/video-evidence"));
+app.get("/api/video-evidence/:id/preview", legacyHandler((req) => `/api/video-evidence/${req.params.id}/preview`));
+app.post("/api/video-evidence/:id/analyze", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyze`));
+app.post("/api/video-observations/:id/review", legacyHandler((req) => `/api/video-observations/${req.params.id}/review`));
+app.post("/api/video-observations/:id/convert-incident", legacyHandler((req) => `/api/video-observations/${req.params.id}/convert-incident`));
+app.post("/api/browser-observations/:id/review", legacyHandler((req) => `/api/browser-observations/${req.params.id}/review`));
+app.post("/api/reports/:id/evidence", legacyHandler((req) => `/api/reports/${req.params.id}/evidence`));
 app.use("/api/device-health", deviceHealthRoutes);
 app.get("/api/devices/health", legacyHandler("/api/devices/health"));
 app.use("/api/audit-logs", auditRoutes);
-app.get("/api/audit-logs", legacyHandler("/api/audit-logs"));
 app.get("/api/integrations/status", auditController.integrations);
 app.get("/api/response-units", legacyHandler("/api/response-units"));
+app.post("/api/response-units", legacyHandler("/api/response-units"));
+app.patch("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
+app.delete("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
+app.get("/api/police-stations", legacyHandler("/api/police-stations"));
+app.post("/api/police-stations", legacyHandler("/api/police-stations"));
+app.patch("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
+app.delete("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.get("/api/response-units/nearest", legacyHandler("/api/response-units/nearest"));
 
 app.use((req, res) => {
@@ -485,6 +549,10 @@ async function start(listenPort = port) {
     if (missing.length) {
       throw new Error("PostgreSQL schema is missing. Run: npm run migrate");
     }
+  }
+  const legacyRepairs = await repairLegacyPersistedData();
+  if (legacyRepairs.length) {
+    console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
   }
   return new Promise((resolve, reject) => {
     const server = app.listen(listenPort, () => {
