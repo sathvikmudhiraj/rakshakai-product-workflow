@@ -3,7 +3,8 @@ function errorMiddleware(error, req, res, next) {
   const malformedJson = error instanceof SyntaxError && error.status === 400 && "body" in error;
   const tooLarge = error.type === "entity.too.large" || error.status === 413;
   const status = malformedJson ? 400 : tooLarge ? 413 : Number(error.status) || 500;
-  const safeMessage = status >= 500 && process.env.NODE_ENV === "production"
+  const providerSafe = String(error.code || "").startsWith("GEOCODER_");
+  const safeMessage = status >= 500 && process.env.NODE_ENV === "production" && !providerSafe
     ? "Internal server error"
     : malformedJson
       ? "Invalid JSON payload"
@@ -17,7 +18,7 @@ function errorMiddleware(error, req, res, next) {
       message: error.message
     });
   }
-  res.status(status).json({ error: safeMessage });
+  res.status(status).json({ error: safeMessage, ...(providerSafe ? { code: error.code } : {}) });
 }
 
 module.exports = { errorMiddleware };
