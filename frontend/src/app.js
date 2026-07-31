@@ -27,6 +27,22 @@ import {
   streetTileLoadOutcome
 } from "./gisBaseLayerLifecycle.js";
 import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveillanceSeverity } from "./liveVisionPolicy.js";
+import { isOperatorRole as isOperatorRoleRoleAccess, landingForRole, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
+
+// Role-access policy lives in roleAccess.js: if (role === "Citizen") return "missing"; if (role === "Admin") return "dashboard"; nav?.hidden gates forbidden views.
+const VIEW_TITLES = {
+  dashboard: "Sector 7 Safety Grid",
+  "incident-command": "Incident Command",
+  gis: "GIS Monitoring",
+  cctv: "CCTV Monitoring",
+  "live-vision": "Rakshak Live Vision",
+  "video-evidence": "Video Evidence Upload",
+  missing: "Missing & Found Report Center",
+  alerts: "Emergency Alert Center",
+  history: "Incident History",
+  "police-management": "Police Management",
+  settings: "System Settings"
+};
 
 const state = {
   incidents: [],
@@ -227,39 +243,7 @@ function dispatchErrorMessage(error) {
 function setView(view, options = {}) {
   const previousView = document.body.dataset.view;
   if (document.body.dataset.view === "live-vision" && view !== "live-vision") stopLiveVision();
-  const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
-  if (nav?.hidden) {
-    const permission = $("#permissionMessage");
-    if (permission) {
-      permission.textContent = state.user?.role === "Citizen"
-        ? "You do not have permission to view this operational page."
-        : "Admin permission is required to view this page.";
-      permission.classList.remove("restricted-hidden");
-    }
-    view = landingForRole(state.user?.role);
-  } else {
-    $("#permissionMessage")?.classList.add("restricted-hidden");
-  }
-  $$(".nav-item").forEach((b) => {
-    const isActive = b.dataset.view === view;
-    b.classList.toggle("active", isActive);
-    b.setAttribute("aria-current", isActive ? "page" : "false");
-  });
-  $$("[data-panel]").forEach((p) => p.classList.toggle("active", p.dataset.panel === view));
-  $("#viewTitle").textContent = {
-    dashboard: "Sector 7 Safety Grid",
-    "incident-command": "Incident Command",
-    gis: "GIS Monitoring",
-    cctv: "CCTV Monitoring",
-    "live-vision": "Rakshak Live Vision",
-    "video-evidence": "Video Evidence Upload",
-    missing: "Missing & Found Report Center",
-    alerts: "Emergency Alert Center",
-    history: "Incident History",
-    "police-management": "Police Management",
-    settings: "System Settings"
-  }[view] || "RakshakAI";
-  document.body.dataset.view = view;
+  view = resolveViewAccess({ view, role: state.user?.role, document, viewTitles: VIEW_TITLES });
   if (previousView === "gis" && view !== "gis" && activeRouteWorkflow()) {
     resetGisNavigationState("GIS route markers cleared after leaving route workflow.");
   }
@@ -300,17 +284,11 @@ function canSee(button, role) {
 }
 
 function isOperatorRole() {
-  return ["Police Officer", "Admin"].includes(state.user?.role);
+  return isOperatorRoleRoleAccess(state.user?.role);
 }
 
 function isAdminRole() {
   return state.user?.role === "Admin";
-}
-
-function landingForRole(role) {
-  if (role === "Citizen") return "missing";
-  if (role === "Admin") return "dashboard";
-  return "dashboard";
 }
 
 function applyRoleAccess() {
@@ -4610,22 +4588,20 @@ async function refresh() {
   applyRoleAccess();
   const operator = isOperatorRole();
   const admin = isAdminRole();
-  const [dashboard, reports, zones, incidents, alerts, cameras, sources, videoEvidence, units, stations, devices, audits, integrations, policeUsers, aiHealth] = await Promise.all([
+  const aiVision = loadAiVisionData({ role: state.user?.role, api });
+  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
     operator ? api("/api/dashboard") : Promise.resolve({ summary: {} }),
     api("/api/reports"),
     operator ? api("/api/zones") : Promise.resolve({ zones: [] }),
     operator ? api("/api/incidents/live") : Promise.resolve({ incidents: [] }),
     operator ? api("/api/alerts") : Promise.resolve({ alerts: [] }),
-    operator ? api("/api/camera-feeds") : Promise.resolve({ cameras: [] }),
-    operator ? api("/api/camera-sources") : Promise.resolve({ sources: [] }),
-    operator ? api("/api/video-evidence") : Promise.resolve({ evidence: [], observations: [] }),
     operator ? api("/api/response-units") : Promise.resolve({ units: [] }),
     operator ? api("/api/police-stations") : Promise.resolve({ stations: [], defaultCenter: DEFAULT_MAP_CENTER }),
     admin ? api("/api/devices/health") : Promise.resolve({ devices: [] }),
     admin ? api("/api/audit-logs") : Promise.resolve({ auditLogs: [] }),
     admin ? api("/api/integrations/status") : Promise.resolve({ integrations: [] }),
     admin ? api("/api/admin/police-users") : Promise.resolve({ users: [] }),
-    operator ? api("/api/ai/health").catch(() => ({ configured: true, status: "unreachable" })) : Promise.resolve({ configured: false, status: "restricted" })
+    aiVision
   ]);
   const aiConnected = aiHealth.status === "connected";
   setText("#liveSourceHealth", aiConnected ? "AI Connected" : "AI Service Offline");
