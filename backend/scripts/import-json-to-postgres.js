@@ -48,17 +48,36 @@ async function main() {
     };
   }));
 
+  const summaries = [];
   await withTransaction(async (client) => {
     for (const [key, repository] of mappings) {
       const records = db[key] || [];
-      let imported = 0;
+      let inserted = 0;
+      let skippedExisting = 0;
+      let failed = 0;
       for (const record of records) {
-        const result = await client.query(`SELECT 1 FROM ${repository.table} WHERE id = $1`, [record.id]);
-        if (result.rowCount) continue;
-        await repository.upsert(record, client);
-        imported += 1;
+        await client.query("SAVEPOINT import_record");
+        try {
+          const result = await client.query(`SELECT 1 FROM ${repository.table} WHERE id = $1`, [record.id]);
+          if (result.rowCount) {
+            skippedExisting += 1;
+          } else {
+            await repository.upsert(record, client);
+            inserted += 1;
+          }
+          await client.query("RELEASE SAVEPOINT import_record");
+        } catch {
+          failed += 1;
+          await client.query("ROLLBACK TO SAVEPOINT import_record");
+          await client.query("RELEASE SAVEPOINT import_record");
+        }
       }
-      console.log(`${key}: imported ${imported}, skipped ${(records.length - imported)}`);
+      const summary = { collection: key, table: repository.table, inserted, skippedExisting, failed };
+      summaries.push(summary);
+      console.log(
+        `collection=${summary.collection} table=${summary.table} inserted=${summary.inserted} `
+        + `skipped-existing=${summary.skippedExisting} failed=${summary.failed}`
+      );
     }
     const extraState = {
       cameras: db.cameras || [],
@@ -80,12 +99,28 @@ async function main() {
       );
     }
   });
-  console.log("db.json import completed successfully.");
+  const totals = summaries.reduce(
+    (result, summary) => ({
+      inserted: result.inserted + summary.inserted,
+      skippedExisting: result.skippedExisting + summary.skippedExisting,
+      failed: result.failed + summary.failed
+    }),
+    { inserted: 0, skippedExisting: 0, failed: 0 }
+  );
+  console.log(
+    `import totals: inserted=${totals.inserted} skipped-existing=${totals.skippedExisting} failed=${totals.failed}`
+  );
+  if (totals.failed > 0) {
+    process.exitCode = 1;
+    console.error("db.json import completed with failed records; review collection/table counters.");
+  } else {
+    console.log("db.json import completed successfully.");
+  }
 }
 
 main()
-  .catch((error) => {
-    console.error("db.json import failed:", error.message);
+  .catch(() => {
+    console.error("db.json import failed. Review database connectivity and schema diagnostics.");
     process.exitCode = 1;
   })
   .finally(closePool);

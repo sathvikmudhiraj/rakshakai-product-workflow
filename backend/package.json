@@ -9,7 +9,8 @@
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "test:security": "node --test --test-concurrency=1 tests/security-access.test.js",
     "migrate": "node scripts/migrate.js",
-    "import:json": "node scripts/import-json-to-postgres.js"
+    "import:json": "node scripts/import-json-to-postgres.js",
+    "reset:demo-users": "node scripts/reset-demo-users.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

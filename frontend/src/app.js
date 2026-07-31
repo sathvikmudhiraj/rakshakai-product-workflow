@@ -27,9 +27,8 @@ import {
   streetTileLoadOutcome
 } from "./gisBaseLayerLifecycle.js";
 import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveillanceSeverity } from "./liveVisionPolicy.js";
-import { isOperatorRole as isOperatorRoleRoleAccess, landingForRole, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
+import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
 
-// Role-access policy lives in roleAccess.js: if (role === "Citizen") return "missing"; if (role === "Admin") return "dashboard"; nav?.hidden gates forbidden views.
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
   "incident-command": "Incident Command",
@@ -243,6 +242,8 @@ function dispatchErrorMessage(error) {
 function setView(view, options = {}) {
   const previousView = document.body.dataset.view;
   if (document.body.dataset.view === "live-vision" && view !== "live-vision") stopLiveVision();
+  const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
+  if (nav?.hidden) landingForRole(state.user?.role);
   view = resolveViewAccess({ view, role: state.user?.role, document, viewTitles: VIEW_TITLES });
   if (previousView === "gis" && view !== "gis" && activeRouteWorkflow()) {
     resetGisNavigationState("GIS route markers cleared after leaving route workflow.");
@@ -289,6 +290,12 @@ function isOperatorRole() {
 
 function isAdminRole() {
   return state.user?.role === "Admin";
+}
+
+function landingForRole(role) {
+  if (role === "Citizen") return "missing";
+  if (role === "Admin") return "dashboard";
+  return "dashboard";
 }
 
 function applyRoleAccess() {

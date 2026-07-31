@@ -323,7 +323,7 @@ def build_report():
         [
             ["Frontend", "HTML, CSS, JavaScript", "Single-page command dashboard and role-based UI."],
             ["Backend", "Node.js HTTP server", "Local API server in server.js."],
-            ["Database", "data/db.json", "Local JSON data store for users, reports, incidents, alerts, devices, and audit logs."],
+            ["Database", "backend/data/db.json", "Local JSON data store for users, reports, incidents, alerts, devices, and audit logs."],
             ["Maps", "OpenStreetMap and ArcGIS tile URLs", "Realistic web map tiles with search, pan, and zoom."],
             ["CCTV UI", "Local SVG assets", "Demo visual feeds for cameras and drone monitoring."],
             ["AI Workflow", "Demo fallback + production-ready AI service contract", "Uses YOLO object/person detection; can connect to Python service with AI_SERVICE_API_KEY auth."],
@@ -380,7 +380,7 @@ def build_report():
     )
 
     doc.add_heading("9. Database Structure", level=1)
-    doc.add_paragraph("The current local database is the JSON file data/db.json. It acts as the database for the VS Code demo version.")
+    doc.add_paragraph("The current local database is the JSON file backend/data/db.json. It acts as the database for the VS Code demo version.")
     add_table(
         doc,
         ["Collection / Key", "Stores"],
@@ -403,7 +403,7 @@ def build_report():
     for step in [
         "Citizen or police opens Missing Persons page.",
         "User enters name, age, last-seen location, and optional photo/file.",
-        "Backend saves the report in data/db.json.",
+        "Backend saves the report in backend/data/db.json.",
         "System automatically creates a critical live incident.",
         "System automatically creates a critical alert.",
         "Police can run AI scan, assign unit, suggest route, and close the case.",
@@ -424,7 +424,7 @@ def build_report():
     doc.add_heading("10.3 Alert Workflow", level=2)
     for step in [
         "Alert is created manually by Police/Admin or automatically by missing-person/incident/AI workflow.",
-        "Alert is stored in data/db.json.",
+        "Alert is stored in backend/data/db.json.",
         "All roles can view active alerts.",
         "Alerts can be filtered by all, critical, high, and medium.",
         "Citizens or police can acknowledge alerts.",

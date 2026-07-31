@@ -1,7 +1,7 @@
 /**
  * hash-json-passwords.js
  *
- * Migrates plaintext passwords in data/db.json to bcrypt hashes.
+ * Migrates plaintext passwords in backend/data/db.json to bcrypt hashes.
  * Idempotent: skips users that already have a passwordHash field
  * with a valid bcrypt hash.
  *
@@ -16,11 +16,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const bcrypt = require("bcryptjs");
 
-const dbPath = path.join(__dirname, "..", "..", "data", "db.json");
+const dbPath = path.join(__dirname, "..", "data", "db.json");
 
 function main() {
   if (!fs.existsSync(dbPath)) {
-    console.error("data/db.json not found at", dbPath);
+    console.error("backend/data/db.json not found at", dbPath);
     process.exit(1);
   }
 
@@ -29,7 +29,7 @@ function main() {
   const users = db.users || [];
 
   if (!users.length) {
-    console.log("No users found in data/db.json. Nothing to do.");
+    console.log("No users found in backend/data/db.json. Nothing to do.");
     return;
   }
 
