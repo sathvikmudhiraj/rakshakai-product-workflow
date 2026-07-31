@@ -1,20 +1,21 @@
 FROM node:22-alpine
 
 ENV NODE_ENV=production
-WORKDIR /app
+WORKDIR /app/backend
 
-COPY package.json package-lock.json ./
+COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY controllers ./controllers
-COPY database ./database
-COPY middleware ./middleware
-COPY repositories ./repositories
-COPY routes ./routes
-COPY scripts ./scripts
-COPY services ./services
-COPY data ./data
-COPY server.js ./
+COPY csp.config.cjs /app/csp.config.cjs
+COPY backend/controllers ./controllers
+COPY backend/database ./database
+COPY backend/middleware ./middleware
+COPY backend/repositories ./repositories
+COPY backend/routes ./routes
+COPY backend/scripts ./scripts
+COPY backend/services ./services
+COPY backend/data ./data
+COPY backend/server.js ./
 
 USER node
 EXPOSE 5000
