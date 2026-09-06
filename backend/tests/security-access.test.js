@@ -3246,7 +3246,8 @@ test("frontend HTML-serving layers enforce a restrictive CSP", () => {
   const entrypoint = fs.readFileSync(path.join(frontendRoot, "docker-entrypoint.d", "10-csp-defaults.sh"), "utf8");
   const renderer = fs.readFileSync(path.join(frontendRoot, "docker-entrypoint.d", "render-csp.cjs"), "utf8");
   const viteConfig = fs.readFileSync(path.join(frontendRoot, "vite.config.js"), "utf8");
-  const compose = fs.readFileSync(path.join(__dirname, "..", "..", "compose.yaml"), "utf8");
+  const composeDev = fs.readFileSync(path.join(__dirname, "..", "..", "compose.dev.yaml"), "utf8");
+  const composeProd = fs.readFileSync(path.join(__dirname, "..", "..", "compose.prod.yaml"), "utf8");
 
   assert.match(nginx, /add_header Content-Security-Policy "\$\{RAKSHAKAI_CSP\}" always;/);
   assert.match(dockerfile, /COPY csp\.config\.cjs \/etc\/rakshakai\/csp\.config\.cjs/);
@@ -3256,7 +3257,8 @@ test("frontend HTML-serving layers enforce a restrictive CSP", () => {
   assert.match(renderer, /buildRakshakaiCsp/);
   assert.match(viteConfig, /res\.setHeader\("Content-Security-Policy", DEVELOPMENT_CSP\)/);
   assert.match(viteConfig, /buildRakshakaiCsp\(\{ environment: "development" \}\)\.header/);
-  assert.match(compose, /CSP_ENV: \$\{CSP_ENV:-development\}/);
+  assert.match(composeDev, /CSP_ENV:\s*development/);
+  assert.match(composeProd, /CSP_ENV:\s*production/);
 
   assertRestrictiveCsp(buildRakshakaiCsp({ environment: "production" }).header, { requireUpgrade: true });
   assertRestrictiveCsp(buildRakshakaiCsp({ environment: "development" }).header, {

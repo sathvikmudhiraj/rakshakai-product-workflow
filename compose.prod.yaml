@@ -1,0 +1,14 @@
+services:
+  backend:
+    environment:
+      NODE_ENV: production
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN to the production frontend origin}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:?Set FRONTEND_ORIGINS to the production frontend origin}
+
+  frontend:
+    environment:
+      CSP_ENV: production
+      CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
+      CSP_IMG_SRC: ${CSP_IMG_SRC:-}
+    ports:
+      - "${FRONTEND_PORT:-80}:80"

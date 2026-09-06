@@ -5,14 +5,16 @@ const path = require("node:path");
 
 const root = path.join(__dirname, "..", "..");
 const compose = fs.readFileSync(path.join(root, "compose.yaml"), "utf8");
+const composeDev = fs.readFileSync(path.join(root, "compose.dev.yaml"), "utf8");
+const composeProd = fs.readFileSync(path.join(root, "compose.prod.yaml"), "utf8");
 const importSource = fs.readFileSync(path.join(root, "backend", "scripts", "import-json-to-postgres.js"), "utf8");
 const backendDockerfile = fs.readFileSync(path.join(root, "backend", "Dockerfile"), "utf8");
 const backendServer = fs.readFileSync(path.join(root, "backend", "server.js"), "utf8");
 const canonicalCsp = fs.readFileSync(path.join(root, "csp.config.cjs"), "utf8");
 
-function serviceBlock(name, nextName) {
+function serviceBlock(name, nextName, source = compose) {
   const end = nextName ? `\\n\\n  ${nextName}:` : "\\n\\nvolumes:";
-  return compose.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)${end}`))?.[1] || "";
+  return source.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)${end}`))?.[1] || "";
 }
 
 test("OSRM is profile-gated and backend has no hard OSRM dependency", () => {
@@ -29,6 +31,22 @@ test("normal services do not require OSRM data and PostgreSQL remains persistent
   assert.doesNotMatch(backend, /OSRM_DATA_(HOST_)?PATH/);
   assert.match(compose, /postgres-data:\/var\/lib\/postgresql\/data/);
   assert.match(compose, /\nvolumes:\n\s+postgres-data:/);
+});
+
+test("Compose base is shared and environment-specific settings live in overrides", () => {
+  const baseBackend = serviceBlock("backend", "frontend");
+  const devBackend = serviceBlock("backend", "frontend", composeDev);
+  const prodBackend = serviceBlock("backend", "frontend", composeProd);
+  const devFrontend = serviceBlock("frontend", null, `${composeDev}\n\nvolumes:`);
+  const prodFrontend = serviceBlock("frontend", null, `${composeProd}\n\nvolumes:`);
+
+  assert.doesNotMatch(baseBackend, /NODE_ENV:\s*development|CORS_ORIGIN:\s*http:\/\/localhost:3000/);
+  assert.match(devBackend, /NODE_ENV:\s*development/);
+  assert.match(devBackend, /CORS_ORIGIN:\s*http:\/\/localhost:3000/);
+  assert.match(devFrontend, /CSP_ENV:\s*development/);
+  assert.match(prodBackend, /NODE_ENV:\s*production/);
+  assert.match(prodBackend, /CORS_ORIGIN:\s*\$\{CORS_ORIGIN:\?Set CORS_ORIGIN to the production frontend origin\}/);
+  assert.match(prodFrontend, /CSP_ENV:\s*production/);
 });
 
 test("Docker PostgreSQL import uses sanitized example data instead of runtime db.json", () => {
