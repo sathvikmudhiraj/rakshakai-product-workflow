@@ -1,0 +1,200 @@
+{
+  "users": [
+    {
+      "id": "u_fixture_admin",
+      "name": "Demo Admin",
+      "email": "admin@example.test",
+      "role": "Admin",
+      "passwordHash": "$2a$10$7EqJtq98hPqEX7fNZaFWoOZ9IHe7kycxtMxC3iOSDdCUdthSIYdtS"
+    },
+    {
+      "id": "u_fixture_officer",
+      "name": "Demo Officer",
+      "email": "officer@example.test",
+      "role": "Police Officer",
+      "passwordHash": "$2a$10$7EqJtq98hPqEX7fNZaFWoOZ9IHe7kycxtMxC3iOSDdCUdthSIYdtS"
+    },
+    {
+      "id": "u_fixture_citizen",
+      "name": "Demo Citizen",
+      "email": "citizen@example.test",
+      "role": "Citizen",
+      "passwordHash": "$2a$10$7EqJtq98hPqEX7fNZaFWoOZ9IHe7kycxtMxC3iOSDdCUdthSIYdtS"
+    }
+  ],
+  "cameras": [
+    {
+      "id": "fixture_camera_01",
+      "cameraId": "FX-CAM-01",
+      "name": "Fixture Camera",
+      "zone": "Fixture Zone",
+      "health": "online",
+      "aiStatus": "Fixture feed ready",
+      "density": 12,
+      "scene": "fixture-camera.svg",
+      "sourceType": "fixture_seed",
+      "isDemo": true,
+      "aiEnabled": false
+    }
+  ],
+  "zones": [
+    {
+      "id": "fixture_zone_01",
+      "name": "Fixture Zone",
+      "severity": "safe",
+      "currentDensity": 12
+    }
+  ],
+  "reports": [],
+  "incidents": [
+    {
+      "id": "fixture_incident_active",
+      "title": "Fixture Active Incident",
+      "type": "test",
+      "category": "test",
+      "severity": "medium",
+      "status": "Verified",
+      "zone": "Fixture Zone",
+      "address": "Fixture operational point",
+      "lat": 17.5109,
+      "lng": 78.3276,
+      "latitude": 17.5109,
+      "longitude": 78.3276,
+      "locationStatus": "verified",
+      "locationSource": "fixture",
+      "locationConfirmed": true,
+      "dispatchable": true,
+      "isDemo": true,
+      "createdBy": "u_fixture_officer",
+      "reportedBy": "u_fixture_officer",
+      "sourceType": "fixture_seed",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "alerts": [],
+  "devices": [
+    {
+      "id": "fixture_device_01",
+      "name": "Fixture Device",
+      "type": "CCTV",
+      "status": "online",
+      "zone": "Fixture Zone",
+      "latencyMs": 100
+    }
+  ],
+  "auditLogs": [],
+  "cameraSources": [
+    {
+      "id": "cam_c19",
+      "cameraId": "FX-CAM-01",
+      "type": "demo",
+      "sourceType": "demo_seed",
+      "name": "Fixture Camera Source",
+      "zone": "Fixture Zone",
+      "status": "online",
+      "enabled": true,
+      "aiEnabled": false,
+      "isDemo": true,
+      "lastFrameStatus": "fixture frame",
+      "healthReason": "Synthetic fixture source"
+    }
+  ],
+  "detections": [],
+  "dispatchEvents": [],
+  "responseUnits": [
+    {
+      "id": "fixture_unit_alpha",
+      "unitId": "FX-P-01",
+      "unitCode": "FX-P-01",
+      "unitName": "Fixture Patrol 01",
+      "name": "Fixture Patrol 01",
+      "unitType": "police_patrol",
+      "type": "police_patrol",
+      "officerName": "Fixture Officer Alpha",
+      "teamName": "Fixture Team Alpha",
+      "vehicleType": "Patrol Vehicle",
+      "status": "available",
+      "operational": true,
+      "assignedIncidentId": null,
+      "currentIncidentId": null,
+      "lat": 17.5285,
+      "lng": 78.2636,
+      "latitude": 17.5285,
+      "longitude": 78.2636,
+      "address": "Fixture unit point A",
+      "currentAddress": "Fixture unit point A",
+      "zone": "Fixture Zone",
+      "beat": "Fixture Beat",
+      "sector": "Fixture Sector",
+      "jurisdiction": "Fixture Jurisdiction",
+      "linkedStationId": "fixture_station_01",
+      "stationId": "fixture_station_01",
+      "stationName": "Fixture Station",
+      "station": "Fixture Station",
+      "source": "demo_seed",
+      "locationSource": "demo_seed",
+      "isDemo": true,
+      "lastSeen": "2026-01-01T00:00:00.000Z",
+      "lastUpdated": "2026-01-01T00:00:00.000Z",
+      "lastLocationUpdatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "fixture_unit_beta",
+      "unitId": "FX-P-02",
+      "unitCode": "FX-P-02",
+      "unitName": "Fixture Patrol 02",
+      "name": "Fixture Patrol 02",
+      "unitType": "police_patrol",
+      "type": "police_patrol",
+      "officerName": "Fixture Officer Beta",
+      "teamName": "Fixture Team Beta",
+      "vehicleType": "Patrol Vehicle",
+      "status": "available",
+      "operational": true,
+      "assignedIncidentId": null,
+      "currentIncidentId": null,
+      "lat": 17.4933,
+      "lng": 78.3915,
+      "latitude": 17.4933,
+      "longitude": 78.3915,
+      "address": "Fixture unit point B",
+      "currentAddress": "Fixture unit point B",
+      "zone": "Fixture Zone",
+      "beat": "Fixture Beat",
+      "sector": "Fixture Sector",
+      "jurisdiction": "Fixture Jurisdiction",
+      "linkedStationId": "fixture_station_01",
+      "stationId": "fixture_station_01",
+      "stationName": "Fixture Station",
+      "station": "Fixture Station",
+      "source": "admin_registry",
+      "locationSource": "admin_registry",
+      "isDemo": true,
+      "lastSeen": "2026-01-01T00:00:00.000Z",
+      "lastUpdated": "2026-01-01T00:00:00.000Z",
+      "lastLocationUpdatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "videoEvidence": [],
+  "policeStations": [
+    {
+      "id": "fixture_station_01",
+      "stationId": "FX-PS-01",
+      "stationName": "Fixture Station",
+      "name": "Fixture Station",
+      "address": "Fixture station point",
+      "lat": 17.5109,
+      "lng": 78.3276,
+      "latitude": 17.5109,
+      "longitude": 78.3276,
+      "jurisdiction": "Fixture Jurisdiction",
+      "beat": "Fixture Beat",
+      "sectorCoverage": ["Fixture Sector"],
+      "source": "admin_registry",
+      "isDemo": true,
+      "operational": true,
+      "lastUpdated": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}

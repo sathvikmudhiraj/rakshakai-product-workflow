@@ -256,6 +256,203 @@ async function writeSelectedRecords(db, recordsByRepository) {
   });
 }
 
+let jsonAssignmentQueue = Promise.resolve();
+
+async function withAssignmentLock(callback) {
+  if (getDatabaseMode() === "postgres") {
+    return withTransaction(async (client) => {
+      // One dispatch-wide lock protects both same-incident and same-unit claims.
+      await client.query("SELECT pg_advisory_xact_lock($1)", [724211]);
+      return callback();
+    });
+  }
+  const previous = jsonAssignmentQueue;
+  let release;
+  jsonAssignmentQueue = new Promise((resolve) => { release = resolve; });
+  await previous.catch(() => {});
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+}
+
+function assignmentConflictResponse() {
+  return { status: 409, payload: { error: "Assignment conflict", code: "ASSIGNMENT_CONFLICT" } };
+}
+
+function assignmentChangedResponse() {
+  return { status: 409, payload: { error: "Incident assignment changed. Refresh and retry.", code: "ASSIGNMENT_STALE" } };
+}
+
+function normalizeExpectedAssignedUnitId(body = {}) {
+  if (Object.prototype.hasOwnProperty.call(body, "expectedAssignedUnitId")) {
+    return body.expectedAssignedUnitId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "expectedAssignment")) {
+    const expected = body.expectedAssignment;
+    if (expected && typeof expected === "object") return expected.assignedUnitId || expected.unitId || null;
+    return expected || null;
+  }
+  return null;
+}
+
+const UNIT_HELD_INCIDENT_STATUSES = new Set(["Assigned", "En Route", "On Scene", "Resolved"]);
+
+function unitClaimedByAnotherIncident(db, unitOrId, incidentId) {
+  const unitId = typeof unitOrId === "string" ? unitOrId : unitOrId?.id;
+  if (!unitId) return false;
+  const unit = typeof unitOrId === "string"
+    ? db.responseUnits.find((item) => item.id === unitId)
+    : unitOrId;
+  const linkedIncidentId = unit?.assignedIncidentId || unit?.currentIncidentId || null;
+  if (linkedIncidentId && linkedIncidentId !== incidentId) {
+    const linked = db.incidents.find((incident) => incident.id === linkedIncidentId);
+    if (!linked || UNIT_HELD_INCIDENT_STATUSES.has(canonicalIncidentStatus(linked.status))) return true;
+  }
+  return db.incidents.some((incident) => incident.id !== incidentId
+    && incident.assignedUnitId === unitId
+    && UNIT_HELD_INCIDENT_STATUSES.has(canonicalIncidentStatus(incident.status)));
+}
+
+function routedErrorResponse(db, incident, routed, user) {
+  addAuditLog(db, "dispatch_failed", user, incident.id, routed.error);
+  return {
+    status: routed.status || 503,
+    payload: {
+      error: routed.error,
+      degraded: routed.degraded || false,
+      candidates: routed.candidates || [],
+      excludedUnits: routed.excludedUnits || [],
+      warnings: routed.warnings || []
+    },
+    write: true
+  };
+}
+
+async function assignNearestIncident(incidentId, user) {
+  return withAssignmentLock(async () => {
+    const lockedDb = await readDatabase();
+    const incident = lockedDb.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (incident.assignedUnitId) return assignmentConflictResponse();
+    const locationError = dispatchLocationError(incident);
+    if (locationError) {
+      addAuditLog(lockedDb, "dispatch_failed", user, incident.id, locationError);
+      await writeDatabase(lockedDb);
+      return { status: 409, payload: { error: locationError } };
+    }
+    if (!["Verified", "Assigned"].includes(canonicalIncidentStatus(incident.status))) {
+      return { status: 409, payload: { error: "Verify the incident before assigning a response unit" } };
+    }
+    const routed = await bestRoutedUnit(lockedDb, incident);
+    if (routed.error) {
+      if ((routed.excludedUnits || []).some((unit) => unitClaimedByAnotherIncident(lockedDb, unit.id, incident.id))) {
+        return assignmentConflictResponse();
+      }
+      const response = routedErrorResponse(lockedDb, incident, routed, user);
+      if (response.write) await writeDatabase(lockedDb);
+      return response;
+    }
+    if (!routed) {
+      addAuditLog(lockedDb, "dispatch_failed", user, incident.id, "Route service unavailable");
+      await writeDatabase(lockedDb);
+      return { status: 503, payload: { error: "Route service unavailable", degraded: true } };
+    }
+    const { unit: nearest, route } = routed;
+    if (unitClaimedByAnotherIncident(lockedDb, nearest, incident.id)) return assignmentConflictResponse();
+    incident.recommendedUnitId = nearest.id;
+    incident.assignedUnitId = nearest.id;
+    incident.status = "Assigned";
+    incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
+    incident.etaMinutes = Math.max(1, Math.round(routed.etaSeconds / 60));
+    incident.routeLabel = route.routeLabel || route.label;
+    incident.routeProvider = route.provider;
+    incident.routeApproximate = Boolean(route.approximate);
+    incident.routeCalculatedAt = route.calculatedAt;
+    incident.routeSelectionReason = routed.selectionReason;
+    incident.updatedAt = now();
+    Object.assign(nearest, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
+    const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
+    const event = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${nearest.unitCode} assigned with ${incident.etaMinutes} minute ${route.approximate ? "approximate " : ""}ETA`, user.name, incident.updatedAt);
+    const suggestAudit = addAuditLog(lockedDb, "unit_suggested", user, incident.id, routed.selectionReason || nearest.unitCode, incident.updatedAt);
+    const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, `${nearest.unitCode}; ${incident.distanceKm} km; ${incident.etaMinutes} min${route.approximate ? "; approximate route" : ""}`, incident.updatedAt);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [nearest], reports: [linkedReport], events: [event], audits: [suggestAudit, audit] });
+    return {
+      status: 200,
+      payload: {
+        incident: incidentForResponse(lockedDb, incident),
+        unit: unitForResponse(nearest),
+        route,
+        candidates: routed.candidates,
+        excludedUnits: routed.excludedUnits,
+        warnings: routed.warnings,
+        selectionReason: routed.selectionReason
+      }
+    };
+  });
+}
+
+async function assignSelectedIncidentUnit(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const lockedDb = await readDatabase();
+    const incident = lockedDb.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    const locationError = dispatchLocationError(incident);
+    if (locationError) {
+      addAuditLog(lockedDb, "dispatch_failed", user, incident.id, locationError);
+      await writeDatabase(lockedDb);
+      return { status: 409, payload: { error: locationError } };
+    }
+    if (!["Verified", "Assigned"].includes(canonicalIncidentStatus(incident.status))) {
+      return { status: 409, payload: { error: "Verify the incident before assigning a response unit" } };
+    }
+    const unitId = body.unitId || incident.recommendedUnitId;
+    const unit = lockedDb.responseUnits.find((item) => item.id === unitId);
+    if (!unit) return { status: 400, payload: { error: "Recommend or select a valid response unit first" } };
+    if (incident.assignedUnitId === unit.id) return assignmentConflictResponse();
+    const expectedAssignedUnitId = normalizeExpectedAssignedUnitId(body);
+    if ((incident.assignedUnitId || null) !== expectedAssignedUnitId) return assignmentChangedResponse();
+    if (unitClaimedByAnotherIncident(lockedDb, unit, incident.id)) return assignmentConflictResponse();
+    if (!normalizeResponseUnitRecord(unit).operational) return { status: 409, payload: { error: `${unit.unitCode} is not operational` } };
+    if (!isPoliceResponseUnit(unit)) return { status: 400, payload: { error: "Select an available police unit" } };
+    if (unit.status !== "available" && unit.assignedIncidentId !== incident.id) return { status: 409, payload: { error: `${unit.unitCode} is not available` } };
+    const freshness = unitLocationFreshness(unit);
+    if (!freshness.eligible && !isDemoPatrolUnit(unit) && body.overrideStale !== true) {
+      return { status: 409, payload: { error: `${unit.unitCode} location is ${freshness.label.toLowerCase()}. Manual override confirmation is required.`, requiresOverride: true } };
+    }
+    const route = strictPoint(unit)
+      ? await routeBetween(routeUrl(strictPoint(unit), strictPoint(incident)))
+      : null;
+    let previousAssignedUnit = null;
+    if (incident.assignedUnitId && incident.assignedUnitId !== unit.id) {
+      previousAssignedUnit = lockedDb.responseUnits.find((item) => item.id === incident.assignedUnitId) || null;
+      if (previousAssignedUnit) Object.assign(previousAssignedUnit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: now() });
+    }
+    incident.assignedUnitId = unit.id;
+    incident.recommendedUnitId = incident.recommendedUnitId || unit.id;
+    incident.status = "Assigned";
+    if (route) {
+      incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
+      incident.etaMinutes = Math.max(1, Math.round((route.durationSeconds || approximateRouteDurationSeconds(route.distanceMeters)) / 60));
+      incident.routeLabel = route.routeLabel || route.label;
+      incident.routeProvider = route.provider;
+      incident.routeApproximate = Boolean(route.approximate);
+      incident.routeCalculatedAt = route.calculatedAt;
+      incident.routeSelectionReason = `Selected manually; route calculated for ${unit.unitCode}.`;
+    }
+    incident.updatedAt = now();
+    Object.assign(unit, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
+    const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
+    const statusEvent = addDispatchEvent(lockedDb, incident.id, "status_updated", "Incident status changed to Assigned", user.name);
+    const assignEvent = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${unit.unitCode} assigned to ${incident.title}`, user.name);
+    const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, unit.unitCode);
+    const overrideAudit = body.unitId ? addAuditLog(lockedDb, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit] });
+    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route } };
+  });
+}
+
 async function writeIncidentWorkflowRecords(db, incident, {
   units = [],
   alerts = [],
@@ -3987,108 +4184,14 @@ async function apiInternal(req, res, url) {
   const assignNearestMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/assign-nearest$/);
   if (req.method === "POST" && assignNearestMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
-    const incident = db.incidents.find((item) => item.id === assignNearestMatch[1]);
-    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
-    const locationError = dispatchLocationError(incident);
-    if (locationError) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, locationError);
-      await writeDatabase(db);
-      return sendJson(res, 409, { error: locationError });
-    }
-    if (!["Verified", "Assigned"].includes(canonicalIncidentStatus(incident.status))) {
-      return sendJson(res, 409, { error: "Verify the incident before assigning a response unit" });
-    }
-    const routed = await bestRoutedUnit(db, incident);
-    if (routed.error) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, routed.error);
-      await writeDatabase(db);
-      return sendJson(res, routed.status || 503, { error: routed.error, degraded: routed.degraded || false, candidates: routed.candidates || [], excludedUnits: routed.excludedUnits || [], warnings: routed.warnings || [] });
-    }
-    if (!routed) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, "Route service unavailable");
-      await writeDatabase(db);
-      return sendJson(res, 503, { error: "Route service unavailable", degraded: true });
-    }
-    const { unit: nearest, route } = routed;
-    incident.recommendedUnitId = nearest.id;
-    incident.assignedUnitId = nearest.id;
-    incident.status = "Assigned";
-    incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
-    incident.etaMinutes = Math.max(1, Math.round(routed.etaSeconds / 60));
-    incident.routeLabel = route.routeLabel || route.label;
-    incident.routeProvider = route.provider;
-    incident.routeApproximate = Boolean(route.approximate);
-    incident.routeCalculatedAt = route.calculatedAt;
-    incident.routeSelectionReason = routed.selectionReason;
-    incident.updatedAt = now();
-    Object.assign(nearest, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
-    const linkedReport = syncLinkedCitizenReportStatus(db, incident);
-    const event = addDispatchEvent(db, incident.id, "unit_assigned", `${nearest.unitCode} assigned with ${incident.etaMinutes} minute ${route.approximate ? "approximate " : ""}ETA`, user.name, incident.updatedAt);
-    const suggestAudit = addAuditLog(db, "unit_suggested", user, incident.id, routed.selectionReason || nearest.unitCode, incident.updatedAt);
-    const audit = addAuditLog(db, "unit_assigned", user, incident.id, `${nearest.unitCode}; ${incident.distanceKm} km; ${incident.etaMinutes} min${route.approximate ? "; approximate route" : ""}`, incident.updatedAt);
-    await writeIncidentWorkflowRecords(db, incident, { units: [nearest], reports: [linkedReport], events: [event], audits: [suggestAudit, audit] });
-    return sendJson(res, 200, {
-      incident: incidentForResponse(db, incident),
-      unit: unitForResponse(nearest),
-      route,
-      candidates: routed.candidates,
-      excludedUnits: routed.excludedUnits,
-      warnings: routed.warnings,
-      selectionReason: routed.selectionReason
-    });
+    const response = await assignNearestIncident(assignNearestMatch[1], user);
+    return sendJson(res, response.status, response.payload);
   }
 
   if (req.method === "POST" && productAssignMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
-    const incident = db.incidents.find((item) => item.id === productAssignMatch[1]);
-    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
-    const locationError = dispatchLocationError(incident);
-    if (locationError) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, locationError);
-      await writeDatabase(db);
-      return sendJson(res, 409, { error: locationError });
-    }
-    if (!["Verified", "Assigned"].includes(canonicalIncidentStatus(incident.status))) {
-      return sendJson(res, 409, { error: "Verify the incident before assigning a response unit" });
-    }
-    const unitId = body.unitId || incident.recommendedUnitId;
-    const unit = db.responseUnits.find((item) => item.id === unitId);
-    if (!unit) return sendJson(res, 400, { error: "Recommend or select a valid response unit first" });
-    if (!normalizeResponseUnitRecord(unit).operational) return sendJson(res, 409, { error: `${unit.unitCode} is not operational` });
-    if (!isPoliceResponseUnit(unit)) return sendJson(res, 400, { error: "Select an available police unit" });
-    if (unit.status !== "available" && unit.assignedIncidentId !== incident.id) return sendJson(res, 409, { error: `${unit.unitCode} is not available` });
-    const freshness = unitLocationFreshness(unit);
-    if (!freshness.eligible && !isDemoPatrolUnit(unit) && body.overrideStale !== true) {
-      return sendJson(res, 409, { error: `${unit.unitCode} location is ${freshness.label.toLowerCase()}. Manual override confirmation is required.`, requiresOverride: true });
-    }
-    const route = strictPoint(unit)
-      ? await routeBetween(routeUrl(strictPoint(unit), strictPoint(incident)))
-      : null;
-    if (incident.assignedUnitId && incident.assignedUnitId !== unit.id) {
-      const previous = db.responseUnits.find((item) => item.id === incident.assignedUnitId);
-      if (previous) Object.assign(previous, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: now() });
-    }
-    incident.assignedUnitId = unit.id;
-    incident.recommendedUnitId = incident.recommendedUnitId || unit.id;
-    incident.status = "Assigned";
-    if (route) {
-      incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
-      incident.etaMinutes = Math.max(1, Math.round((route.durationSeconds || approximateRouteDurationSeconds(route.distanceMeters)) / 60));
-      incident.routeLabel = route.routeLabel || route.label;
-      incident.routeProvider = route.provider;
-      incident.routeApproximate = Boolean(route.approximate);
-      incident.routeCalculatedAt = route.calculatedAt;
-      incident.routeSelectionReason = `Selected manually; route calculated for ${unit.unitCode}.`;
-    }
-    incident.updatedAt = now();
-    Object.assign(unit, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
-    const linkedReport = syncLinkedCitizenReportStatus(db, incident);
-    const statusEvent = addDispatchEvent(db, incident.id, "status_updated", "Incident status changed to Assigned", user.name);
-    const assignEvent = addDispatchEvent(db, incident.id, "unit_assigned", `${unit.unitCode} assigned to ${incident.title}`, user.name);
-    const audit = addAuditLog(db, "unit_assigned", user, incident.id, unit.unitCode);
-    const overrideAudit = body.unitId ? addAuditLog(db, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
-    await writeIncidentWorkflowRecords(db, incident, { units: [unit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit] });
-    return sendJson(res, 200, { incident: incidentForResponse(db, incident), unit: unitForResponse(unit), route });
+    const response = await assignSelectedIncidentUnit(productAssignMatch[1], body, user);
+    return sendJson(res, response.status, response.payload);
   }
 
   const closeMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/close$/);

@@ -22,13 +22,71 @@ const mappings = [
   ["reports", missingPersons]
 ];
 
+function resolveImportPath(source) {
+  if (!source) return path.join(__dirname, "..", "data", "db.json");
+  return path.isAbsolute(source) ? source : path.resolve(process.cwd(), source);
+}
+
+function parseImportOptions(argv = process.argv.slice(2), env = process.env) {
+  let source = env.RAKSHAKAI_IMPORT_FILE || "";
+  let seedOnly = false;
+  let validateSourceOnly = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--if-empty") {
+      seedOnly = true;
+    } else if (arg === "--validate-source-only") {
+      validateSourceOnly = true;
+    } else if (arg === "--source") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--source requires a JSON file path.");
+      source = next;
+      index += 1;
+    } else if (arg.startsWith("--source=")) {
+      source = arg.slice("--source=".length);
+      if (!source) throw new Error("--source requires a JSON file path.");
+    }
+  }
+
+  return {
+    dbPath: resolveImportPath(source),
+    explicitSource: Boolean(source),
+    seedOnly,
+    validateSourceOnly
+  };
+}
+
+function loadImportDatabase(dbPath) {
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`Import source not found: ${dbPath}`);
+  }
+
+  let db;
+  try {
+    db = JSON.parse(fs.readFileSync(dbPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    throw new Error(`Import source is not valid JSON: ${dbPath}`);
+  }
+
+  if (!db || Array.isArray(db) || typeof db !== "object") {
+    throw new Error(`Import source must contain a JSON object: ${dbPath}`);
+  }
+
+  return db;
+}
+
 async function main() {
+  const { dbPath, seedOnly, validateSourceOnly } = parseImportOptions();
+  const db = loadImportDatabase(dbPath);
+  if (validateSourceOnly) {
+    console.log("Import source validation passed.");
+    return;
+  }
+
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is required. Run npm run migrate before importing.");
   }
-  const dbPath = path.join(__dirname, "..", "data", "db.json");
-  const seedOnly = process.argv.includes("--if-empty");
-  const db = JSON.parse(fs.readFileSync(dbPath, "utf8").replace(/^\uFEFF/, ""));
   db.reports = db.reports || db.missingPersons || [];
   db.users = await Promise.all((db.users || []).map(async (user) => {
     const seededPassword = user.role === "Admin"
@@ -112,15 +170,23 @@ async function main() {
   );
   if (totals.failed > 0) {
     process.exitCode = 1;
-    console.error("db.json import completed with failed records; review collection/table counters.");
+    console.error("JSON import completed with failed records; review collection/table counters.");
   } else {
-    console.log("db.json import completed successfully.");
+    console.log("JSON import completed successfully.");
   }
 }
 
-main()
-  .catch(() => {
-    console.error("db.json import failed. Review database connectivity and schema diagnostics.");
+if (require.main === module) {
+  main()
+  .catch((error) => {
+    console.error(error.message || "JSON import failed. Review database connectivity and schema diagnostics.");
     process.exitCode = 1;
   })
   .finally(closePool);
+}
+
+module.exports = {
+  loadImportDatabase,
+  parseImportOptions,
+  resolveImportPath
+};

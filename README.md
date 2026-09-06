@@ -23,7 +23,14 @@ If port `3000` or `5000` is already occupied, stop the older app process and run
 
 ## Local Demo Data
 
-By default, leave `DATABASE_URL` empty to run with `backend/data/db.json`.
+By default, leave `DATABASE_URL` empty to run with the local runtime file
+`backend/data/db.json`. That file is ignored by Git and is created
+automatically for JSON-mode development if it is missing.
+
+`backend/data/db.example.json` is the committed sanitized example used for
+controlled imports and Docker initialization. Do not put real runtime records
+or credentials in the example file.
+
 If you configure PostgreSQL for development, run migrations first:
 
 ```powershell
@@ -135,7 +142,7 @@ and production-secret requirements.
 - Missing person and evidence reporting
 - Alerts and incident response
 - Device health, audit logs, and integration status
-- JSON persistence in `backend/data/db.json`
+- Local JSON persistence in ignored `backend/data/db.json`
 
 ## Incident Command Workflow
 

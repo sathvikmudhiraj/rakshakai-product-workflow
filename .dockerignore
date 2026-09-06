@@ -14,5 +14,13 @@ node_modules
 !.env.example
 !.env.docker.example
 **/*.log
+backups/
+backend/data/db.json
+backend/data/*.local.json
+backend/data/*.backup.json
+**/*.backup.json
+**/db-*.json
+**/*.bak
+**/*.old
 ai-service/*.pt
 RakshakAI_Project_Report.docx

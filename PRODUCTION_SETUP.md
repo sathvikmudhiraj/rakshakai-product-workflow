@@ -59,9 +59,15 @@ Set:
 DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 ```
 
-Then run `npm run migrate` and, if needed, `npm run import:json` from
-`backend/`. The application uses `data/db.json` only when `DATABASE_URL` is
-missing.
+Then run `npm run migrate` from `backend/`. If you need a controlled seed,
+import only an explicit sanitized source, for example:
+
+```powershell
+npm run import:json -- --source data/db.example.json
+```
+
+The application uses the ignored local `data/db.json` only when `DATABASE_URL`
+is missing. Production must run with PostgreSQL.
 
 ## 5. Firebase Push Notifications
 

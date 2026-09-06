@@ -23,6 +23,12 @@ npm-debug.log*
 
 backups/
 
+# Local runtime JSON database. Keep sanitized examples trackable.
+/backend/data/db.json
+/backend/data/*.local.json
+/backend/data/*.backup.json
+!/backend/data/db.example.json
+
 ai-service/*.pt
 
 # Local GIS/OSRM datasets are large generated artifacts.

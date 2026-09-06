@@ -14,7 +14,7 @@ const { ARCGIS_TILE_SOURCES, OSM_TILE_SOURCES, buildRakshakaiCsp } = require("..
 
 const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rakshakai-security-"));
 const testDatabase = path.join(testDirectory, "db.json");
-const sourceDatabase = path.join(__dirname, "..", "data", "db.json");
+const sourceDatabase = path.join(__dirname, "fixtures", "db.fixture.json");
 const TEST_PASSWORD = "RakshakAI-Test-123!";
 const PATANCHERU_POINT = { lat: 17.5285, lng: 78.2636 };
 const BHEL_POINT = { lat: 17.4933, lng: 78.3915 };
@@ -3480,9 +3480,9 @@ test("frontend Incident Command map simplifies markers with default layers and c
   assert.match(styles, /\.unit-busy/);
   assert.match(styles, /\.unit-assigned/);
 
-  assert.ok(persisted.incidents.some((incident) => incident.id === "inc_fdcb78a9"), "backend incidents remain present");
-  assert.ok(persisted.responseUnits.some((unit) => unit.id === "unit_p04"), "backend response units remain present");
-  assert.ok(persisted.policeStations.some((station) => station.id === "station_patancheru"), "backend stations remain present");
+  assert.ok(persisted.incidents.some((incident) => incident.id === "fixture_incident_active"), "fixture incidents remain present");
+  assert.ok(persisted.responseUnits.some((unit) => unit.id === "fixture_unit_alpha"), "fixture response units remain present");
+  assert.ok(persisted.policeStations.some((station) => station.id === "fixture_station_01"), "fixture stations remain present");
 });
 
 test("frontend GIS navigation controls are gated and mode-driven", () => {
@@ -4000,4 +4000,582 @@ test("frontend role landing and menu restrictions remain configured", () => {
   assert.doesNotMatch(settingsSection, /policeUserForm|Police Account Management/);
   assert.match(registerForm, /Citizen account only/);
   assert.doesNotMatch(registerForm, /<option value="Police Officer"|<option value="Admin"/);
+});
+
+let assignmentFixtureCounter = 0;
+
+function assignmentFixtureId(label) {
+  assignmentFixtureCounter += 1;
+  return `${label}_${Date.now()}_${assignmentFixtureCounter}`;
+}
+
+function createAssignmentTestUnit(overrides = {}) {
+  const id = overrides.id || assignmentFixtureId("test_unit");
+  const unitCode = overrides.unitCode || `TEST-${assignmentFixtureCounter}`;
+  const timestamp = new Date().toISOString();
+  return {
+    id,
+    unitId: unitCode,
+    unitCode,
+    unitName: overrides.unitName || `Concurrency Test Unit ${assignmentFixtureCounter}`,
+    name: overrides.unitName || `Concurrency Test Unit ${assignmentFixtureCounter}`,
+    unitType: "police_patrol",
+    type: "police_patrol",
+    officerName: "Test Officer",
+    teamName: "Test Officer",
+    stationName: "Test Station",
+    station: "Test Station",
+    linkedStationId: null,
+    stationId: null,
+    beat: "Test Beat",
+    sector: "Test Beat",
+    jurisdiction: "Test Jurisdiction",
+    vehicleType: "Test Vehicle",
+    status: "available",
+    lat: PATANCHERU_POINT.lat,
+    lng: PATANCHERU_POINT.lng,
+    address: "Test Location",
+    currentAddress: "Test Location",
+    source: "admin_registry",
+    sourceLabel: "Admin registry",
+    isDemo: false,
+    stationFallback: false,
+    operational: true,
+    lastSeen: timestamp,
+    lastUpdated: timestamp,
+    lastLocationUpdatedAt: timestamp,
+    assignedIncidentId: null,
+    currentIncidentId: null,
+    ...overrides
+  };
+}
+
+function createAssignmentTestIncident(adminUser, overrides = {}) {
+  const timestamp = new Date().toISOString();
+  const id = overrides.id || assignmentFixtureId("test_incident");
+  return {
+    id,
+    title: overrides.title || `Concurrency Test Incident ${assignmentFixtureCounter}`,
+    type: "test_incident",
+    category: "test_incident",
+    severity: "medium",
+    status: "Verified",
+    source: "Manual",
+    sourceType: "manual",
+    sourceName: "Test",
+    zone: "Test Zone",
+    address: "Test Address",
+    lat: BHEL_POINT.lat,
+    lng: BHEL_POINT.lng,
+    locationSource: "manual_latlng",
+    locationStatus: "Verified",
+    reportedBy: adminUser.id,
+    assignedUnitId: null,
+    recommendedUnitId: null,
+    etaMinutes: null,
+    distanceKm: null,
+    occurrenceCount: 1,
+    confidence: 0.9,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    lastDetectedAt: timestamp,
+    createdBy: adminUser.id,
+    ...overrides
+  };
+}
+
+function unitAssignmentBody(unitId, expectedAssignedUnitId = null) {
+  return JSON.stringify({ unitId, expectedAssignedUnitId });
+}
+
+test("concurrent assignment: two operators assign same incident", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+
+  const testUnit = {
+    id: `test_unit_${Date.now()}`,
+    unitId: `TEST-${Date.now()}`,
+    unitCode: `TEST-${Date.now()}`,
+    unitName: "Concurrency Test Unit",
+    name: "Concurrency Test Unit",
+    unitType: "police_patrol",
+    type: "police_patrol",
+    officerName: "Test Officer",
+    teamName: "Test Officer",
+    stationName: "Test Station",
+    station: "Test Station",
+    linkedStationId: null,
+    stationId: null,
+    beat: "Test Beat",
+    sector: "Test Beat",
+    jurisdiction: "Test Jurisdiction",
+    vehicleType: "Test Vehicle",
+    status: "available",
+    lat: 17.5285,
+    lng: 78.2636,
+    address: "Test Location",
+    currentAddress: "Test Location",
+    source: "admin_registry",
+    sourceLabel: "Admin registry",
+    isDemo: false,
+    stationFallback: false,
+    operational: true,
+    lastSeen: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    lastLocationUpdatedAt: new Date().toISOString(),
+    assignedIncidentId: null,
+    currentIncidentId: null
+  };
+  db.responseUnits.unshift(testUnit);
+
+  const incident = {
+    id: `test_incident_${Date.now()}`,
+    title: "Concurrency Test Incident",
+    type: "test_incident",
+    category: "test_incident",
+    severity: "medium",
+    status: "Verified",
+    source: "Manual",
+    sourceType: "manual",
+    sourceName: "Test",
+    zone: "Test Zone",
+    address: "Test Address",
+    lat: 17.5285,
+    lng: 78.2636,
+    locationSource: "manual_latlng",
+    locationStatus: "Verified",
+    reportedBy: adminUser.id,
+    assignedUnitId: null,
+    recommendedUnitId: null,
+    etaMinutes: null,
+    distanceKm: null,
+    occurrenceCount: 1,
+    confidence: 0.9,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastDetectedAt: new Date().toISOString(),
+    createdBy: adminUser.id
+  };
+  db.incidents.unshift(incident);
+
+  await writeDatabase(db);
+
+  const adminHeaders = authHeaders("Admin");
+
+  const [result1, result2] = await Promise.all([
+    request(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST", headers: { ...adminHeaders, Origin: "http://localhost:3000" } }),
+    request(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST", headers: { ...adminHeaders, Origin: "http://localhost:3000" } })
+  ]);
+
+  const results = [result1, result2];
+  const statuses = results.map((result) => result.status).sort();
+  assert.deepEqual(statuses, [200, 409], "Only one assignment succeeds; the concurrent request is rejected safely");
+  const conflict = results.find((result) => result.status === 409);
+  assert.equal((await conflict.json()).code, "ASSIGNMENT_CONFLICT");
+
+  const successResult = result1.status === 200 ? await result1.json() : await result2.json();
+
+  assert.ok(successResult.incident.assignedUnitId, "Successful assignment has unit");
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((i) => i.id === incident.id);
+  assert.ok(updatedIncident.assignedUnitId, "Incident has assigned unit in database");
+  assert.equal(updatedIncident.status, "Assigned", "Incident status is Assigned");
+
+  const assignedUnit = updatedDb.responseUnits.find((u) => u.id === updatedIncident.assignedUnitId);
+  assert.ok(assignedUnit, "Assigned unit exists");
+  assert.equal(assignedUnit.status, "busy", "Assigned unit status is busy");
+  assert.equal(assignedUnit.assignedIncidentId, incident.id, "Unit assigned to correct incident");
+  const assignAudits = updatedDb.auditLogs.filter((log) => log.action === "unit_assigned" && log.incidentId === incident.id);
+  assert.equal(assignAudits.length, 1, "Only one unit_assigned audit record");
+  const dispatchEvents = updatedDb.dispatchEvents.filter((event) => event.incidentId === incident.id && event.type === "unit_assigned");
+  assert.equal(dispatchEvents.length, 1, "Only one unit_assigned dispatch event");
+});
+
+test("concurrent assignment: two incidents claim same unit", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+
+  const testUnit = {
+    id: `test_unit_${Date.now()}_2`,
+    unitId: `TEST-${Date.now()}-2`,
+    unitCode: `TEST-${Date.now()}-2`,
+    unitName: "Concurrency Test Unit 2",
+    name: "Concurrency Test Unit 2",
+    unitType: "police_patrol",
+    type: "police_patrol",
+    officerName: "Test Officer 2",
+    teamName: "Test Officer 2",
+    stationName: "Test Station 2",
+    station: "Test Station 2",
+    linkedStationId: null,
+    stationId: null,
+    beat: "Test Beat 2",
+    sector: "Test Beat 2",
+    jurisdiction: "Test Jurisdiction 2",
+    vehicleType: "Test Vehicle 2",
+    status: "available",
+    lat: 17.5285,
+    lng: 78.2636,
+    address: "Test Location 2",
+    currentAddress: "Test Location 2",
+    source: "admin_registry",
+    sourceLabel: "Admin registry",
+    isDemo: false,
+    stationFallback: false,
+    operational: true,
+    lastSeen: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    lastLocationUpdatedAt: new Date().toISOString(),
+    assignedIncidentId: null,
+    currentIncidentId: null
+  };
+  db.responseUnits.unshift(testUnit);
+
+  const incident1 = {
+    id: `test_incident_${Date.now()}_1`,
+    title: "Concurrency Test Incident 1",
+    type: "test_incident",
+    category: "test_incident",
+    severity: "medium",
+    status: "Verified",
+    source: "Manual",
+    sourceType: "manual",
+    sourceName: "Test",
+    zone: "Test Zone",
+    address: "Test Address",
+    lat: 17.5285,
+    lng: 78.2636,
+    locationSource: "manual_latlng",
+    locationStatus: "Verified",
+    reportedBy: adminUser.id,
+    assignedUnitId: null,
+    recommendedUnitId: null,
+    etaMinutes: null,
+    distanceKm: null,
+    occurrenceCount: 1,
+    confidence: 0.9,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastDetectedAt: new Date().toISOString(),
+    createdBy: adminUser.id
+  };
+
+  const incident2 = {
+    id: `test_incident_${Date.now()}_2`,
+    title: "Concurrency Test Incident 2",
+    type: "test_incident",
+    category: "test_incident",
+    severity: "medium",
+    status: "Verified",
+    source: "Manual",
+    sourceType: "manual",
+    sourceName: "Test",
+    zone: "Test Zone 2",
+    address: "Test Address 2",
+    lat: 17.4933,
+    lng: 78.3915,
+    locationSource: "manual_latlng",
+    locationStatus: "Verified",
+    reportedBy: adminUser.id,
+    assignedUnitId: null,
+    recommendedUnitId: null,
+    etaMinutes: null,
+    distanceKm: null,
+    occurrenceCount: 1,
+    confidence: 0.9,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastDetectedAt: new Date().toISOString(),
+    createdBy: adminUser.id
+  };
+
+  db.incidents.unshift(incident1, incident2);
+  await writeDatabase(db);
+
+  const adminHeaders = authHeaders("Admin");
+
+  const body1 = { unitId: testUnit.id };
+  const body2 = { unitId: testUnit.id };
+
+  const [result1, result2] = await Promise.all([
+    request(`/api/incidents/${incident1.id}/assign-unit`, { method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify(body1) }),
+    request(`/api/incidents/${incident2.id}/assign-unit`, { method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify(body2) })
+  ]);
+
+  const results = [result1, result2];
+  const statuses = results.map((result) => result.status).sort();
+  assert.deepEqual(statuses, [200, 409], "Only one incident can claim the unit");
+  const conflict = results.find((result) => result.status === 409);
+  assert.equal((await conflict.json()).code, "ASSIGNMENT_CONFLICT");
+
+  const successResult = result1.status === 200 ? await result1.json() : await result2.json();
+  assert.ok(successResult.incident.assignedUnitId, "Successful assignment has unit");
+
+  const updatedDb = await readDatabase();
+  const unit = updatedDb.responseUnits.find((u) => u.id === testUnit.id);
+  assert.equal(unit.status, "busy", "Unit status is busy");
+  assert.ok(unit.assignedIncidentId === incident1.id || unit.assignedIncidentId === incident2.id, "Unit assigned to one of the incidents");
+
+  const incident1Updated = updatedDb.incidents.find((i) => i.id === incident1.id);
+  const incident2Updated = updatedDb.incidents.find((i) => i.id === incident2.id);
+  const assignedCount = [incident1Updated.assignedUnitId, incident2Updated.assignedUnitId].filter(Boolean).length;
+  assert.equal(assignedCount, 1, "Only one incident has the unit assigned");
+});
+
+test("concurrent assignment: state consistency and no duplicate audit records", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+
+  const testUnit = {
+    id: `test_unit_${Date.now()}_3`,
+    unitId: `TEST-${Date.now()}-3`,
+    unitCode: `TEST-${Date.now()}-3`,
+    unitName: "Concurrency Test Unit 3",
+    name: "Concurrency Test Unit 3",
+    unitType: "police_patrol",
+    type: "police_patrol",
+    officerName: "Test Officer 3",
+    teamName: "Test Officer 3",
+    stationName: "Test Station 3",
+    station: "Test Station 3",
+    linkedStationId: null,
+    stationId: null,
+    beat: "Test Beat 3",
+    sector: "Test Beat 3",
+    jurisdiction: "Test Jurisdiction 3",
+    vehicleType: "Test Vehicle 3",
+    status: "available",
+    lat: 17.5285,
+    lng: 78.2636,
+    address: "Test Location 3",
+    currentAddress: "Test Location 3",
+    source: "admin_registry",
+    sourceLabel: "Admin registry",
+    isDemo: false,
+    stationFallback: false,
+    operational: true,
+    lastSeen: new Date().toISOString(),
+    lastUpdated: new Date().toISOString(),
+    lastLocationUpdatedAt: new Date().toISOString(),
+    assignedIncidentId: null,
+    currentIncidentId: null
+  };
+  db.responseUnits.unshift(testUnit);
+
+  const incident = {
+    id: `test_incident_${Date.now()}_3`,
+    title: "Concurrency Test Incident 3",
+    type: "test_incident",
+    category: "test_incident",
+    severity: "medium",
+    status: "Verified",
+    source: "Manual",
+    sourceType: "manual",
+    sourceName: "Test",
+    zone: "Test Zone 3",
+    address: "Test Address 3",
+    lat: 17.5004,
+    lng: 78.3798,
+    locationSource: "manual_latlng",
+    locationStatus: "Verified",
+    reportedBy: adminUser.id,
+    assignedUnitId: null,
+    recommendedUnitId: null,
+    etaMinutes: null,
+    distanceKm: null,
+    occurrenceCount: 1,
+    confidence: 0.9,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastDetectedAt: new Date().toISOString(),
+    createdBy: adminUser.id
+  };
+  db.incidents.unshift(incident);
+
+  await writeDatabase(db);
+
+  const adminHeaders = authHeaders("Admin");
+
+  const results = await Promise.all([
+    request(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST", headers: { ...adminHeaders, Origin: "http://localhost:3000" } }),
+    request(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST", headers: { ...adminHeaders, Origin: "http://localhost:3000" } }),
+    request(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST", headers: { ...adminHeaders, Origin: "http://localhost:3000" } })
+  ]);
+  assert.equal(results.filter((result) => result.status === 200).length, 1, "Only one concurrent assignment succeeds");
+  assert.equal(results.filter((result) => result.status === 409).length, 2, "Duplicate concurrent assignments return conflict");
+  for (const conflict of results.filter((result) => result.status === 409)) {
+    assert.equal((await conflict.json()).code, "ASSIGNMENT_CONFLICT");
+  }
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((i) => i.id === incident.id);
+  assert.ok(updatedIncident.assignedUnitId, "Incident has assigned unit");
+
+  const unit = updatedDb.responseUnits.find((u) => u.id === updatedIncident.assignedUnitId);
+  assert.ok(unit, "Assigned unit exists");
+  assert.equal(unit.status, "busy");
+  assert.equal(unit.assignedIncidentId, incident.id);
+
+  const assignAudits = updatedDb.auditLogs.filter((log) => log.action === "unit_assigned" && log.incidentId === incident.id);
+  assert.equal(assignAudits.length, 1, "Only one unit_assigned audit record");
+
+  const dispatchEvents = updatedDb.dispatchEvents.filter((event) => event.incidentId === incident.id && event.type === "unit_assigned");
+  assert.equal(dispatchEvents.length, 1, "Only one unit_assigned dispatch event");
+});
+
+test("concurrent assignment: same incident different units rejects stale competing intent", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const unitA = createAssignmentTestUnit({ unitCode: `DIFF-A-${Date.now()}` });
+  const unitB = createAssignmentTestUnit({ unitCode: `DIFF-B-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, { title: "Different Unit Concurrency Incident" });
+  db.responseUnits.unshift(unitA, unitB);
+  db.incidents.unshift(incident);
+  await writeDatabase(db);
+
+  const adminHeaders = authHeaders("Admin");
+  const [resultA, resultB] = await Promise.all([
+    request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...adminHeaders, "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: unitAssignmentBody(unitA.id, null)
+    }),
+    request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...adminHeaders, "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: unitAssignmentBody(unitB.id, null)
+    })
+  ]);
+
+  const results = [resultA, resultB];
+  assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
+  const conflictBody = await results.find((result) => result.status === 409).json();
+  assert.equal(conflictBody.code, "ASSIGNMENT_STALE");
+  assert.match(conflictBody.error, /assignment changed/i);
+
+  const successBody = await results.find((result) => result.status === 200).json();
+  const winningUnitId = successBody.unit.id;
+  const losingUnitId = winningUnitId === unitA.id ? unitB.id : unitA.id;
+  const losingUnitCode = winningUnitId === unitA.id ? unitB.unitCode : unitA.unitCode;
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  assert.equal(updatedIncident.assignedUnitId, winningUnitId);
+  const winningUnit = updatedDb.responseUnits.find((item) => item.id === winningUnitId);
+  const losingUnit = updatedDb.responseUnits.find((item) => item.id === losingUnitId);
+  assert.equal(winningUnit.status, "busy");
+  assert.equal(winningUnit.assignedIncidentId, incident.id);
+  assert.equal(losingUnit.status, "available");
+  assert.equal(losingUnit.assignedIncidentId, null);
+  assert.equal(losingUnit.currentIncidentId, null);
+
+  const assignEvents = updatedDb.dispatchEvents.filter((event) => event.incidentId === incident.id && event.type === "unit_assigned");
+  assert.equal(assignEvents.length, 1);
+  assert.doesNotMatch(JSON.stringify(assignEvents), new RegExp(losingUnitCode));
+  const assignAudits = updatedDb.auditLogs.filter((log) => log.incidentId === incident.id && log.action === "unit_assigned");
+  assert.equal(assignAudits.length, 1);
+  assert.doesNotMatch(JSON.stringify(assignAudits), new RegExp(losingUnitCode));
+});
+
+test("manual reassignment succeeds only when expected assignment matches", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const firstUnit = createAssignmentTestUnit({ unitCode: `REASSIGN-A-${Date.now()}`, status: "busy" });
+  const secondUnit = createAssignmentTestUnit({ unitCode: `REASSIGN-B-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, {
+    title: "Intentional Reassignment Incident",
+    status: "Assigned",
+    assignedUnitId: firstUnit.id
+  });
+  firstUnit.assignedIncidentId = incident.id;
+  firstUnit.currentIncidentId = incident.id;
+  db.responseUnits.unshift(firstUnit, secondUnit);
+  db.incidents.unshift(incident);
+  await writeDatabase(db);
+
+  const response = await request(`/api/incidents/${incident.id}/assign-unit`, {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: unitAssignmentBody(secondUnit.id, firstUnit.id)
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.incident.assignedUnitId, secondUnit.id);
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  const updatedFirstUnit = updatedDb.responseUnits.find((item) => item.id === firstUnit.id);
+  const updatedSecondUnit = updatedDb.responseUnits.find((item) => item.id === secondUnit.id);
+  assert.equal(updatedIncident.assignedUnitId, secondUnit.id);
+  assert.equal(updatedFirstUnit.status, "available");
+  assert.equal(updatedFirstUnit.assignedIncidentId, null);
+  assert.equal(updatedFirstUnit.currentIncidentId, null);
+  assert.equal(updatedSecondUnit.status, "busy");
+  assert.equal(updatedSecondUnit.assignedIncidentId, incident.id);
+});
+
+test("manual reassignment rejects stale expected assignment without side effects", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const oldUnit = createAssignmentTestUnit({ unitCode: `STALE-OLD-${Date.now()}` });
+  const currentUnit = createAssignmentTestUnit({ unitCode: `STALE-CURRENT-${Date.now()}`, status: "busy" });
+  const requestedUnit = createAssignmentTestUnit({ unitCode: `STALE-REQUESTED-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, {
+    title: "Stale Reassignment Incident",
+    status: "Assigned",
+    assignedUnitId: currentUnit.id
+  });
+  currentUnit.assignedIncidentId = incident.id;
+  currentUnit.currentIncidentId = incident.id;
+  db.responseUnits.unshift(oldUnit, currentUnit, requestedUnit);
+  db.incidents.unshift(incident);
+  const eventCountBefore = db.dispatchEvents.length;
+  const auditCountBefore = db.auditLogs.length;
+  await writeDatabase(db);
+
+  const response = await request(`/api/incidents/${incident.id}/assign-unit`, {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: unitAssignmentBody(requestedUnit.id, oldUnit.id)
+  });
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.code, "ASSIGNMENT_STALE");
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  const updatedCurrentUnit = updatedDb.responseUnits.find((item) => item.id === currentUnit.id);
+  const updatedRequestedUnit = updatedDb.responseUnits.find((item) => item.id === requestedUnit.id);
+  assert.equal(updatedIncident.assignedUnitId, currentUnit.id);
+  assert.equal(updatedCurrentUnit.status, "busy");
+  assert.equal(updatedCurrentUnit.assignedIncidentId, incident.id);
+  assert.equal(updatedRequestedUnit.status, "available");
+  assert.equal(updatedRequestedUnit.assignedIncidentId, null);
+  assert.equal(updatedRequestedUnit.currentIncidentId, null);
+  assert.equal(updatedDb.dispatchEvents.length, eventCountBefore);
+  assert.equal(updatedDb.auditLogs.length, auditCountBefore);
+});
+
+test("citizen cannot assign a selected unit", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const unit = createAssignmentTestUnit({ unitCode: `CITIZEN-BLOCK-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, { title: "Citizen Assignment Block Incident" });
+  db.responseUnits.unshift(unit);
+  db.incidents.unshift(incident);
+  await writeDatabase(db);
+
+  const response = await request(`/api/incidents/${incident.id}/assign-unit`, {
+    method: "POST",
+    headers: { ...authHeaders("Citizen"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: unitAssignmentBody(unit.id, null)
+  });
+  assert.equal(response.status, 403);
+
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  const updatedUnit = updatedDb.responseUnits.find((item) => item.id === unit.id);
+  assert.equal(updatedIncident.assignedUnitId, null);
+  assert.equal(updatedUnit.status, "available");
 });

@@ -45,6 +45,8 @@ function getPool() {
 }
 
 function query(sql, params = []) {
+  const activeClient = transactionStorage.getStore();
+  if (activeClient) return activeClient.query(sql, params);
   return getPool().query(sql, params);
 }
 

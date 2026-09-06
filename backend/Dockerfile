@@ -14,7 +14,7 @@ COPY backend/repositories ./repositories
 COPY backend/routes ./routes
 COPY backend/scripts ./scripts
 COPY backend/services ./services
-COPY backend/data ./data
+COPY backend/data/db.example.json ./data/db.example.json
 COPY backend/server.js ./
 
 USER node

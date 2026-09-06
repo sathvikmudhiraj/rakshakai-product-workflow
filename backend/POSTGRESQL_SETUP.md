@@ -1,7 +1,8 @@
 # PostgreSQL / Neon Setup
 
 The backend uses PostgreSQL whenever `DATABASE_URL` is configured. Without it,
-the local `data/db.json` fallback remains active for development.
+the ignored local `data/db.json` fallback remains active for development and is
+created automatically if missing.
 
 ## 1. Create a Neon database
 
@@ -38,16 +39,19 @@ npm run migrate
 
 The migration is idempotent and creates the required tables and indexes.
 
-## 4. Import existing demo data
+## 4. Import sanitized example data or a backed-up runtime export
 
-Run this once if you want to preserve the current `data/db.json` records:
+Run this once if you want to seed PostgreSQL from the sanitized committed
+example:
 
 ```powershell
-npm run import:json
+npm run import:json -- --source data/db.example.json
 ```
 
-Existing IDs are preserved, duplicate IDs are skipped, and plaintext demo
-passwords are converted to bcrypt hashes during import.
+To import real local runtime data, first back up `data/db.json`, then pass it
+explicitly with `--source data/db.json`. Existing IDs are preserved, duplicate
+IDs are skipped, and plaintext demo passwords are converted to bcrypt hashes
+during import.
 
 ## 5. Run and verify
 

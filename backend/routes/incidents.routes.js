@@ -14,7 +14,6 @@ router.patch("/:id/location", controller.updateLocation);
 router.post("/:id/confirm-location", controller.confirmLocation);
 router.post("/:id/assign-unit", controller.assignUnit);
 router.post("/:id/close", controller.close);
-router.patch("/:id/assign-unit", controller.assignUnit);
 router.patch("/:id/status", controller.updateStatus);
 router.get("/:id", controller.getOne);
 

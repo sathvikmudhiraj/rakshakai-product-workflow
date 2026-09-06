@@ -11,12 +11,14 @@ npm run dev
 
 The API runs on `http://localhost:5000/api`.
 
-Without `DATABASE_URL`, development data is stored in `data/db.json`. For
-production PostgreSQL/Neon setup, see [POSTGRESQL_SETUP.md](POSTGRESQL_SETUP.md).
+Without `DATABASE_URL`, development data is stored in the ignored runtime file
+`data/db.json`. The committed `data/db.example.json` file is sanitized example
+data for explicit imports and Docker initialization. For production
+PostgreSQL/Neon setup, see [POSTGRESQL_SETUP.md](POSTGRESQL_SETUP.md).
 
 ```powershell
 npm run migrate
-npm run import:json
+npm run import:json -- --source data/db.example.json
 ```
 
 ## Health

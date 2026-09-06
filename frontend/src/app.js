@@ -26,6 +26,7 @@ import {
   preserveLeafletViewport,
   streetTileLoadOutcome
 } from "./gisBaseLayerLifecycle.js";
+import { renderDetectionBoxes } from "./liveVisionOverlay.js";
 import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveillanceSeverity } from "./liveVisionPolicy.js";
 import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
 
@@ -4246,28 +4247,6 @@ function swapRoutePoints() {
 function setLiveVisionStatus(title, detail = "") {
   setText("#liveDetectionState", title);
   setText("#liveDetectionDetail", detail);
-}
-
-function renderDetectionBoxes(detections = [], frameWidth = 1, frameHeight = 1) {
-  const layer = $("#liveDetectionBoxes");
-  if (!layer) return;
-  layer.textContent = "";
-  detections.filter((item) => Array.isArray(item.box) && item.box.length === 4).forEach((item) => {
-    const [x, y, width, height] = item.box.map(Number);
-    if (![x, y, width, height].every(Number.isFinite)) return;
-    const normalized = Math.max(x, y, width, height) <= 1;
-    const left = normalized ? x * 100 : (x / frameWidth) * 100;
-    const top = normalized ? y * 100 : (y / frameHeight) * 100;
-    const boxWidth = normalized ? width * 100 : (width / frameWidth) * 100;
-    const boxHeight = normalized ? height * 100 : (height / frameHeight) * 100;
-    const box = node("div", "detection-box");
-    box.style.left = `${Math.max(0, Math.min(100, left))}%`;
-    box.style.top = `${Math.max(0, Math.min(100, top))}%`;
-    box.style.width = `${Math.max(0, Math.min(100 - left, boxWidth))}%`;
-    box.style.height = `${Math.max(0, Math.min(100 - top, boxHeight))}%`;
-    box.append(node("span", "", `${item.label} ${Math.round((item.confidence || 0) * 100)}%`));
-    layer.append(box);
-  });
 }
 
 function liveVisionError(message = "") {

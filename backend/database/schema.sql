@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS app_state (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 UPDATE users SET data = data - 'password' - 'passwordHash';
 
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);

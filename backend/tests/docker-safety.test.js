@@ -31,6 +31,14 @@ test("normal services do not require OSRM data and PostgreSQL remains persistent
   assert.match(compose, /\nvolumes:\n\s+postgres-data:/);
 });
 
+test("Docker PostgreSQL import uses sanitized example data instead of runtime db.json", () => {
+  const backend = serviceBlock("backend", "frontend");
+  assert.match(backend, /RAKSHAKAI_IMPORT_FILE:\s*\/app\/backend\/data\/db\.example\.json/);
+  assert.match(compose, /npm run import:json -- --if-empty/);
+  assert.match(backendDockerfile, /COPY backend\/data\/db\.example\.json \.\/data\/db\.example\.json/);
+  assert.doesNotMatch(backendDockerfile, /COPY backend\/data \.\/data/);
+});
+
 test("AI URL and API key remain wired between backend and AI service", () => {
   const ai = serviceBlock("ai-service", "osrm");
   const backend = serviceBlock("backend", "frontend");
