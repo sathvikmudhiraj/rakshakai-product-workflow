@@ -1626,16 +1626,49 @@ function cookies(req) {
   return parsed;
 }
 
-function userFromReq(req, db) {
+function sessionTokenFromReq(req) {
   const bearer = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i)?.[1];
-  const token = bearer || cookies(req).rakshakai_session;
+  return bearer || cookies(req).rakshakai_session || "";
+}
+
+function sessionPayloadFromReq(req) {
+  const token = sessionTokenFromReq(req);
   if (!token) return null;
   try {
-    const payload = jwt.verify(token, jwtSecret());
+    return jwt.verify(token, jwtSecret());
+  } catch (error) {
+    return null;
+  }
+}
+
+function userHasRevokedSession(user, payload) {
+  const sessionId = payload?.jti || payload?.sessionId || null;
+  return Boolean(sessionId && Array.isArray(user?.revokedSessionIds) && user.revokedSessionIds.includes(sessionId));
+}
+
+function revokeAuthenticatedSession(user, payload) {
+  if (!user || !payload) return false;
+  const sessionId = payload.jti || payload.sessionId || null;
+  if (!sessionId) {
+    user.sessionVersion = crypto.randomUUID();
+    user.revokedSessionIds = [];
+    return true;
+  }
+  const revoked = Array.isArray(user.revokedSessionIds) ? user.revokedSessionIds : [];
+  if (!revoked.includes(sessionId)) revoked.push(sessionId);
+  user.revokedSessionIds = revoked.slice(-100);
+  return true;
+}
+
+function userFromReq(req, db) {
+  const payload = sessionPayloadFromReq(req);
+  if (!payload) return null;
+  try {
     return db.users.find((user) =>
       user.id === payload.sub
       && user.role === payload.role
       && (user.sessionVersion || null) === (payload.sessionVersion || null)
+      && !userHasRevokedSession(user, payload)
     ) || null;
   } catch (error) {
     return null;
@@ -1691,15 +1724,17 @@ function jwtSecret() {
 }
 
 function signSessionToken(user) {
+  const sessionId = crypto.randomUUID();
   return jwt.sign(
     {
       role: user.role,
       email: user.email,
       name: user.name,
-      sessionVersion: user.sessionVersion || null
+      sessionVersion: user.sessionVersion || null,
+      sessionId
     },
     jwtSecret(),
-    { subject: user.id, expiresIn: process.env.JWT_EXPIRES_IN || "12h" }
+    { subject: user.id, expiresIn: process.env.JWT_EXPIRES_IN || "12h", jwtid: sessionId }
   );
 }
 
@@ -3215,6 +3250,11 @@ async function apiInternal(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/logout") {
+    const payload = sessionPayloadFromReq(req);
+    if (user && revokeAuthenticatedSession(user, payload)) {
+      user.updatedAt = now();
+      await writeSelectedRecords(db, [[usersRepository, [user]]]);
+    }
     return sendJson(res, 200, { ok: true }, {
       "Set-Cookie": [
         `rakshakai_session=; Path=/api; HttpOnly; Max-Age=0; SameSite=Strict${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,

@@ -543,6 +543,38 @@ test("logout clears both current and legacy session cookies", async () => {
   assert.match(header, /Path=\/api/i);
 });
 
+test("logout revokes only the current server-side session", async () => {
+  const sessionA = await login("Police Officer");
+  const sessionB = await login("Police Officer");
+
+  const protectedBefore = await request("/api/dashboard", { headers: { Cookie: sessionA.cookie } });
+  assert.equal(protectedBefore.status, 200);
+
+  const logout = await request("/api/auth/logout", {
+    method: "POST",
+    headers: { Cookie: sessionA.cookie, Origin: "http://localhost:3000" }
+  });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get("set-cookie") || "", /Max-Age=0/i);
+
+  const replayA = await request("/api/dashboard", { headers: { Cookie: sessionA.cookie } });
+  assert.equal(replayA.status, 403);
+  const meA = await request("/api/auth/me", { headers: { Cookie: sessionA.cookie } });
+  assert.equal((await meA.json()).user, null);
+
+  const stillValidB = await request("/api/dashboard", { headers: { Cookie: sessionB.cookie } });
+  assert.equal(stillValidB.status, 200);
+});
+
+test("unauthenticated logout remains safe and idempotent", async () => {
+  const response = await request("/api/auth/logout", {
+    method: "POST",
+    headers: { Origin: "http://localhost:3000" }
+  });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("set-cookie") || "", /Max-Age=0/i);
+});
+
 test("Public registration always creates Citizen accounts only", async () => {
   const response = await request("/api/register", {
     method: "POST",
@@ -770,6 +802,105 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
     assert.ok(actions.includes(action), action);
   }
 
+  users = (await readDatabase()).users;
+});
+
+test("password reset rejects old police sessions", async () => {
+  const timestamp = Date.now();
+  const payload = {
+    name: "Session Reset Officer",
+    email: `session.reset.${timestamp}@rakshakai.local`,
+    temporaryPassword: "TempPolice123",
+    badgeId: `RESET-${timestamp}`,
+    unitId: `RESET-${timestamp}`,
+    station: "Session Test Station",
+    beat: "Session Test Beat",
+    jurisdiction: "Session Test Jurisdiction"
+  };
+  const created = await request("/api/admin/police-users", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify(payload)
+  });
+  assert.equal(created.status, 201);
+  const createdBody = await created.json();
+
+  const oldLogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ email: payload.email, password: payload.temporaryPassword })
+  });
+  assert.equal(oldLogin.status, 200);
+  const oldCookie = cookieFrom(oldLogin).cookie;
+  assert.equal((await request("/api/dashboard", { headers: { Cookie: oldCookie } })).status, 200);
+
+  const reset = await request(`/api/admin/police-users/${createdBody.user.id}/reset-password`, {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ temporaryPassword: "ResetPolice123" })
+  });
+  assert.equal(reset.status, 200);
+
+  const oldReplay = await request("/api/dashboard", { headers: { Cookie: oldCookie } });
+  assert.equal(oldReplay.status, 403);
+  const oldMe = await request("/api/auth/me", { headers: { Cookie: oldCookie } });
+  assert.equal((await oldMe.json()).user, null);
+
+  const newLogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ email: payload.email, password: "ResetPolice123" })
+  });
+  assert.equal(newLogin.status, 200);
+  users = (await readDatabase()).users;
+});
+
+test("account deactivation rejects old police sessions", async () => {
+  const timestamp = Date.now();
+  const payload = {
+    name: "Session Deactivation Officer",
+    email: `session.deactivate.${timestamp}@rakshakai.local`,
+    temporaryPassword: "TempPolice123",
+    badgeId: `DEACT-${timestamp}`,
+    unitId: `DEACT-${timestamp}`,
+    station: "Session Test Station",
+    beat: "Session Test Beat",
+    jurisdiction: "Session Test Jurisdiction"
+  };
+  const created = await request("/api/admin/police-users", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify(payload)
+  });
+  assert.equal(created.status, 201);
+  const createdBody = await created.json();
+
+  const activeLogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ email: payload.email, password: payload.temporaryPassword })
+  });
+  assert.equal(activeLogin.status, 200);
+  const oldCookie = cookieFrom(activeLogin).cookie;
+  assert.equal((await request("/api/dashboard", { headers: { Cookie: oldCookie } })).status, 200);
+
+  const inactive = await request(`/api/admin/police-users/${createdBody.user.id}/deactivate`, {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
+  });
+  assert.equal(inactive.status, 200);
+
+  const oldReplay = await request("/api/dashboard", { headers: { Cookie: oldCookie } });
+  assert.equal(oldReplay.status, 403);
+  const oldMe = await request("/api/auth/me", { headers: { Cookie: oldCookie } });
+  assert.equal((await oldMe.json()).user, null);
+
+  const inactiveLogin = await request("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ email: payload.email, password: payload.temporaryPassword })
+  });
+  assert.equal(inactiveLogin.status, 403);
   users = (await readDatabase()).users;
 });
 
