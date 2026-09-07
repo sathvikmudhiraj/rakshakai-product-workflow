@@ -23,6 +23,9 @@ npm-debug.log*
 
 backups/
 
+# Local evidence object storage. Metadata belongs in JSON/PostgreSQL; objects stay outside Git.
+/backend/storage/
+
 # Local runtime JSON database. Keep sanitized examples trackable.
 /backend/data/db.json
 /backend/data/*.local.json

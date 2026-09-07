@@ -22,5 +22,6 @@ backend/data/*.backup.json
 **/db-*.json
 **/*.bak
 **/*.old
+backend/storage/
 ai-service/*.pt
 RakshakAI_Project_Report.docx

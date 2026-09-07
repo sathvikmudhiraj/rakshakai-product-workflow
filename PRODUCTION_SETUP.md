@@ -69,7 +69,23 @@ npm run import:json -- --source data/db.example.json
 The application uses the ignored local `data/db.json` only when `DATABASE_URL`
 is missing. Production must run with PostgreSQL.
 
-## 5. Firebase Push Notifications
+## 5. Evidence Object Storage
+
+Uploaded evidence bytes are stored outside PostgreSQL. PostgreSQL stores only
+metadata, ownership, checksum, storage reference, and custody records.
+
+Set a durable backend-side storage path:
+
+```text
+EVIDENCE_STORAGE_DRIVER=filesystem
+EVIDENCE_STORAGE_DIR=/app/backend/storage/evidence
+```
+
+For Docker deployments this path is backed by the `evidence-storage` volume.
+Do not expose this directory publicly; evidence downloads must go through the
+authorized API preview route.
+
+## 6. Firebase Push Notifications
 
 Set:
 

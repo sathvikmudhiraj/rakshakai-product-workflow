@@ -25,6 +25,11 @@ const auditLogsRepository = require("../repositories/auditLogs.repository");
 const missingPersonsRepository = require("../repositories/missingPersons.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
+const {
+  cleanupEvidenceObject,
+  readEvidenceObject,
+  writeEvidenceObject
+} = require("./evidenceStorage.service");
 
 const root = path.join(__dirname, "..");
 function loadLocalEnv() {
@@ -2098,10 +2103,14 @@ const VIDEO_EVIDENCE_MIME_TYPES = new Set([
   "video/mpeg"
 ]);
 const EVIDENCE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const SIGNATURE_MISMATCH_ERROR = "Uploaded evidence file type does not match its content";
 
 function safeFileName(value) {
   return String(value || "evidence-video")
+    .replace(/[\\/]+/g, "_")
     .replace(/[^\w.\- ()]+/g, "_")
+    .replace(/\.\.+/g, ".")
+    .replace(/^\.+/, "")
     .trim()
     .slice(0, 140) || "evidence-video";
 }
@@ -2120,6 +2129,28 @@ function parseEvidenceDataUrl(value, { allowImages = false } = {}) {
 
 function hashEvidence(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function detectEvidenceMimeType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return null;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  if (buffer.length >= 12 && buffer.toString("ascii", 4, 8) === "ftyp") {
+    const brand = buffer.toString("ascii", 8, 12).toLowerCase();
+    if (brand === "qt  ") return "video/quicktime";
+    return "video/mp4";
+  }
+  if (buffer.length >= 4 && buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) return "video/webm";
+  if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 11) === "AVI") return "video/x-msvideo";
+  if (
+    buffer.length >= 4
+    && buffer[0] === 0x00
+    && buffer[1] === 0x00
+    && buffer[2] === 0x01
+    && [0xba, 0xb3].includes(buffer[3])
+  ) return "video/mpeg";
+  return null;
 }
 
 function evidenceLinkedReport(db, evidence) {
@@ -2245,7 +2276,18 @@ function validateEvidenceLinks(db, body, user) {
   return { linkedReportId, linkedIncidentId, linkedReport, linkedIncident };
 }
 
-function createVideoEvidenceRecord(db, body, user, { source = "video_upload", linkedReport = null, linkedIncident = null, allowImages = false } = {}) {
+async function persistEvidenceWithCleanup(db, evidence, applyMetadata, save = writeDatabase) {
+  try {
+    applyMetadata();
+    await save(db);
+  } catch (error) {
+    db.videoEvidence = (db.videoEvidence || []).filter((item) => item.id !== evidence.id);
+    await cleanupEvidenceObject(evidence);
+    throw error;
+  }
+}
+
+async function createVideoEvidenceRecord(db, body, user, { source = "video_upload", linkedReport = null, linkedIncident = null, allowImages = false } = {}) {
   const parsed = parseEvidenceDataUrl(body.videoData || body.fileData || body.dataUrl || body.evidence || body.image, { allowImages });
   if (!parsed) throw Object.assign(new Error(allowImages ? "Upload a supported image or video evidence file" : "Upload a supported video evidence file"), { status: 400 });
   if (parsed.buffer.length > MAX_VIDEO_EVIDENCE_BYTES) {
@@ -3366,13 +3408,14 @@ async function apiInternal(req, res, url) {
       return sendJson(res, error.status || 400, { error: error.message });
     }
     try {
-      const evidence = createVideoEvidenceRecord(db, body, user, {
+      const evidence = await createVideoEvidenceRecord(db, body, user, {
         source: "video_upload",
         linkedReport: links.linkedReport,
         linkedIncident: links.linkedIncident
       });
-      db.videoEvidence.unshift(evidence);
-      await writeDatabase(db);
+      await persistEvidenceWithCleanup(db, evidence, () => {
+        db.videoEvidence.unshift(evidence);
+      });
       const payload = { evidence: videoEvidenceForResponse(db, evidence), message: "Video evidence uploaded for AI-assisted review." };
       assertSafeEvidencePayload(payload);
       return sendJson(res, 201, payload);
@@ -3386,14 +3429,26 @@ async function apiInternal(req, res, url) {
     const evidence = db.videoEvidence.find((item) => item.id === videoPreviewMatch[1]);
     if (!evidence) return sendJson(res, 404, { error: "Evidence not found" });
     if (!user || !canAccessVideoEvidence(db, user, evidence)) return rejectUnauthenticatedOrForbidden(res, user);
-    const parsed = parseEvidenceDataUrl(evidence.fileData, { allowImages: true });
-    if (!parsed) return sendJson(res, 404, { error: "Evidence preview is not available" });
+    let buffer;
+    try {
+      buffer = await readEvidenceObject(evidence);
+    } catch (error) {
+      return sendJson(res, error.status || 500, { error: error.status === 409 ? error.message : "Evidence preview is not available" });
+    }
+    if (!buffer && evidence.fileData) {
+      try {
+        buffer = parseEvidenceDataUrl(evidence.fileData, { allowImages: true })?.buffer || null;
+      } catch {
+        buffer = null;
+      }
+    }
+    if (!buffer) return sendJson(res, 404, { error: "Evidence preview is not available" });
     res.writeHead(200, {
-      "Content-Type": parsed.mimeType,
+      "Content-Type": evidence.mimeType || "application/octet-stream",
       "Cache-Control": "private, max-age=60",
-      "Content-Length": parsed.buffer.length
+      "Content-Length": buffer.length
     });
-    return res.end(parsed.buffer);
+    return res.end(buffer);
   }
 
   const analyzeEvidenceMatch = url.pathname.match(/^\/api\/video-evidence\/([^/]+)\/analyze$/);
@@ -3588,17 +3643,22 @@ async function apiInternal(req, res, url) {
     if (user.role === "Citizen" && report.createdBy !== user.id) return forbidden(res);
     if (!hasRole(user, ["Citizen", "Police Officer", "Admin"])) return forbidden(res);
     try {
-      const evidence = createVideoEvidenceRecord(db, body, user, {
+      const evidence = await createVideoEvidenceRecord(db, body, user, {
         source: "citizen_evidence",
         linkedReport: report,
         allowImages: true
       });
-      db.videoEvidence.unshift(evidence);
-      report.evidenceId = evidence.id;
-      report.evidenceType = evidence.mimeType.startsWith("video/") ? "video" : "image";
-      report.imageName = evidence.fileName;
-      report.updatedAt = now();
-      await writeDatabase(db);
+      const previousReport = { ...report };
+      await persistEvidenceWithCleanup(db, evidence, () => {
+        db.videoEvidence.unshift(evidence);
+        report.evidenceId = evidence.id;
+        report.evidenceType = evidence.mimeType.startsWith("video/") ? "video" : "image";
+        report.imageName = evidence.fileName;
+        report.updatedAt = now();
+      }).catch((error) => {
+        Object.assign(report, previousReport);
+        throw error;
+      });
       const payload = user.role === "Citizen"
         ? {
             report: citizenReportForResponse(db, report),
@@ -4457,9 +4517,14 @@ async function apiInternal(req, res, url) {
       }
     }
     db.reports.unshift(report);
-    if (evidenceRecord) db.videoEvidence.unshift(evidenceRecord);
     addAuditLog(db, "citizen_report_submitted", user, null, `${reportType}: ${report.name}`, report.createdAt);
-    await writeDatabase(db);
+    try {
+      if (evidenceRecord) db.videoEvidence.unshift(evidenceRecord);
+      await writeDatabase(db);
+    } catch (error) {
+      if (evidenceRecord) await cleanupEvidenceObject(evidenceRecord);
+      throw error;
+    }
     return sendJson(res, 201, user.role === "Citizen"
       ? { report: citizenReportForResponse(db, report), message: "Submitted for review" }
       : { report, message: "Submitted for review" });
@@ -4689,5 +4754,14 @@ module.exports = {
   camerasForResponse,
   cameraSourcesForResponse,
   integrationStatus,
-  consolidateActiveAiIncidents
+  consolidateActiveAiIncidents,
+  __testables: {
+    revokeAuthenticatedSession,
+    userHasRevokedSession,
+    createVideoEvidenceRecord,
+    detectEvidenceMimeType,
+    parseEvidenceDataUrl,
+    persistEvidenceWithCleanup,
+    videoEvidenceForResponse
+  }
 };

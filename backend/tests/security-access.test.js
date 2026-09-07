@@ -20,6 +20,17 @@ const PATANCHERU_POINT = { lat: 17.5285, lng: 78.2636 };
 const BHEL_POINT = { lat: 17.4933, lng: 78.3915 };
 const DEFAULT_LOCAL_CENTER = { lat: 17.5109, lng: 78.3276 };
 
+function evidenceDataUrl(mimeType, suffix = "") {
+  const samples = {
+    "image/jpeg": Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]),
+    "video/mp4": Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x18]), Buffer.from("ftypisom0000", "ascii")]),
+    "video/webm": Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x01, 0x00, 0x00, 0x00])
+  };
+  const base = samples[mimeType];
+  assert.ok(base, `test evidence sample missing for ${mimeType}`);
+  return `data:${mimeType};base64,${Buffer.concat([base, Buffer.from(String(suffix))]).toString("base64")}`;
+}
+
 const database = JSON.parse(fs.readFileSync(sourceDatabase, "utf8"));
 const passwordHash = bcrypt.hashSync(TEST_PASSWORD, 4);
 database.users.forEach((user) => {
@@ -201,6 +212,8 @@ fs.writeFileSync(testDatabase, JSON.stringify(database, null, 2));
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = "";
 process.env.RAKSHAKAI_DATA_FILE = testDatabase;
+process.env.EVIDENCE_STORAGE_DRIVER = "filesystem";
+process.env.EVIDENCE_STORAGE_DIR = path.join(testDirectory, "evidence-storage");
 process.env.JWT_SECRET = "rakshakai-test-secret-that-is-longer-than-32-characters";
 process.env.AI_SERVICE_URL = "";
 process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
@@ -1519,7 +1532,7 @@ test("Citizen can use report routes but receives only the public-safe contract",
 });
 
 test("Admin video evidence upload creates AI observations and converts only after verification", async () => {
-  const videoData = `data:video/mp4;base64,${Buffer.from("admin-video-evidence").toString("base64")}`;
+  const videoData = evidenceDataUrl("video/mp4", "admin-video-evidence");
   const upload = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
@@ -1538,6 +1551,13 @@ test("Admin video evidence upload creates AI observations and converts only afte
   assertNoEvidenceSecrets(uploaded);
   assert.equal(uploaded.evidence.source, "video_upload");
   assert.ok(uploaded.evidence.checksum);
+  {
+    const stored = (await readDatabase()).videoEvidence.find((item) => item.id === uploaded.evidence.id);
+    assert.ok(stored.storageKey);
+    assert.equal("fileData" in stored, false);
+    assert.equal(stored.checksum, uploaded.evidence.checksum);
+    assert.doesNotMatch(stored.storageKey, /\.\.|\\/);
+  }
 
   const list = await request("/api/video-evidence", { headers: authHeaders("Admin") });
   assert.equal(list.status, 200);
@@ -3041,7 +3061,7 @@ test("AI frame validation rejects invalid input and protected analysis rejects C
     body: JSON.stringify({
       sourceType: "upload",
       sourceName: "Citizen Operational Upload Blocked",
-      imageBase64: `data:image/jpeg;base64,${Buffer.from("citizen-upload-frame").toString("base64")}`
+      imageBase64: evidenceDataUrl("image/jpeg", "citizen-upload-frame")
     })
   });
   assert.equal(citizenUpload.status, 403);
@@ -3098,7 +3118,7 @@ test("Admin and Police can access Live Vision and upload analysis as observation
         sourceId: "upload_001",
         sourceName: "Video Upload",
         zone: "Evidence Review",
-        imageBase64: `data:image/jpeg;base64,${Buffer.from(`${role}-upload-frame`).toString("base64")}`
+        imageBase64: evidenceDataUrl("image/jpeg", `${role}-upload-frame`)
       })
     });
     assert.equal(upload.status, 200, `${role} upload`);

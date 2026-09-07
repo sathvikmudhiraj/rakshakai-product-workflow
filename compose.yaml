@@ -84,6 +84,8 @@ services:
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env.docker}
       SEED_POLICE_PASSWORD: ${SEED_POLICE_PASSWORD:?Set SEED_POLICE_PASSWORD in .env.docker}
       SEED_CITIZEN_PASSWORD: ${SEED_CITIZEN_PASSWORD:?Set SEED_CITIZEN_PASSWORD in .env.docker}
+      EVIDENCE_STORAGE_DRIVER: ${EVIDENCE_STORAGE_DRIVER:-filesystem}
+      EVIDENCE_STORAGE_DIR: ${EVIDENCE_STORAGE_DIR:-/app/backend/storage/evidence}
       AI_SERVICE_URL: http://ai-service:8000
       AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in .env.docker}
       AI_SERVICE_TIMEOUT_MS: "12000"
@@ -107,6 +109,8 @@ services:
         condition: service_healthy
       ai-service:
         condition: service_started
+    volumes:
+      - evidence-storage:/app/backend/storage/evidence
     expose:
       - "5000"
     healthcheck:
@@ -137,3 +141,4 @@ services:
 volumes:
   postgres-data:
   ai-model-cache:
+  evidence-storage:

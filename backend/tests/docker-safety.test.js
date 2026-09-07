@@ -11,6 +11,7 @@ const importSource = fs.readFileSync(path.join(root, "backend", "scripts", "impo
 const backendDockerfile = fs.readFileSync(path.join(root, "backend", "Dockerfile"), "utf8");
 const backendServer = fs.readFileSync(path.join(root, "backend", "server.js"), "utf8");
 const canonicalCsp = fs.readFileSync(path.join(root, "csp.config.cjs"), "utf8");
+const dockerignore = fs.readFileSync(path.join(root, ".dockerignore"), "utf8");
 
 function serviceBlock(name, nextName, source = compose) {
   const end = nextName ? `\\n\\n  ${nextName}:` : "\\n\\nvolumes:";
@@ -55,6 +56,16 @@ test("Docker PostgreSQL import uses sanitized example data instead of runtime db
   assert.match(compose, /npm run import:json -- --if-empty/);
   assert.match(backendDockerfile, /COPY backend\/data\/db\.example\.json \.\/data\/db\.example\.json/);
   assert.doesNotMatch(backendDockerfile, /COPY backend\/data \.\/data/);
+});
+
+test("Docker evidence storage keeps objects outside PostgreSQL and build contexts", () => {
+  const backend = serviceBlock("backend", "frontend");
+  assert.match(backend, /EVIDENCE_STORAGE_DRIVER:\s*\$\{EVIDENCE_STORAGE_DRIVER:-filesystem\}/);
+  assert.match(backend, /EVIDENCE_STORAGE_DIR:\s*\$\{EVIDENCE_STORAGE_DIR:-\/app\/backend\/storage\/evidence\}/);
+  assert.match(backend, /evidence-storage:\/app\/backend\/storage\/evidence/);
+  assert.match(compose, /\n\s+evidence-storage:/);
+  assert.match(dockerignore, /backend\/storage\//);
+  assert.doesNotMatch(importSource, /videoEvidence/);
 });
 
 test("AI URL and API key remain wired between backend and AI service", () => {

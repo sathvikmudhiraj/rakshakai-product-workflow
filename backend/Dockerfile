@@ -17,6 +17,10 @@ COPY backend/services ./services
 COPY backend/data/db.example.json ./data/db.example.json
 COPY backend/server.js ./
 
+RUN mkdir -p /app/backend/storage/evidence \
+    && chown -R node:node /app/backend/storage \
+    && chmod 700 /app/backend/storage/evidence
+
 USER node
 EXPOSE 5000
 
