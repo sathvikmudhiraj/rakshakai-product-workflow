@@ -587,6 +587,18 @@ test("unauthenticated logout remains safe and idempotent", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("set-cookie") || "", /Max-Age=0/i);
 });
+test("more than 100 logouts cannot resurrect an unexpired revoked session", () => {
+  const { revokeAuthenticatedSession, userHasRevokedSession } = require("../services/core.service").__testables;
+  const user = { revokedSessionIds: ["legacy-session"], revokedSessionExpiries: {} };
+  const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+  for (let index = 0; index < 105; index++) revokeAuthenticatedSession(user, { jti: `test-session-${index}`, exp: expiresAt });
+  assert.equal(userHasRevokedSession(user, { jti: "test-session-0" }), true);
+  assert.equal(userHasRevokedSession(user, { jti: "legacy-session" }), true);
+  user.revokedSessionExpiries["test-session-1"] = Math.floor(Date.now() / 1000) - 1;
+  revokeAuthenticatedSession(user, { jti: "next", exp: expiresAt });
+  assert.equal(user.revokedSessionIds.includes("test-session-1"), false);
+  assert.equal(userHasRevokedSession(user, { jti: "test-session-0" }), true);
+});
 
 test("Public registration always creates Citizen accounts only", async () => {
   const response = await request("/api/register", {
