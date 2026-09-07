@@ -24,6 +24,8 @@ const cameraSourcesRepository = require("../repositories/cameraSources.repositor
 const auditLogsRepository = require("../repositories/auditLogs.repository");
 const missingPersonsRepository = require("../repositories/missingPersons.repository");
 
+const { respondAfterCommit } = require("./committedResponse.service");
+
 const root = path.join(__dirname, "..");
 function loadLocalEnv() {
   const envPath = path.join(root, ".env");
@@ -4662,7 +4664,7 @@ function api(req, res, url) {
   if (getDatabaseMode() !== "postgres" || !mutatesData) {
     return apiInternal(req, res, url);
   }
-  return withAdvisoryLock(() => apiInternal(req, res, url));
+  return respondAfterCommit(res, (deferred) => withAdvisoryLock(() => apiInternal(req, deferred, url)));
 }
 
 if (getDatabaseMode() === "json") ensureDb();
