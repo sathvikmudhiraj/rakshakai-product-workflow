@@ -1970,8 +1970,9 @@ function enableMapInteractions(instance) {
     if (instance.map.id !== "gisMap" || (!event.latlng && blockedMapSelectionTarget(event))) return false;
     const selectionMode = state.mapNavigation.selectionMode;
     if (!selectionMode) return false;
-    event.preventDefault();
-    event.stopPropagation();
+    const domEvent = event.originalEvent || event;
+    domEvent.preventDefault?.();
+    domEvent.stopPropagation?.();
     const validPoint = pointFromMapEvent(event);
     if (!validPoint) {
       updateNavigationPanel("The selected map point is invalid.");
@@ -5223,9 +5224,10 @@ $("#loginForm").addEventListener("submit", async (event) => {
     if (!login?.user) throw new Error("Session could not be created. Please try again.");
     resetGisNavigationState("GIS route state reset for the new session.");
     state.user = login.user;
+    applyRoleAccess();
     showApp();
-    await refresh();
     setView(location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+    await refresh();
   } catch (error) {
     showPortal(error.message);
   } finally {

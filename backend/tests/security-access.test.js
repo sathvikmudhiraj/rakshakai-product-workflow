@@ -4000,7 +4000,8 @@ test("frontend login and GIS restore paths do not recursively render or navigate
   assert.match(loginBlock, /loginSubmissionInFlight = true/);
   assert.equal((loginBlock.match(/api\("\/api\/login"/g) || []).length, 1);
   assert.match(loginBlock, /resetGisNavigationState\("GIS route state reset for the new session\."\)/);
-  assert.match(loginBlock, /state\.user = login\.user;[\s\S]*showApp\(\);[\s\S]*await refresh\(\);[\s\S]*setView\(/);
+  assert.match(loginBlock, /state\.user = login\.user;[\s\S]*applyRoleAccess\(\);[\s\S]*showApp\(\);[\s\S]*setView\([\s\S]*await refresh\(\);/);
+  assert.doesNotMatch(loginBlock.slice(loginBlock.indexOf("await refresh();")), /setView\(/);
   assert.match(loginBlock, /finally \{[\s\S]*loginSubmissionInFlight = false/);
   assert.match(loginBlock, /submitButton\.disabled = true/);
 
