@@ -12,11 +12,8 @@ function errorMiddleware(error, req, res, next) {
         ? "Request payload is too large"
         : error.message || "Internal server error";
   if (status >= 500) {
-    console.error("Request failed", {
-      method: req.method,
-      path: req.originalUrl,
-      message: error.message
-    });
+    console.error(JSON.stringify({ event: "request_failed", requestId: req.requestId,
+      method: req.method, route: req.route?.path || "unmatched", status }));
   }
   res.status(status).json({ error: safeMessage, ...(providerSafe ? { code: error.code } : {}) });
 }

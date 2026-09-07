@@ -17,14 +17,16 @@ const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
 const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData } = require("./services/core.service");
-const { getDatabaseMode, query } = require("./services/postgres.service");
+const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
 const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = require("./services/routeNormalization.service");
 const { legacyHandler } = require("./services/legacyRoute.service");
+const { installShutdownHandlers } = require("./services/shutdown.service");
 const { helmetDirectives } = require("../csp.config.cjs");
 
 const app = express();
+let draining = false;
 app.disable("x-powered-by");
 if (process.env.TRUST_PROXY === "1") app.set("trust proxy", 1);
 const port = Number(process.env.PORT || 5000);
@@ -78,6 +80,7 @@ function isAllowedOrigin(origin) {
 }
 
 const generalLimiter = rateLimit({
+  skip: (req) => ["/api/health", "/api/live"].includes(req.path),
   windowMs: 15 * 60 * 1000,
   limit: Number(process.env.API_RATE_LIMIT || 600),
   standardHeaders: "draft-8",
@@ -109,8 +112,16 @@ app.use(helmet({
 }));
 app.use(generalLimiter);
 app.use((req, res, next) => {
-  req.requestId = String(req.headers["x-request-id"] || crypto.randomUUID()).slice(0, 120);
+  req.requestId = crypto.randomUUID();
   res.setHeader("X-Request-Id", req.requestId);
+  const started = performance.now();
+  if (process.env.NODE_ENV === "production") {
+    res.once("finish", () => {
+      if (["/api/health", "/api/live"].includes(req.path) && res.statusCode < 400) return;
+      console.log(JSON.stringify({ event: "http_request", requestId: req.requestId, method: req.method,
+        route: req.route?.path || "unmatched", status: res.statusCode, durationMs: Math.round(performance.now() - started) }));
+    });
+  }
   next();
 });
 app.use((req, res, next) => {
@@ -131,9 +142,13 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1.5mb", strict: true }));
 app.use(validateJson);
 
+app.get("/api/live", (req, res) => res.json({ status: "ok" }));
+
 app.get("/api/health", async (req, res) => {
+  if (draining) return res.status(503).json({ status: "draining" });
   try {
     if (getDatabaseMode() === "postgres") await query("SELECT 1");
+    if (process.env.NODE_ENV === "production") await checkEvidenceStorage();
     const routingStatus = gisHealth.routing.status === "connected"
       ? "connected"
       : "approximate-fallback";
@@ -165,7 +180,7 @@ app.get("/api/health", async (req, res) => {
       service: "RakshakAI Backend",
       database: getDatabaseMode(),
       auth: "jwt",
-      error: "Database unavailable",
+      error: "Required storage unavailable",
       timestamp: new Date().toISOString()
     });
   }
@@ -527,6 +542,8 @@ async function start(listenPort = port) {
     if (!process.env.CORS_ORIGIN && !process.env.FRONTEND_ORIGINS) {
       throw new Error("CORS_ORIGIN is required in production");
     }
+    validateEvidenceStorageConfig({ production: true });
+    await checkEvidenceStorage();
   }
   if (getDatabaseMode() === "postgres") {
     const requiredTables = [
@@ -566,7 +583,9 @@ async function start(listenPort = port) {
 }
 
 if (require.main === module) {
-  start().catch((error) => {
+  start().then((server) => {
+    installShutdownHandlers(server, { closePool, onDrain: () => { draining = true; } });
+  }).catch((error) => {
     console.error("RakshakAI Backend failed to start:", error.message);
     process.exitCode = 1;
   });
