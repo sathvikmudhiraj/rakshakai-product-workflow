@@ -22,6 +22,7 @@ const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProv
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
 const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = require("./services/routeNormalization.service");
 const { legacyHandler } = require("./services/legacyRoute.service");
+const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./services/evidenceStorage.service");
 const { installShutdownHandlers } = require("./services/shutdown.service");
 const { helmetDirectives } = require("../csp.config.cjs");
 
