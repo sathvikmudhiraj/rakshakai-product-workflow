@@ -1630,8 +1630,65 @@ test("Admin video evidence upload creates AI observations and converts only afte
   }
 });
 
+test("Evidence upload rejects MIME and file-signature mismatches", async () => {
+  const mismatch = await request("/api/video-evidence", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({
+      fileName: "mismatch.mp4",
+      dataUrl: `data:video/mp4;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]).toString("base64")}`,
+      linkedReportId: createdCitizenReportId
+    })
+  });
+
+  assert.equal(mismatch.status, 400);
+  assert.match((await mismatch.json()).error, /does not match/i);
+});
+
+test("Evidence storage failure does not create successful metadata", async () => {
+  const previousDriver = process.env.EVIDENCE_STORAGE_DRIVER;
+  process.env.EVIDENCE_STORAGE_DRIVER = "unsupported";
+  try {
+    const failed = await request("/api/video-evidence", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({
+        fileName: "storage-failure.mp4",
+        dataUrl: evidenceDataUrl("video/mp4", "storage-failure"),
+        linkedReportId: createdCitizenReportId
+      })
+    });
+    assert.equal(failed.status, 500);
+    const db = await readDatabase();
+    assert.equal(db.videoEvidence.some((item) => item.fileName === "storage-failure.mp4"), false);
+  } finally {
+    process.env.EVIDENCE_STORAGE_DRIVER = previousDriver;
+  }
+});
+
+test("Citizen report storage failure returns an error without saving report or evidence", async () => {
+  const previousDriver = process.env.EVIDENCE_STORAGE_DRIVER;
+  const before = await readDatabase();
+  process.env.EVIDENCE_STORAGE_DRIVER = "unsupported";
+  try {
+    const response = await request("/api/report-missing", {
+      method: "POST",
+      headers: { ...authHeaders("Citizen"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ name: "Storage failure test", description: "Test report", lastSeenLocation: "Test location",
+        image: evidenceDataUrl("video/mp4", "citizen-storage-failure"), imageName: "storage-failure.mp4" })
+    });
+    assert.equal(response.status, 500);
+    const after = await readDatabase();
+    assert.deepEqual(after.reports, before.reports);
+    assert.deepEqual(after.videoEvidence, before.videoEvidence);
+    assert.deepEqual(after.auditLogs, before.auditLogs);
+  } finally {
+    process.env.EVIDENCE_STORAGE_DRIVER = previousDriver;
+  }
+});
+
 test("Police video evidence must be case-linked and rejected observations cannot convert", async () => {
-  const videoData = `data:video/webm;base64,${Buffer.from("police-video-evidence").toString("base64")}`;
+  const videoData = evidenceDataUrl("video/webm", "police-video-evidence");
   const unlinked = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
@@ -1673,7 +1730,7 @@ test("Police video evidence must be case-linked and rejected observations cannot
 });
 
 test("Citizen can upload evidence only for own report and cannot access operational video evidence", async () => {
-  const videoData = `data:video/mp4;base64,${Buffer.from("citizen-video-evidence").toString("base64")}`;
+  const videoData = evidenceDataUrl("video/mp4", "citizen-video-evidence");
   const operational = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Citizen"), "Content-Type": "application/json", Origin: "http://localhost:3000" },

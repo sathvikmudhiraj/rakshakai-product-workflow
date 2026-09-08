@@ -2131,6 +2131,10 @@ function parseEvidenceDataUrl(value, { allowImages = false } = {}) {
   if (!allowed) return null;
   const buffer = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
   if (!buffer.length) return null;
+  const detectedMimeType = detectEvidenceMimeType(buffer);
+  if (!detectedMimeType || detectedMimeType !== mimeType) {
+    throw Object.assign(new Error(SIGNATURE_MISMATCH_ERROR), { status: 400 });
+  }
   return { dataUrl, mimeType, buffer };
 }
 
@@ -2305,8 +2309,17 @@ async function createVideoEvidenceRecord(db, body, user, { source = "video_uploa
     throw Object.assign(new Error("Video duration exceeds the allowed evidence review limit"), { status: 400 });
   }
   const timestamp = now();
+  const evidenceId = uid("evd");
+  const checksum = hashEvidence(parsed.buffer);
+  const storage = await writeEvidenceObject({
+    buffer: parsed.buffer,
+    evidenceId,
+    mimeType: parsed.mimeType,
+    checksum,
+    uploadedAt: timestamp
+  });
   const evidence = {
-    id: uid("evd"),
+    id: evidenceId,
     evidenceId: null,
     source,
     status: "uploaded",
@@ -2318,11 +2331,15 @@ async function createVideoEvidenceRecord(db, body, user, { source = "video_uploa
     linkedIncidentId: linkedIncident?.id || null,
     uploadedAt: timestamp,
     fileName: safeFileName(body.fileName || body.name),
-    fileSize: Number(body.fileSize) > 0 ? Math.min(Number(body.fileSize), parsed.buffer.length) : parsed.buffer.length,
+    fileSize: parsed.buffer.length,
     mimeType: parsed.mimeType,
     durationSeconds: Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : null,
-    checksum: hashEvidence(parsed.buffer),
-    fileData: parsed.dataUrl,
+    checksum,
+    storageDriver: storage.storageDriver,
+    storageProvider: storage.storageProvider,
+    storageKey: storage.storageKey,
+    storageChecksum: storage.storageChecksum,
+    storedAt: storage.storedAt,
     sourceLabel: source === "citizen_evidence" ? "Citizen Evidence" : "Video Evidence Upload",
     isDemo: Boolean(body.isDemo),
     notes: String(body.notes || "").slice(0, 500),
@@ -4509,7 +4526,7 @@ async function apiInternal(req, res, url) {
     let evidenceRecord = null;
     if (evidence) {
       try {
-        evidenceRecord = createVideoEvidenceRecord(db, {
+        evidenceRecord = await createVideoEvidenceRecord(db, {
           image: evidence,
           fileName: imageName || `${report.id}-evidence`,
           fileSize: Buffer.byteLength(evidence)
@@ -4519,7 +4536,8 @@ async function apiInternal(req, res, url) {
           allowImages: true
         });
         report.evidenceId = evidenceRecord.id;
-      } catch {
+      } catch (error) {
+        if (error.status !== 400 && error.status !== 413) throw error;
         evidenceRecord = null;
       }
     }
