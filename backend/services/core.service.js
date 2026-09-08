@@ -1654,28 +1654,23 @@ function userHasRevokedSession(user, payload) {
 }
 
 function revokeAuthenticatedSession(user, payload) {
-    if (!user || !payload) return false;
-    const sessionId = payload.jti || payload.sessionId || null;
-    if (!sessionId) {
-      user.sessionVersion = crypto.randomUUID();
-      user.revokedSessionIds = [];
-      user.revokedSessionExpiries = {};
-      return true;
-    }
-    const expiries = user.revokedSessionExpiries || {};
-    const currentTime = Math.floor(Date.now() / 1000);
-    // Legacy revocations have no expiry metadata; retain them rather than resurrecting a JWT.
-    const revoked = (Array.isArray(user.revokedSessionIds) ? user.revokedSessionIds : [])
-      .filter((id) => !Number.isFinite(expiries[id]) || expiries[id] > currentTime);
-    if (!revoked.includes(sessionId)) revoked.push(sessionId);
-    if (Number.isFinite(payload.exp)) expiries[sessionId] = payload.exp;
-    user.revokedSessionIds = revoked;
-    user.revokedSessionExpiries = Object.fromEntries(revoked.filter((id) => Number.isFinite(expiries[id])).map((id) => [id, expiries[id]]));
+  if (!user || !payload) return false;
+  const sessionId = payload.jti || payload.sessionId || null;
+  if (!sessionId) {
+    user.sessionVersion = crypto.randomUUID();
+    user.revokedSessionIds = [];
+    user.revokedSessionExpiries = {};
     return true;
   }
-  const revoked = Array.isArray(user.revokedSessionIds) ? user.revokedSessionIds : [];
+  const expiries = user.revokedSessionExpiries || {};
+  const currentTime = Math.floor(Date.now() / 1000);
+  // Legacy revocations have no expiry metadata; retain them rather than resurrecting a JWT.
+  const revoked = (Array.isArray(user.revokedSessionIds) ? user.revokedSessionIds : [])
+    .filter((id) => !Number.isFinite(expiries[id]) || expiries[id] > currentTime);
   if (!revoked.includes(sessionId)) revoked.push(sessionId);
-  user.revokedSessionIds = revoked.slice(-100);
+  if (Number.isFinite(payload.exp)) expiries[sessionId] = payload.exp;
+  user.revokedSessionIds = revoked;
+  user.revokedSessionExpiries = Object.fromEntries(revoked.filter((id) => Number.isFinite(expiries[id])).map((id) => [id, expiries[id]]));
   return true;
 }
 
