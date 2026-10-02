@@ -807,7 +807,7 @@ function scheduleSatelliteVisibilityFallback(instance) {
     } else {
       updateLeafletLayerStatus(instance);
     }
-  }, 1800);
+  }, STREET_TILE_LOAD_TIMEOUT_MS);
 }
 
 function updateLeafletLayerStatus(instance, message = "") {
@@ -1835,11 +1835,31 @@ function renderDispatchCandidatePanel() {
   panel.append(node("strong", "dispatch-candidate-title", "Candidate Ranking"));
   state.dispatchCandidates.slice(0, 5).forEach((candidate) => {
     const card = node("article", `candidate-card ${candidate.rank === 1 ? "selected" : ""}`);
+    const capMatch = candidate.capabilityMatch;
+    const stationElig = candidate.stationEligibility;
+    const crewReady = candidate.crewReady;
+    const escRule = candidate.escalationRule;
+    const capBadge = capMatch?.matches ? "capability-badge match" : "capability-badge mismatch";
+    const capText = capMatch?.matches ? "✓ Capability match" : `✗ ${capMatch?.reason || "Capability mismatch"}`;
+    const stationBadges = [];
+    if (stationElig?.stationMatch) stationBadges.push("Same Station");
+    if (stationElig?.beatMatch) stationBadges.push("Same Beat");
+    if (stationElig?.jurisdictionMatch) stationBadges.push("Same Jurisdiction");
+    const stationText = stationBadges.length ? stationBadges.join(" · ") : "Outside jurisdiction";
+    const crewBadge = crewReady?.ready ? "crew-badge ready" : "crew-badge incomplete";
+    const crewText = crewReady?.ready ? "✓ Crew ready" : `✗ Missing: ${crewReady?.missing?.join(", ") || "unknown"}`;
+    const escText = escRule ? `Escalation: ${escRule.timeoutSeconds || escRule.timeout_seconds}s, ${escRule.backupCount || escRule.backup_count} backup(s)` : "";
     card.append(
       node("span", "source-badge ready", `#${candidate.rank}`),
       node("strong", "", `${candidate.unitCode || candidate.name} - ${candidate.etaMinutes} min`),
       node("small", "", `${candidate.distanceKm} km - ${candidate.routeLabel || "Route"}${candidate.approximate ? " - approximate" : ""}`),
-      node("small", "", candidate.selectionReason || "Ranked by ETA, distance, beat match, and load.")
+      node("small", "", candidate.selectionReason || "Ranked by ETA, distance, beat match, and load."),
+      node("div", "candidate-details",
+        node("span", capBadge, capText),
+        node("span", "station-badge", stationText),
+        node("span", crewBadge, crewText),
+        escText ? node("span", "escalation-badge", escText) : null
+      )
     );
     panel.append(card);
   });
@@ -2406,6 +2426,10 @@ async function commandAction(action) {
     } catch (error) {
       throw new Error(dispatchErrorMessage(error));
     }
+  } else if (action === "acknowledge") {
+    const result = await api(`/api/incidents/${incident.id}/acknowledge`, { method: "POST" });
+    successMessage = result.payload?.message || "Primary unit acknowledged dispatch";
+    clearRouteResult();
   } else {
     const body = action === "Rejected / False Alarm"
       ? { status: action, reason: "Marked as false alarm by operator" }
@@ -2435,6 +2459,15 @@ function renderIncidentCommandDetailSafe(incident) {
   heading.append(node("h3", "", incidentTitle(incident)), node("small", "", `${displayValue(incident.category || incident.type)} · ${incidentSource(incident)}`));
   title.append(heading, node("span", `severity ${sevClass(incident.severity)}`, incident.severity));
   const grid = node("div", "command-detail-grid");
+  const escalationStatus = incident.escalationStatus || incident.escalation_status || "none";
+  const escalationStartedAt = incident.escalationStartedAt || incident.escalation_started_at;
+  const primaryUnitAckedAt = incident.primaryUnitAckedAt || incident.primary_unit_acked_at;
+  const escalationRows = [];
+  if (escalationStatus !== "none") {
+    escalationRows.push(["Escalation", displayValue(escalationStatus)]);
+    if (escalationStartedAt) escalationRows.push(["Escalation started", alertTime(escalationStartedAt)]);
+    if (primaryUnitAckedAt) escalationRows.push(["Primary ACK", alertTime(primaryUnitAckedAt)]);
+  }
   [
     ["Status", displayValue(incident.status)],
     ["Dispatch", incident.dispatchSafetyLabel || (isDispatchableIncident(incident) ? "Ready for dispatch" : "Not dispatchable")],
@@ -2444,7 +2477,7 @@ function renderIncidentCommandDetailSafe(incident) {
     ["Assigned unit", incident.assignedUnit?.unitCode || "Not assigned"],
     ["Distance", isDispatchableIncident(incident) && incident.distanceKm ? `${incident.distanceKm} km` : "Pending"],
     ["ETA", isDispatchableIncident(incident) && incident.etaMinutes ? `${incident.etaMinutes} min` : "Pending"]
-  ].forEach(([label, value]) => {
+  ].concat(escalationRows).forEach(([label, value]) => {
     const item = node("div");
     item.append(node("span", "", label), node("strong", "", value || "--"));
     grid.append(item);
@@ -2470,6 +2503,9 @@ function renderIncidentCommandDetailSafe(incident) {
   if (incident.status === "Resolved") addAction("Close", "Closed");
   if (["New", "Verification Required", "Verified", "Assigned", "En Route", "On Scene"].includes(incident.status)) {
     addAction("Reject False Alarm", "Rejected / False Alarm");
+  }
+  if (escalationStatus === "pending" && incident.assignedUnitId) {
+    addAction("ACK Dispatch", "acknowledge", "primary");
   }
   const timeline = node("ol", "command-timeline");
   (incident.timeline?.length ? incident.timeline : ["Incident awaiting command action"]).forEach((event) => timeline.append(node("li", "", event)));

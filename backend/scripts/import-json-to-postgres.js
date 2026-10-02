@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const bcrypt = require("bcryptjs");
 const { withTransaction, closePool } = require("../services/postgres.service");
+const { encryptCameraSecrets } = require("../services/cameraSecrets.service");
 const users = require("../repositories/users.repository");
 const incidents = require("../repositories/incidents.repository");
 const alerts = require("../repositories/alerts.repository");
@@ -10,12 +11,32 @@ const dispatchEvents = require("../repositories/dispatchEvents.repository");
 const cameraSources = require("../repositories/cameraSources.repository");
 const auditLogs = require("../repositories/auditLogs.repository");
 const missingPersons = require("../repositories/missingPersons.repository");
+const policeStations = require("../repositories/policeStations.repository");
+const policeBeats = require("../repositories/policeBeats.repository");
+const officerRanks = require("../repositories/officerRanks.repository");
+const policeOfficers = require("../repositories/policeOfficers.repository");
+const responseUnitMembers = require("../repositories/responseUnitMembers.repository");
+const unitCapabilities = require("../repositories/unitCapabilities.repository");
+const dispatchEscalationLog = require("../repositories/dispatchEscalationLog.repository");
+const dispatchEscalationRules = require("../repositories/dispatchEscalationRules.repository");
 
+const IMPORT_LOCK_ID = 724212;
+
+// FK-safe order: stations/beats before units and officers, units before members/capabilities,
+// incidents before events and escalation logs.
 const mappings = [
   ["users", users],
+  ["policeStations", policeStations],
+  ["policeBeats", policeBeats],
+  ["officerRanks", officerRanks],
+  ["policeOfficers", policeOfficers],
   ["incidents", incidents],
   ["alerts", alerts],
   ["responseUnits", responseUnits],
+  ["responseUnitMembers", responseUnitMembers],
+  ["unitCapabilities", unitCapabilities],
+  ["dispatchEscalationRules", dispatchEscalationRules],
+  ["dispatchEscalationLogs", dispatchEscalationLog],
   ["dispatchEvents", dispatchEvents],
   ["cameraSources", cameraSources],
   ["auditLogs", auditLogs],
@@ -88,6 +109,9 @@ async function main() {
     throw new Error("DATABASE_URL is required. Run npm run migrate before importing.");
   }
   db.reports = db.reports || db.missingPersons || [];
+  // Camera credentials must never land in PostgreSQL as plaintext. This is idempotent:
+  // already-encrypted enc:v1 values are recognized and left untouched.
+  (db.cameraSources || []).forEach((source) => encryptCameraSecrets(source));
   db.users = await Promise.all((db.users || []).map(async (user) => {
     const seededPassword = user.role === "Admin"
       ? process.env.SEED_ADMIN_PASSWORD
@@ -108,6 +132,7 @@ async function main() {
 
   const summaries = [];
   await withTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1)", [IMPORT_LOCK_ID]);
     for (const [key, repository] of mappings) {
       const records = db[key] || [];
       let inserted = 0;
@@ -124,8 +149,11 @@ async function main() {
             inserted += 1;
           }
           await client.query("RELEASE SAVEPOINT import_record");
-        } catch {
+        } catch (recordError) {
           failed += 1;
+          if (failed === 1) {
+            console.error(`  first failure in ${key}: ${recordError.message}`);
+          }
           await client.query("ROLLBACK TO SAVEPOINT import_record");
           await client.query("RELEASE SAVEPOINT import_record");
         }
@@ -186,6 +214,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  IMPORT_LOCK_ID,
   loadImportDatabase,
   parseImportOptions,
   resolveImportPath

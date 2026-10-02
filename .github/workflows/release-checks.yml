@@ -28,7 +28,7 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm --prefix backend audit --omit=dev --audit-level=moderate
       - run: npm --prefix frontend audit --audit-level=moderate
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run test:release
       - run: node --test backend/integration/postgres-tls.test.cjs
       - run: node --test backend/integration/backup-recovery.test.cjs

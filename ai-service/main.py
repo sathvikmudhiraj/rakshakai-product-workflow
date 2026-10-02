@@ -1,36 +1,59 @@
 import base64
+import hashlib
+import hmac
 import os
+import re
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 
 import cv2
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 load_dotenv()
 
-app = FastAPI(title="RakshakAI AI Service")
-
 AI_SERVICE_API_KEY = os.getenv("AI_SERVICE_API_KEY", "").strip()
+# Explicit opt-in for local development without an API key. The default stays secure (fail closed).
+AI_SERVICE_ALLOW_INSECURE = os.getenv("AI_SERVICE_ALLOW_INSECURE", "false").strip().lower() == "true"
+INSECURE_DEVELOPMENT = AI_SERVICE_ALLOW_INSECURE and not AI_SERVICE_API_KEY
+
+app = FastAPI(
+    title="RakshakAI AI Service",
+    docs_url="/docs" if INSECURE_DEVELOPMENT else None,
+    redoc_url="/redoc" if INSECURE_DEVELOPMENT else None,
+    openapi_url="/openapi.json" if INSECURE_DEVELOPMENT else None,
+)
 
 
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    # Allow health and docs endpoints without API key
-    if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
+    # /health stays unauthenticated for container health checks; everything else fails closed.
+    path = request.url.path
+    if path == "/health":
         return await call_next(request)
-    if AI_SERVICE_API_KEY:
-        received = request.headers.get("X-API-Key", "").strip()
-        if received != AI_SERVICE_API_KEY:
-            raise HTTPException(status_code=401, detail="Missing or invalid API key")
+    if INSECURE_DEVELOPMENT:
+        return await call_next(request)
+    if path in ("/docs", "/redoc", "/openapi.json"):
+        # Interactive documentation is disabled outside insecure development mode.
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    received = request.headers.get("X-API-Key", "").strip()
+    if (
+        not AI_SERVICE_API_KEY
+        or not received
+        or not hmac.compare_digest(received.encode("utf-8"), AI_SERVICE_API_KEY.encode("utf-8"))
+    ):
+        return JSONResponse(status_code=401, content={"detail": "Missing or invalid API key"})
     return await call_next(request)
 
 
 MODEL_NAME = os.getenv("YOLO_MODEL_NAME", "yolov8n.pt").strip() or "yolov8n.pt"
+MODEL_SHA256 = os.getenv("YOLO_MODEL_SHA256", "").strip().lower()
 MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("YOLO_MIN_CONFIDENCE", "0.50"))))
 IMAGE_SIZE = max(320, min(1280, int(os.getenv("YOLO_IMAGE_SIZE", "640"))))
 MAX_DETECTIONS = max(1, min(100, int(os.getenv("YOLO_MAX_DETECTIONS", "30"))))
@@ -68,11 +91,43 @@ def iso_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def resolve_model_path(name: str) -> Path:
+    path = Path(name)
+    if not path.is_absolute():
+        path = Path(os.getcwd()) / path
+        if not path.is_file():
+            path = Path(__file__).resolve().parent / name
+    return path
+
+
+def verified_model_path() -> Path:
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", MODEL_NAME):
+        raise ValueError(
+            "YOLO_MODEL_NAME must be a local weights file path; remote model URLs are never downloaded at runtime"
+        )
+    path = resolve_model_path(MODEL_NAME)
+    if not path.is_file():
+        raise ValueError(
+            f"YOLO weights unavailable: YOLO_MODEL_NAME={MODEL_NAME!r} was not found at {str(path)!r}. "
+            "Runtime downloads are disabled; place the weights file at the configured path "
+            "and set YOLO_MODEL_SHA256 to verify its integrity."
+        )
+    if MODEL_SHA256:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if not hmac.compare_digest(digest, MODEL_SHA256):
+            raise ValueError(
+                f"YOLO weights integrity check failed for YOLO_MODEL_NAME={MODEL_NAME!r}: "
+                f"file SHA-256 {digest} does not match YOLO_MODEL_SHA256."
+            )
+    return path
+
+
 def load_model() -> None:
     global model, model_error
     try:
+        path = verified_model_path()
         from ultralytics import YOLO
-        model = YOLO(MODEL_NAME)
+        model = YOLO(str(path))
         model_error = None
     except Exception as error:
         model = None
@@ -372,13 +427,17 @@ load_model()
 @app.get("/")
 def root() -> dict:
     return {**health(), "message": "RakshakAI AI Service is running", "endpoints": {
-        "health": "/health", "documentation": "/docs", "analyzeFrame": "/analyze-frame",
+        "health": "/health",
+        "documentation": "/docs" if INSECURE_DEVELOPMENT else "disabled",
+        "analyzeFrame": "/analyze-frame",
     }}
 
 
 @app.get("/health")
-def health() -> dict:
+def health(response: Response = None) -> dict:
     loaded = model is not None
+    if not loaded and response is not None:
+        response.status_code = 503
     return {
         "status": "ok",
         "service": "RakshakAI AI Service",

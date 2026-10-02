@@ -120,6 +120,21 @@ async function withAdvisoryLock(callback) {
   });
 }
 
+async function tryWithAdvisoryLock(key, callback) {
+  if (getDatabaseMode() !== "postgres") return { acquired: true, result: await callback() };
+  const client = await getPool().connect();
+  let acquired = false;
+  try {
+    const { rows } = await client.query("SELECT pg_try_advisory_lock($1)", [key]);
+    acquired = Boolean(rows[0]?.pg_try_advisory_lock);
+    if (!acquired) return { acquired: false, skipped: true };
+    return { acquired: true, result: await callback() };
+  } finally {
+    if (acquired) await client.query("SELECT pg_advisory_unlock($1)", [key]).catch(() => {});
+    client.release();
+  }
+}
+
 async function closePool() {
   if (pool) {
     await pool.end();
@@ -135,5 +150,6 @@ module.exports = {
   getDatabaseMode,
   withTransaction,
   withAdvisoryLock,
+  tryWithAdvisoryLock,
   closePool
 };

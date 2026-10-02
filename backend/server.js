@@ -16,13 +16,15 @@ const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
-const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData } = require("./services/core.service");
+const { aiFrameLimiter } = require("./middleware/aiFrameLimiter.middleware");
+const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData, runEscalationSweep } = require("./services/core.service");
 const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
 const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = require("./services/routeNormalization.service");
 const { legacyHandler } = require("./services/legacyRoute.service");
 const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./services/evidenceStorage.service");
+const { validateCameraCredentialConfig } = require("./services/cameraSecrets.service");
 const { installShutdownHandlers } = require("./services/shutdown.service");
 const { helmetDirectives } = require("../csp.config.cjs");
 
@@ -81,7 +83,8 @@ function isAllowedOrigin(origin) {
 }
 
 const generalLimiter = rateLimit({
-  skip: (req) => ["/api/health", "/api/live"].includes(req.path),
+  skip: (req) => ["/api/health", "/api/live"].includes(req.path)
+    || (req.method === "POST" && ["/api/ai/analyze-frame", "/api/rakshak/analyze-frame"].includes(req.path)),
   windowMs: 15 * 60 * 1000,
   limit: Number(process.env.API_RATE_LIMIT || 600),
   standardHeaders: "draft-8",
@@ -490,6 +493,8 @@ app.post("/api/alerts/:id/review", legacyHandler((req) => `/api/alerts/${req.par
 app.post("/api/reports/:id/create-incident", legacyHandler((req) => `/api/reports/${req.params.id}/create-incident`));
 app.post("/api/reports/:id/reject", legacyHandler((req) => `/api/reports/${req.params.id}/reject`));
 app.post("/api/incidents/:id/assign-nearest", legacyHandler((req) => `/api/incidents/${req.params.id}/assign-nearest`));
+app.post("/api/incidents/:id/acknowledge", legacyHandler((req) => `/api/incidents/${req.params.id}/acknowledge`));
+app.post("/api/dispatch/check-escalations", legacyHandler("/api/dispatch/check-escalations"));
 app.post("/api/send-alert", legacyHandler("/api/send-alert"));
 app.use("/api/cameras", cameraRoutes);
 app.post("/api/camera-sources", legacyHandler("/api/camera-sources"));
@@ -500,7 +505,7 @@ app.post("/api/camera-sources/:id/test", legacyHandler((req) => `/api/camera-sou
 app.post("/api/camera-sources/:id/analyze", legacyHandler((req) => `/api/camera-sources/${req.params.id}/analyze`));
 app.delete("/api/camera-sources/:id", legacyHandler((req) => `/api/camera-sources/${req.params.id}`));
 app.use("/api/ai", aiRoutes);
-app.post("/api/rakshak/analyze-frame", require("./controllers/ai.controller").analyzeFrame);
+app.post("/api/rakshak/analyze-frame", aiFrameLimiter, require("./controllers/ai.controller").analyzeFrame);
 app.use("/api/missing-persons", missingPersonRoutes);
 app.get("/api/reports", legacyHandler("/api/reports"));
 app.post("/api/report-missing", legacyHandler("/api/report-missing"));
@@ -531,7 +536,20 @@ app.use((req, res) => {
 });
 app.use(errorMiddleware);
 
+function validateAiServiceConfig() {
+  const url = String(process.env.AI_SERVICE_URL || "").trim();
+  if (!url) return null;
+  const apiKey = String(process.env.AI_SERVICE_API_KEY || "").trim();
+  const insecureDevelopment = String(process.env.AI_SERVICE_ALLOW_INSECURE || "").trim().toLowerCase() === "true";
+  if (!apiKey && !insecureDevelopment) {
+    throw new Error("AI_SERVICE_API_KEY is required when AI_SERVICE_URL is configured. Set AI_SERVICE_API_KEY, or set AI_SERVICE_ALLOW_INSECURE=true only for local development without authentication.");
+  }
+  return { url, authenticated: Boolean(apiKey), insecureDevelopment };
+}
+
 async function start(listenPort = port) {
+  validateAiServiceConfig();
+  validateCameraCredentialConfig({ production: process.env.NODE_ENV === "production" });
   if (process.env.NODE_ENV === "production") {
     if (getDatabaseMode() !== "postgres") {
       throw new Error("DATABASE_URL is required in production");
@@ -577,6 +595,25 @@ async function start(listenPort = port) {
       const address = server.address();
       const activePort = typeof address === "object" && address ? address.port : listenPort;
       console.log(`RakshakAI Backend running at http://localhost:${activePort}/api (${getDatabaseMode()})`);
+      // Dispatch escalation sweep: flips expired "pending" ACK windows and auto-dispatches
+      // backup units. In-process guard prevents overlap; a session-level pg advisory lock
+      // (in runEscalationSweep) ensures only one instance sweeps in multi-instance setups.
+      const sweepIntervalMs = Math.max(5000, Number(process.env.ESCALATION_SWEEP_INTERVAL_MS || 15000));
+      let sweepRunning = false;
+      const escalationTimer = setInterval(async () => {
+        if (sweepRunning) return;
+        sweepRunning = true;
+        try {
+          await runEscalationSweep();
+        } catch (error) {
+          console.error("RakshakAI escalation sweep failed:", error.message);
+        } finally {
+          sweepRunning = false;
+        }
+      }, sweepIntervalMs);
+      escalationTimer.unref();
+      server.once("close", () => clearInterval(escalationTimer));
+      console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
       resolve(server);
     });
     server.once("error", reject);
@@ -592,4 +629,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, start };
+module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig };

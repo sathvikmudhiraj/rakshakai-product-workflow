@@ -1,8 +1,17 @@
-fastapi
-uvicorn
-python-dotenv
-opencv-python
-numpy
-pydantic
-ultralytics
-pytesseract
+# Exact pins verified as mutually compatible on Python 3.11 (Docker image) and
+# Python 3.13 (local development), CPU-only inference, YOLOv8n preserved.
+# torch/torchvision are installed first from the CPU wheel index in the
+# Dockerfile; these pins keep local installs deterministic as well.
+ultralytics==8.3.253
+torch==2.9.1
+torchvision==0.24.1
+# opencv-python-headless is intentionally NOT used: ultralytics transitively
+# requires opencv-python, and installing both variants corrupts the cv2
+# package. The Dockerfile already carries libgl1/libglib2.0-0 for this build.
+opencv-python==4.12.0.88
+numpy==2.2.6
+fastapi==0.115.14
+uvicorn==0.34.3
+python-dotenv==1.0.1
+pydantic==2.10.6
+pytesseract==0.3.13

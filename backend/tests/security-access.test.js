@@ -215,6 +215,7 @@ process.env.RAKSHAKAI_DATA_FILE = testDatabase;
 process.env.EVIDENCE_STORAGE_DRIVER = "filesystem";
 process.env.EVIDENCE_STORAGE_DIR = path.join(testDirectory, "evidence-storage");
 process.env.JWT_SECRET = "rakshakai-test-secret-that-is-longer-than-32-characters";
+process.env.CAMERA_CREDENTIAL_ENCRYPTION_KEY = "61".repeat(32); // test-only key, never used outside tests
 process.env.AI_SERVICE_URL = "";
 process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
 process.env.API_RATE_LIMIT = "10000";
@@ -223,6 +224,7 @@ process.env.FRONTEND_ORIGINS = "https://ops.rakshak.example.com";
 
 const { start } = require("../server");
 const { readDatabase, writeDatabase, repairLegacyPersistedData } = require("../services/core.service");
+const { decryptSecret } = require("../services/cameraSecrets.service");
 
 let server;
 let osrmServer;
@@ -288,7 +290,7 @@ function restoreRoutingEnv(snapshot) {
 
 function assertNoCameraSecrets(payload) {
   const serialized = JSON.stringify(payload);
-  for (const forbidden of ["streamUrl", "rtspUrl", "username", "password", "token", "credentials", "operator:secret"]) {
+  for (const forbidden of ["streamUrl", "rtspUrl", "username", "password", "token", "credentials", "operator:secret", "secure-user", "secure-pass", "enc:v1"]) {
     assert.equal(serialized.includes(forbidden), false, `camera response leaked ${forbidden}`);
   }
 }
@@ -1171,6 +1173,11 @@ test("Admin can create and update real camera config without leaking credentials
   assert.equal(created.source.name, "Secure Gate Camera");
   assert.equal(created.source.sourceType, "rtsp");
   assert.equal(created.source.hasStreamConfig, true);
+  assert.equal(created.source.hasCredentials, true);
+
+  const afterCreate = (await readDatabase()).cameraSources.find((source) => source.id === created.source.id);
+  assert.match(afterCreate.password, /^enc:v1:/, "camera password must be encrypted at rest");
+  assert.equal(afterCreate.password.includes("secure-pass"), false, "ciphertext must not contain the plaintext password");
 
   const update = await request(`/api/camera-sources/${created.source.id}/config`, {
     method: "PATCH",
@@ -1182,6 +1189,9 @@ test("Admin can create and update real camera config without leaking credentials
   assertNoCameraSecrets(updated);
   assert.equal(updated.source.name, "Secure Gate Camera Updated");
   assert.equal(updated.source.aiEnabled, false);
+
+  const afterUpdate = (await readDatabase()).cameraSources.find((source) => source.id === created.source.id);
+  assert.equal(afterUpdate.password, afterCreate.password, "PATCH without password must preserve the stored secret");
 
   const blankSecretUpdate = await request(`/api/camera-sources/${created.source.id}/config`, {
     method: "PATCH",
@@ -1198,12 +1208,20 @@ test("Admin can create and update real camera config without leaking credentials
     })
   });
   assert.equal(blankSecretUpdate.status, 200);
-  assertNoCameraSecrets(await blankSecretUpdate.json());
+  const blankSecretBody = await blankSecretUpdate.json();
+  assertNoCameraSecrets(blankSecretBody);
+  assert.equal(blankSecretBody.source.hasCredentials, true, "blank credential fields must not clear stored credentials");
 
   const stored = (await readDatabase()).cameraSources.find((source) => source.id === created.source.id);
-  assert.equal(stored.streamUrl, "rtsp://secure-user:secure-pass@10.0.0.5/main");
-  assert.equal(stored.username, "secure-user");
-  assert.equal(stored.password, "secure-pass");
+  assert.equal(stored.password, afterCreate.password, "blank password must not erase the stored secret");
+  assert.match(stored.streamUrl, /^enc:v1:/, "stream URL must be encrypted at rest");
+  assert.equal(stored.streamUrl.includes("secure-user"), false);
+  assert.equal(stored.streamUrl.includes("secure-pass"), false);
+  assert.equal(decryptSecret(stored.streamUrl), "rtsp://secure-user:secure-pass@10.0.0.5/main");
+  assert.match(stored.username, /^enc:v1:/);
+  assert.equal(decryptSecret(stored.username), "secure-user");
+  assert.match(stored.password, /^enc:v1:/);
+  assert.equal(decryptSecret(stored.password), "secure-pass");
 });
 
 test("Citizen cannot access CCTV APIs and camera analysis endpoints", async () => {

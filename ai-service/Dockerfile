@@ -12,7 +12,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt ./
 RUN python -m pip install --upgrade pip \
-    && python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision \
+    && python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.9.1+cpu" "torchvision==0.24.1+cpu" \
     && python -m pip install -r requirements.txt
 
 COPY main.py ./

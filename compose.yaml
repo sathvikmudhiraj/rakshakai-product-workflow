@@ -21,6 +21,7 @@ services:
       context: ./ai-service
     environment:
       AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in .env.docker}
+      AI_SERVICE_ALLOW_INSECURE: "false"
       YOLO_CONFIG_DIR: /models
       YOLO_MODEL_NAME: yolov8n.pt
       YOLO_MIN_CONFIDENCE: "0.50"
@@ -81,6 +82,9 @@ services:
       PG_MIGRATION_RETRIES: "20"
       PG_MIGRATION_RETRY_MS: "1500"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      # Optional passthrough: required when the compose stack runs with NODE_ENV=production
+      # and stores real camera credentials. Generate a 64-hex-char key; see .env.docker.example.
+      CAMERA_CREDENTIAL_ENCRYPTION_KEY: ${CAMERA_CREDENTIAL_ENCRYPTION_KEY:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env.docker}
       SEED_POLICE_PASSWORD: ${SEED_POLICE_PASSWORD:?Set SEED_POLICE_PASSWORD in .env.docker}
       SEED_CITIZEN_PASSWORD: ${SEED_CITIZEN_PASSWORD:?Set SEED_CITIZEN_PASSWORD in .env.docker}
@@ -90,6 +94,7 @@ services:
       AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?Set AI_SERVICE_API_KEY in .env.docker}
       AI_SERVICE_TIMEOUT_MS: "12000"
       AI_HEALTH_TIMEOUT_MS: "5000"
+      AI_FRAME_RATE_LIMIT: "300"
       RAKSHAKAI_IMPORT_FILE: /app/backend/data/db.example.json
       GIS_ROUTING_PROVIDER: ${GIS_ROUTING_PROVIDER:-self_hosted}
       OSRM_BASE_URL: ${OSRM_BASE_URL:-http://osrm:5000}

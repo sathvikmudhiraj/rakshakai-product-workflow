@@ -36,6 +36,7 @@ services:
       OSRM_BASE_URL: http://127.0.0.1:1
       PUBLIC_OSRM_FALLBACK: "false"
       ROUTE_TIMEOUT_MS: "500"
+      API_RATE_LIMIT: "100000"
       RAKSHAKAI_IMPORT_FILE: /app/backend/data/db.example.json
     command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && node server.js"]
     depends_on:

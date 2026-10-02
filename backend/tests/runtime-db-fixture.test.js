@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
 const {
+  IMPORT_LOCK_ID,
   loadImportDatabase,
   parseImportOptions
 } = require("../scripts/import-json-to-postgres");
@@ -90,6 +91,12 @@ test("import script accepts explicit fixture source", () => {
   assert.equal(options.dbPath, fixturePath);
   const db = loadImportDatabase(options.dbPath);
   assert.equal(Array.isArray(db.users), true);
+});
+
+test("import script serializes concurrent startup imports", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "scripts", "import-json-to-postgres.js"), "utf8");
+  assert.equal(IMPORT_LOCK_ID, 724212);
+  assert.match(source, /withTransaction\(async \(client\) => \{\s+await client\.query\("SELECT pg_advisory_xact_lock\(\$1\)"/);
 });
 
 test("import script accepts the committed sanitized example source", () => {

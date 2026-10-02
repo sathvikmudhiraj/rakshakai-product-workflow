@@ -8,7 +8,8 @@ const {
   getDatabaseMode,
   query,
   withTransaction,
-  withAdvisoryLock
+  withAdvisoryLock,
+  tryWithAdvisoryLock
 } = require("./postgres.service");
 const {
   resolveOsrmBaseUrl,
@@ -23,6 +24,14 @@ const dispatchEventsRepository = require("../repositories/dispatchEvents.reposit
 const cameraSourcesRepository = require("../repositories/cameraSources.repository");
 const auditLogsRepository = require("../repositories/auditLogs.repository");
 const missingPersonsRepository = require("../repositories/missingPersons.repository");
+const policeStationsRepository = require("../repositories/policeStations.repository");
+const policeBeatsRepository = require("../repositories/policeBeats.repository");
+const officerRanksRepository = require("../repositories/officerRanks.repository");
+const policeOfficersRepository = require("../repositories/policeOfficers.repository");
+const responseUnitMembersRepository = require("../repositories/responseUnitMembers.repository");
+const unitCapabilitiesRepository = require("../repositories/unitCapabilities.repository");
+const dispatchEscalationLogRepository = require("../repositories/dispatchEscalationLog.repository");
+const dispatchEscalationRulesRepository = require("../repositories/dispatchEscalationRules.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -30,6 +39,11 @@ const {
   readEvidenceObject,
   writeEvidenceObject
 } = require("./evidenceStorage.service");
+const {
+  CAMERA_SECRET_FIELDS,
+  encryptCameraSecrets,
+  decryptSecret
+} = require("./cameraSecrets.service");
 
 const root = path.join(__dirname, "..");
 function loadLocalEnv() {
@@ -61,7 +75,15 @@ const repositories = [
   dispatchEventsRepository,
   cameraSourcesRepository,
   auditLogsRepository,
-  missingPersonsRepository
+  missingPersonsRepository,
+  policeStationsRepository,
+  policeBeatsRepository,
+  officerRanksRepository,
+  policeOfficersRepository,
+  responseUnitMembersRepository,
+  unitCapabilitiesRepository,
+  dispatchEscalationLogRepository,
+  dispatchEscalationRulesRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -111,6 +133,13 @@ function seedDb() {
     alerts: [],
     videoEvidence: [],
     policeStations: defaultPoliceStations(t),
+    policeBeats: defaultPoliceBeats(t),
+    officerRanks: defaultOfficerRanks(t),
+    policeOfficers: defaultPoliceOfficers(t),
+    responseUnitMembers: defaultResponseUnitMembers(t),
+    unitCapabilities: defaultUnitCapabilities(t),
+    dispatchEscalationLogs: defaultDispatchEscalationLogs(t),
+    dispatchEscalationRules: defaultDispatchEscalationRules(t),
     devices: [
       { id: "d1", name: "Camera C-19", type: "CCTV", status: "online", zone: "Red Zone", latencyMs: 210 },
       { id: "d2", name: "Drone D-03", type: "Drone", status: "warning", zone: "Transit Hub", latencyMs: 380 },
@@ -141,6 +170,7 @@ function readDb() {
 }
 
 function writeDb(db) {
+  (db.cameraSources || []).forEach((source) => encryptCameraSecrets(source));
   fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 }
 
@@ -156,6 +186,14 @@ async function readDatabase() {
     cameraSources,
     auditLogs,
     reports,
+    policeStations,
+    policeBeats,
+    officerRanks,
+    policeOfficers,
+    responseUnitMembers,
+    unitCapabilities,
+    dispatchEscalationLogs,
+    dispatchEscalationRules,
     stateResult
   ] = await Promise.all([
     usersRepository.list(defaults),
@@ -166,6 +204,14 @@ async function readDatabase() {
     cameraSourcesRepository.list(defaults),
     auditLogsRepository.list(defaults),
     missingPersonsRepository.list(defaults),
+    policeStationsRepository.list(defaults),
+    policeBeatsRepository.list(defaults),
+    officerRanksRepository.list(defaults),
+    policeOfficersRepository.list(defaults),
+    responseUnitMembersRepository.list(defaults),
+    unitCapabilitiesRepository.list(defaults),
+    dispatchEscalationLogRepository.list(defaults),
+    dispatchEscalationRulesRepository.list(defaults),
     query("SELECT data FROM app_state WHERE key = 'operational'")
   ]);
   const state = stateResult.rows[0]?.data || {};
@@ -179,7 +225,15 @@ async function readDatabase() {
     dispatchEvents,
     cameraSources,
     auditLogs,
-    reports
+    reports,
+    policeStations,
+    policeBeats,
+    officerRanks,
+    policeOfficers,
+    responseUnitMembers,
+    unitCapabilities,
+    dispatchEscalationLogs,
+    dispatchEscalationRules
   });
 }
 
@@ -205,7 +259,15 @@ async function writeDatabase(db) {
       [dispatchEventsRepository, safeDispatchEvents],
       [cameraSourcesRepository, db.cameraSources || []],
       [auditLogsRepository, db.auditLogs || []],
-      [missingPersonsRepository, db.reports || []]
+      [missingPersonsRepository, db.reports || []],
+      [policeStationsRepository, db.policeStations || []],
+      [policeBeatsRepository, db.policeBeats || []],
+      [officerRanksRepository, db.officerRanks || []],
+      [policeOfficersRepository, db.policeOfficers || []],
+      [responseUnitMembersRepository, db.responseUnitMembers || []],
+      [unitCapabilitiesRepository, db.unitCapabilities || []],
+      [dispatchEscalationLogRepository, db.dispatchEscalationLogs || []],
+      [dispatchEscalationRulesRepository, db.dispatchEscalationRules || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -218,6 +280,14 @@ async function writeDatabase(db) {
       [cameraSourcesRepository, db.cameraSources || []],
       [auditLogsRepository, db.auditLogs || []],
       [missingPersonsRepository, db.reports || []],
+      [dispatchEscalationLogRepository, db.dispatchEscalationLogs || []],
+      [dispatchEscalationRulesRepository, db.dispatchEscalationRules || []],
+      [unitCapabilitiesRepository, db.unitCapabilities || []],
+      [responseUnitMembersRepository, db.responseUnitMembers || []],
+      [policeOfficersRepository, db.policeOfficers || []],
+      [officerRanksRepository, db.officerRanks || []],
+      [policeBeatsRepository, db.policeBeats || []],
+      [policeStationsRepository, db.policeStations || []],
       [usersRepository, db.users || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
@@ -237,7 +307,14 @@ async function writeDatabase(db) {
         devices: db.devices || [],
         detections: db.detections || [],
         videoEvidence: db.videoEvidence || [],
-        policeStations: db.policeStations || []
+        policeStations: db.policeStations || [],
+        policeBeats: db.policeBeats || [],
+        officerRanks: db.officerRanks || [],
+        policeOfficers: db.policeOfficers || [],
+        responseUnitMembers: db.responseUnitMembers || [],
+        unitCapabilities: db.unitCapabilities || [],
+        dispatchEscalationLogs: db.dispatchEscalationLogs || [],
+        dispatchEscalationRules: db.dispatchEscalationRules || []
       })]
     );
   });
@@ -282,6 +359,47 @@ async function withAssignmentLock(callback) {
   } finally {
     release();
   }
+}
+
+async function withEscalationLock(incidentId, callback) {
+  if (getDatabaseMode() === "postgres") {
+    return withTransaction(async (client) => {
+      const lockKey = 724212 + (incidentId ? Math.abs(hashString(incidentId)) % 1000000 : 0);
+      await client.query("SELECT pg_advisory_xact_lock($1)", [lockKey]);
+      const incidentResult = await client.query(
+        "SELECT id FROM incidents WHERE id = $1 FOR UPDATE",
+        [incidentId]
+      );
+      if (!incidentResult.rows.length) return { escalated: false, reason: "Incident not found" };
+      // Load the full snapshot inside the ambient transaction so the callback has
+      // response units, escalation rules, capabilities and logs available.
+      const lockedDb = await readDatabase();
+      return callback(lockedDb, client);
+    });
+  }
+  const lockKey = `escalation_${incidentId}`;
+  const previous = jsonEscalationQueue[lockKey] || Promise.resolve();
+  let release;
+  jsonEscalationQueue[lockKey] = new Promise((resolve) => { release = resolve; });
+  await previous.catch(() => {});
+  try {
+    const lockedDb = await readDatabase();
+    return callback(lockedDb, null);
+  } finally {
+    release();
+  }
+}
+
+const jsonEscalationQueue = {};
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash;
 }
 
 function assignmentConflictResponse() {
@@ -378,13 +496,27 @@ async function assignNearestIncident(incidentId, user) {
     incident.routeApproximate = Boolean(route.approximate);
     incident.routeCalculatedAt = route.calculatedAt;
     incident.routeSelectionReason = routed.selectionReason;
+    const ackTimeout = nearest.ackTimeoutSeconds || nearest.ack_timeout_seconds || (routed.escalationRule?.timeoutSeconds || routed.escalationRule?.timeout_seconds) || 60;
+    incident.escalationStatus = incident.escalation_status = "pending";
+    incident.escalationStartedAt = incident.escalation_started_at = now();
+    incident.primaryUnitAckedAt = incident.primary_unit_acked_at = null;
     incident.updatedAt = now();
-    Object.assign(nearest, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
+    Object.assign(nearest, {
+      status: "busy",
+      assignedIncidentId: incident.id,
+      currentIncidentId: incident.id,
+      lastUpdated: incident.updatedAt,
+      lastAckAt: null,
+      last_ack_at: null,
+      ackTimeoutSeconds: ackTimeout,
+      ack_timeout_seconds: ackTimeout
+    });
     const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
     const event = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${nearest.unitCode} assigned with ${incident.etaMinutes} minute ${route.approximate ? "approximate " : ""}ETA`, user.name, incident.updatedAt);
     const suggestAudit = addAuditLog(lockedDb, "unit_suggested", user, incident.id, routed.selectionReason || nearest.unitCode, incident.updatedAt);
     const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, `${nearest.unitCode}; ${incident.distanceKm} km; ${incident.etaMinutes} min${route.approximate ? "; approximate route" : ""}`, incident.updatedAt);
-    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [nearest], reports: [linkedReport], events: [event], audits: [suggestAudit, audit] });
+    const escalationAudit = addAuditLog(lockedDb, "escalation_started", user, incident.id, `ACK timeout ${ackTimeout}s started for ${nearest.unitCode}`, incident.updatedAt);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [nearest], reports: [linkedReport], events: [event], audits: [suggestAudit, audit, escalationAudit] });
     return {
       status: 200,
       payload: {
@@ -394,10 +526,195 @@ async function assignNearestIncident(incidentId, user) {
         candidates: routed.candidates,
         excludedUnits: routed.excludedUnits,
         warnings: routed.warnings,
-        selectionReason: routed.selectionReason
+        selectionReason: routed.selectionReason,
+        escalationRule: routed.escalationRule,
+        ackTimeoutSeconds: ackTimeout
       }
     };
   });
+}
+
+async function acknowledgeIncidentDispatch(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const lockedDb = await readDatabase();
+    const incident = lockedDb.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (!incident.assignedUnitId) return { status: 409, payload: { error: "No unit assigned to this incident" } };
+    const unit = lockedDb.responseUnits.find((item) => item.id === incident.assignedUnitId);
+    if (!unit) return { status: 404, payload: { error: "Assigned unit not found" } };
+    const normalizedUnit = normalizeResponseUnitRecord(unit);
+    const unitCode = normalizedUnit.unitCode || normalizedUnit.unitId || normalizedUnit.id;
+    if (incident.primaryUnitAckedAt || incident.primary_unit_acked_at) {
+      return { status: 409, payload: { error: "Primary unit already acknowledged", alreadyAcknowledged: true } };
+    }
+    const ackAt = now();
+    incident.primaryUnitAckedAt = incident.primary_unit_acked_at = ackAt;
+    incident.escalationStatus = incident.escalation_status = "resolved";
+    incident.updatedAt = ackAt;
+    Object.assign(unit, { lastAckAt: ackAt, last_ack_at: ackAt, lastUpdated: ackAt });
+    const event = addDispatchEvent(lockedDb, incident.id, "primary_unit_acknowledged", `${unitCode} acknowledged dispatch`, user.name, ackAt);
+    const audit = addAuditLog(lockedDb, "primary_unit_acknowledged", user, incident.id, `${unitCode} acknowledged dispatch`, ackAt);
+    const escalationAudit = addAuditLog(lockedDb, "escalation_resolved", user, incident.id, `Escalation resolved by primary unit ACK`, ackAt);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit], events: [event], audits: [audit, escalationAudit] });
+    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), acknowledgedAt: ackAt } };
+  });
+}
+
+function selectBackupUnits(db, incident, primaryUnit, escalationRule) {
+  const backupCount = escalationRule?.backupCount || escalationRule?.backup_count || 1;
+  const backupStrategy = escalationRule?.backupStrategy || escalationRule?.backup_strategy || "hybrid";
+  const requiresSpecialized = escalationRule?.requiresSpecializedBackup || escalationRule?.requires_specialized_backup || false;
+  const primaryCapabilityType = escalationRule?.capabilityType || escalationRule?.capability_type;
+  const primarySubtype = escalationRule?.unitSubtype || escalationRule?.unit_subtype;
+
+  const availableUnits = db.responseUnits
+    .map(normalizeResponseUnitRecord)
+    .filter((u) => {
+      const freshness = dispatchEligibleFreshness(u);
+      return u.id !== primaryUnit.id && u.status === "available" && u.operational && freshness.eligible && Boolean(strictPoint(u));
+    });
+
+  let candidates = availableUnits;
+  if (requiresSpecialized && primaryCapabilityType) {
+    candidates = availableUnits.filter((u) => {
+      const capMatch = unitMatchesRequiredCapabilities(u, db, [{ type: primaryCapabilityType, subtype: primarySubtype, level: 1 }]);
+      return capMatch.matches;
+    });
+  }
+
+  if (backupStrategy === "nearest_station" && primaryUnit.stationId) {
+    candidates = candidates.filter((u) => u.stationId === primaryUnit.stationId);
+  }
+
+  const scored = candidates.map((u) => {
+    const dest = strictPoint(incident);
+    const dist = dest ? Math.hypot((Number(u.lat) - dest.lat) * 111, (Number(u.lng) - dest.lng) * 100) : Infinity;
+    const stationMatch = u.stationId === primaryUnit.stationId ? 1 : 0;
+    const beatMatch = u.beatId === primaryUnit.beatId ? 1 : 0;
+    return { unit: u, dist, stationMatch, beatMatch };
+  }).sort((a, b) => {
+    if (a.stationMatch !== b.stationMatch) return b.stationMatch - a.stationMatch;
+    if (a.beatMatch !== b.beatMatch) return b.beatMatch - a.beatMatch;
+    return a.dist - b.dist;
+  });
+
+  return scored.slice(0, backupCount).map((c) => c.unit);
+}
+
+async function checkAndTriggerEscalation(incidentId) {
+  return withEscalationLock(incidentId, async (db, client) => {
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return { escalated: false, reason: "Incident not found" };
+    if (!incident.assignedUnitId) return { escalated: false, reason: "No assigned unit" };
+    const escalationStatus = incident.escalationStatus || incident.escalation_status || "none";
+    if (escalationStatus !== "pending") return { escalated: false, reason: `Escalation status: ${escalationStatus}` };
+    const escalationStartedAt = incident.escalationStartedAt || incident.escalation_started_at;
+    if (!escalationStartedAt) return { escalated: false, reason: "No escalation start time" };
+    const primaryUnit = db.responseUnits.find((u) => u.id === incident.assignedUnitId);
+    if (!primaryUnit) return { escalated: false, reason: "Primary unit not found" };
+    const ackTimeout = primaryUnit.ackTimeoutSeconds || primaryUnit.ack_timeout_seconds || 60;
+    const started = new Date(escalationStartedAt).getTime();
+    const elapsed = (Date.now() - started) / 1000;
+    if (elapsed < ackTimeout) return { escalated: false, reason: `Timeout not reached (${Math.round(elapsed)}/${ackTimeout}s)` };
+
+    const escalationRule = getEscalationRuleForUnit(primaryUnit, db);
+    if (!escalationRule) return { escalated: false, reason: "No escalation rule for unit" };
+
+    const backupUnits = selectBackupUnits(db, incident, primaryUnit, escalationRule);
+    if (!backupUnits.length) {
+      const logId = uid("esc_log");
+      const logEntry = {
+        id: logId,
+        incidentId: incident.id,
+        primaryUnitId: primaryUnit.id,
+        escalationRuleId: escalationRule.id,
+        triggerType: "no_ack",
+        escalatedAt: now(),
+        backupUnitsDispatched: [],
+        primaryUnitResponded: false,
+        resolvedAt: null
+      };
+      db.dispatchEscalationLogs = db.dispatchEscalationLogs || [];
+      db.dispatchEscalationLogs.unshift(logEntry);
+      incident.escalationStatus = incident.escalation_status = "triggered";
+      incident.updatedAt = now();
+      addDispatchEvent(db, incident.id, "escalation_triggered", `Escalation triggered for ${primaryUnit.unitCode || primaryUnit.id}: no backup units available`, "system", incident.updatedAt);
+      addAuditLog(db, "escalation_triggered_no_backup", "system", incident.id, `Primary: ${primaryUnit.unitCode || primaryUnit.id}`, incident.updatedAt);
+      await writeIncidentWorkflowRecords(db, incident, { units: [], events: [], audits: [] });
+      await writeSelectedRecords(db, [[dispatchEscalationLogRepository, [logEntry]]]);
+      return { escalated: true, backupUnits: [], logId, reason: "No backup units available" };
+    }
+
+    const backupIds = backupUnits.map((u) => u.id);
+    // selectBackupUnits returns normalized copies; escalate must mutate and persist the
+    // underlying db records so the busy status survives JSON-mode writeDatabase as well.
+    const persistedBackupUnits = backupIds
+      .map((id) => db.responseUnits.find((u) => u.id === id))
+      .filter(Boolean);
+    const logId = uid("esc_log");
+    const logEntry = {
+      id: logId,
+      incidentId: incident.id,
+      primaryUnitId: primaryUnit.id,
+      escalationRuleId: escalationRule.id,
+      triggerType: "no_ack",
+      escalatedAt: now(),
+      backupUnitsDispatched: backupIds,
+      primaryUnitResponded: false,
+      resolvedAt: null
+    };
+    db.dispatchEscalationLogs = db.dispatchEscalationLogs || [];
+    db.dispatchEscalationLogs.unshift(logEntry);
+
+    const escalationTime = now();
+    for (const backup of persistedBackupUnits) {
+      const backupCode = backup.unitCode || backup.unitId || backup.id;
+      Object.assign(backup, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: escalationTime });
+      addDispatchEvent(db, incident.id, "backup_unit_assigned", `${backupCode} assigned as backup`, "system", escalationTime);
+      addAuditLog(db, "backup_unit_assigned", "system", incident.id, `${backupCode} dispatched as backup`, escalationTime);
+    }
+
+    incident.escalationStatus = incident.escalation_status = "triggered";
+    incident.updatedAt = escalationTime;
+
+    addDispatchEvent(db, incident.id, "escalation_triggered", `Escalation triggered for ${primaryUnit.unitCode || primaryUnit.id}: ${backupIds.length} backup unit(s) dispatched`, "system", escalationTime);
+    addAuditLog(db, "escalation_triggered", "system", incident.id, `Primary: ${primaryUnit.unitCode || primaryUnit.id}; Backups: ${backupIds.join(', ')}`, escalationTime);
+
+    await writeIncidentWorkflowRecords(db, incident, { units: persistedBackupUnits, events: [], audits: [] });
+    await writeSelectedRecords(db, [[dispatchEscalationLogRepository, [logEntry]]]);
+
+    return { escalated: true, backupUnits: backupIds, logId, reason: "ACK timeout reached" };
+  });
+}
+
+async function checkAllPendingEscalations() {
+  const db = await readDatabase();
+  const pendingIncidents = db.incidents.filter((inc) =>
+    (inc.escalationStatus || inc.escalation_status) === "pending" &&
+    inc.assignedUnitId
+  );
+  let escalated = 0;
+  const results = [];
+  for (const incident of pendingIncidents) {
+    const result = await checkAndTriggerEscalation(incident.id);
+    results.push({ incidentId: incident.id, ...result });
+    if (result.escalated) escalated++;
+  }
+  return { checked: pendingIncidents.length, escalated, results };
+}
+
+// Session-level advisory lock so only one backend instance runs a sweep at a time.
+const ESCALATION_SWEEP_LOCK_ID = 724213;
+let escalationSweepQueue = Promise.resolve();
+
+async function runEscalationSweep() {
+  const run = escalationSweepQueue.then(async () => {
+    const locked = await tryWithAdvisoryLock(ESCALATION_SWEEP_LOCK_ID, () => checkAllPendingEscalations());
+    if (!locked.acquired) return { checked: 0, escalated: 0, results: [], skipped: "sweep_held_by_another_instance" };
+    return locked.result;
+  });
+  escalationSweepQueue = run.catch(() => {});
+  return run;
 }
 
 async function assignSelectedIncidentUnit(incidentId, body, user) {
@@ -436,9 +753,13 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
       previousAssignedUnit = lockedDb.responseUnits.find((item) => item.id === incident.assignedUnitId) || null;
       if (previousAssignedUnit) Object.assign(previousAssignedUnit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: now() });
     }
+    const ackTimeout = unit.ackTimeoutSeconds || unit.ack_timeout_seconds || 60;
     incident.assignedUnitId = unit.id;
     incident.recommendedUnitId = incident.recommendedUnitId || unit.id;
     incident.status = "Assigned";
+    incident.escalationStatus = incident.escalation_status = "pending";
+    incident.escalationStartedAt = incident.escalation_started_at = now();
+    incident.primaryUnitAckedAt = incident.primary_unit_acked_at = null;
     if (route) {
       incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
       incident.etaMinutes = Math.max(1, Math.round((route.durationSeconds || approximateRouteDurationSeconds(route.distanceMeters)) / 60));
@@ -449,14 +770,24 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
       incident.routeSelectionReason = `Selected manually; route calculated for ${unit.unitCode}.`;
     }
     incident.updatedAt = now();
-    Object.assign(unit, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: incident.updatedAt });
+    Object.assign(unit, {
+      status: "busy",
+      assignedIncidentId: incident.id,
+      currentIncidentId: incident.id,
+      lastUpdated: incident.updatedAt,
+      lastAckAt: null,
+      last_ack_at: null,
+      ackTimeoutSeconds: ackTimeout,
+      ack_timeout_seconds: ackTimeout
+    });
     const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
     const statusEvent = addDispatchEvent(lockedDb, incident.id, "status_updated", "Incident status changed to Assigned", user.name);
     const assignEvent = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${unit.unitCode} assigned to ${incident.title}`, user.name);
     const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, unit.unitCode);
     const overrideAudit = body.unitId ? addAuditLog(lockedDb, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
-    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit] });
-    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route } };
+    const escalationAudit = addAuditLog(lockedDb, "escalation_started", user, incident.id, `ACK timeout ${ackTimeout}s started for ${unit.unitCode}`, incident.updatedAt);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit, escalationAudit] });
+    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route, ackTimeoutSeconds: ackTimeout } };
   });
 }
 
@@ -677,6 +1008,164 @@ function defaultPoliceStations(timestamp = now()) {
       operational: isDemoMode(),
       lastUpdated: timestamp
     }
+  ];
+}
+
+function defaultPoliceBeats(timestamp = now()) {
+  return [
+    {
+      id: "beat_patancheru_industrial",
+      stationId: "PS-PATANCHERU",
+      beatCode: "Industrial Area",
+      name: "Industrial Area Beat",
+      description: "Patancheru Industrial Area patrol beat",
+      jurisdiction: "Patancheru",
+      latitude: LOCAL_DEMO_POINTS.patancheru.lat,
+      longitude: LOCAL_DEMO_POINTS.patancheru.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_patancheru_gate_a",
+      stationId: "PS-PATANCHERU",
+      beatCode: "Gate A",
+      name: "Gate A Beat",
+      description: "Patancheru Gate A patrol beat",
+      jurisdiction: "Patancheru",
+      latitude: LOCAL_DEMO_POINTS.patancheru.lat,
+      longitude: LOCAL_DEMO_POINTS.patancheru.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_patancheru_red_zone",
+      stationId: "PS-PATANCHERU",
+      beatCode: "Red Zone",
+      name: "Red Zone Beat",
+      description: "Patancheru Red Zone patrol beat",
+      jurisdiction: "Patancheru",
+      latitude: LOCAL_DEMO_POINTS.patancheru.lat,
+      longitude: LOCAL_DEMO_POINTS.patancheru.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_bhel_township",
+      stationId: "PS-BHEL-RCP",
+      beatCode: "BHEL Township",
+      name: "BHEL Township Beat",
+      description: "BHEL Township patrol beat",
+      jurisdiction: "Ramachandrapuram",
+      latitude: LOCAL_DEMO_POINTS.bhel.lat,
+      longitude: LOCAL_DEMO_POINTS.bhel.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_bhel_transit",
+      stationId: "PS-BHEL-RCP",
+      beatCode: "Transit Hub",
+      name: "Transit Hub Beat",
+      description: "BHEL Transit Hub patrol beat",
+      jurisdiction: "Ramachandrapuram",
+      latitude: LOCAL_DEMO_POINTS.bhel.lat,
+      longitude: LOCAL_DEMO_POINTS.bhel.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_bhel_parking",
+      stationId: "PS-BHEL-RCP",
+      beatCode: "Parking Zone B",
+      name: "Parking Zone B Beat",
+      description: "BHEL Parking Zone B patrol beat",
+      jurisdiction: "Ramachandrapuram",
+      latitude: LOCAL_DEMO_POINTS.bhel.lat,
+      longitude: LOCAL_DEMO_POINTS.bhel.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    },
+    {
+      id: "beat_hyd_central",
+      stationId: "PS-HYD-CTRL",
+      beatCode: "Central Control",
+      name: "Central Control Beat",
+      description: "Hyderabad Central Control patrol beat",
+      jurisdiction: "Hyderabad",
+      latitude: LOCAL_DEMO_POINTS.hyderabadCentral.lat,
+      longitude: LOCAL_DEMO_POINTS.hyderabadCentral.lng,
+      operational: true,
+      isDemo: true,
+      lastUpdated: timestamp
+    }
+  ];
+}
+
+function defaultOfficerRanks(timestamp = now()) {
+  return [
+    { id: "rank_si", code: "SI", name: "Sub-Inspector", level: 10, active: true, createdAt: timestamp },
+    { id: "rank_asi", code: "ASI", name: "Assistant Sub-Inspector", level: 5, active: true, createdAt: timestamp },
+    { id: "rank_ci", code: "CI", name: "Circle Inspector", level: 15, active: true, createdAt: timestamp }
+  ];
+}
+
+function defaultPoliceOfficers(timestamp = now()) {
+  return [
+    {
+      id: "u_police",
+      userId: "u_police",
+      badgeId: "B001",
+      stationId: "PS-PATANCHERU",
+      beatId: "beat_patancheru_industrial",
+      rankId: "rank_si",
+      beat: "Industrial Area",
+      jurisdiction: "Patancheru",
+      active: true,
+      createdAt: timestamp,
+      lastUpdated: timestamp
+    }
+  ];
+}
+
+function defaultResponseUnitMembers(timestamp = now()) {
+  return [
+    {
+      id: "member_u_police",
+      unitId: "u_police",
+      officerUserId: "u_police",
+      role: "commander",
+      assignedAt: timestamp
+    }
+  ];
+}
+
+function defaultUnitCapabilities(timestamp = now()) {
+  return [
+    { id: "cap_u_police", unitId: "u_police", capabilityType: "fire", subtype: "engine", level: 1 },
+    { id: "cap_u_police_medical", unitId: "u_police", capabilityType: "medical", subtype: "als", level: 1 }
+  ];
+}
+
+function defaultDispatchEscalationLogs(timestamp = now()) {
+  return [];
+}
+
+function defaultDispatchEscalationRules(timestamp = now()) {
+  return [
+    { id: "esc_fire_engine", capabilityType: "fire", unitSubtype: "engine", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 1, requiresSpecializedBackup: false, active: true },
+    { id: "esc_fire_ladder", capabilityType: "fire", unitSubtype: "ladder", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 1, requiresSpecializedBackup: false, active: true },
+    { id: "esc_medical_als", capabilityType: "medical", unitSubtype: "als", escalationType: "no_ack", timeoutSeconds: 45, backupStrategy: "hybrid", backupCount: 1, requiresSpecializedBackup: false, active: true },
+    { id: "esc_medical_bls", capabilityType: "medical", unitSubtype: "bls", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 1, requiresSpecializedBackup: false, active: true },
+    { id: "esc_medical_heavy", capabilityType: "medical", unitSubtype: "heavy", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 2, requiresSpecializedBackup: false, active: true },
+    { id: "esc_swat", capabilityType: "swat", unitSubtype: "swat", escalationType: "no_ack", timeoutSeconds: 30, backupStrategy: "hybrid", backupCount: 2, requiresSpecializedBackup: true, active: true },
+    { id: "esc_hazmat_standard", capabilityType: "hazmat", unitSubtype: "standard", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 1, requiresSpecializedBackup: true, active: true },
+    { id: "esc_hazmat_major", capabilityType: "hazmat", unitSubtype: "major", escalationType: "no_ack", timeoutSeconds: 60, backupStrategy: "hybrid", backupCount: 2, requiresSpecializedBackup: true, active: true }
   ];
 }
 
@@ -1393,7 +1882,14 @@ function ensureProductShape(db) {
   });
   releaseUnitsForLegacyIncidents(db, legacyReleasedIncidentIds, legacyReleasedUnitIds);
   db.responseUnits.forEach((unit) => {
-    const assignedIncident = db.incidents.find((incident) => incident.assignedUnitId === unit.id && isActiveIncident(incident));
+    // Reconcile unit state on every read: keep units busy for their primary incident OR
+    // for an active incident they are attached to as backup (unit.assignedIncidentId).
+    // Release only units linked to missing/closed incidents (legacy orphan repair).
+    const linkedIncidentId = unit.assignedIncidentId || unit.currentIncidentId || null;
+    const assignedIncident = db.incidents.find((incident) => incident.assignedUnitId === unit.id && isActiveIncident(incident))
+      || (linkedIncidentId
+        ? db.incidents.find((incident) => incident.id === linkedIncidentId && isActiveIncident(incident))
+        : null);
     if (assignedIncident) Object.assign(unit, { status: "busy", assignedIncidentId: assignedIncident.id, currentIncidentId: assignedIncident.id });
     else if (["assigned", "busy"].includes(unit.status)) Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null });
   });
@@ -1488,6 +1984,9 @@ function ensureProductShape(db) {
       source.lastFrameStatus = source.lastFrameStatus || "simulated demo frame";
       source.healthReason = source.healthReason || "Simulated feed for product demonstration only";
     }
+    // Migrate legacy plaintext camera credentials to encrypted-at-rest values.
+    // Idempotent: already-encrypted enc:v1 values are recognized and left untouched.
+    if (!source.isDemo) encryptCameraSecrets(source);
     source.latestDetection = db.detections.find((item) => item.sourceId === source.id || item.sourceName === source.name) || source.latestDetection || null;
     source.incidentCount = db.incidents.filter((incident) => incident.sourceName === source.name || incident.sourceId === source.id).length;
     source.enabled = source.enabled !== false;
@@ -1867,18 +2366,9 @@ function parseEnvList(key) {
 
 const REAL_CAMERA_SOURCE_TYPES = new Set(["rtsp", "hls", "onvif", "nvr", "dvr", "webcam"]);
 const CAMERA_STATUSES = new Set(["online", "offline", "unknown"]);
-const SECRET_CAMERA_FIELDS = new Set([
-  "streamUrl",
-  "rtspUrl",
-  "hlsUrl",
-  "onvifUrl",
-  "username",
-  "password",
-  "token",
-  "credentials",
-  "apiKey",
-  "secret"
-]);
+// Secret camera fields (streamUrl/username/password/...) are stored encrypted via
+// cameraSecrets.service and must never be returned to clients; see cameraSourceForResponse.
+const SECRET_CAMERA_FIELDS = new Set(CAMERA_SECRET_FIELDS);
 
 function normalizeCameraSourceType(value, { isDemo = false, hasStreamConfig = false } = {}) {
   if (isDemo) return "demo";
@@ -2007,6 +2497,7 @@ function cameraSourceForResponse(db, source) {
     isDemo,
     badge: isDemo ? "DEMO CAMERA / SIMULATED FEED" : "REAL CCTV",
     hasStreamConfig: !isDemo && hasStreamConfig,
+    hasCredentials: !isDemo && Boolean(source.hasCredentials || source.username || source.password),
     streamProxyConfigured: Boolean(source.streamProxyConfigured),
     streamProxyStatus: source.streamProxyConfigured ? "Stream proxy configured" : "Stream proxy not configured",
     lastCheckedAt: source.lastCheckedAt || source.lastTestedAt || source.lastSeenAt || null,
@@ -2079,24 +2570,59 @@ function safeCameraConfigBody(body, existing = {}) {
   if (Object.prototype.hasOwnProperty.call(body, "streamUrl") || Object.prototype.hasOwnProperty.call(body, "rtspUrl")) {
     const streamUrl = String(body.streamUrl || body.rtspUrl || "").trim().slice(0, 500);
     if (streamUrl) next.streamUrl = streamUrl;
-    else if (!existing.id) delete next.streamUrl;
+    else if (!next.streamUrl) delete next.streamUrl;
     delete next.rtspUrl;
   }
   if (Object.prototype.hasOwnProperty.call(body, "username")) {
     const username = String(body.username || "").trim().slice(0, 180);
     if (username) next.username = username;
-    else if (!existing.id) delete next.username;
+    else if (!next.username) delete next.username;
   }
   if (Object.prototype.hasOwnProperty.call(body, "password")) {
     const password = String(body.password || "").slice(0, 300);
     if (password) next.password = password;
-    else if (!existing.id) delete next.password;
+    else if (!next.password) delete next.password;
   }
-  next.hasCredentials = Boolean(next.username || next.password);
+  // Explicit credential clearing: only when the client intentionally sends clearCredentials: true.
+  // Blank/absent credential fields always preserve the stored encrypted secret.
+  if (body.clearCredentials === true) {
+    for (const field of ["username", "password", "token", "apiKey", "secret"]) delete next[field];
+    for (const field of ["streamUrl", "rtspUrl", "hlsUrl", "onvifUrl"]) {
+      if (!next[field]) continue;
+      const value = decryptSecret(next[field]);
+      let parsed;
+      try {
+        parsed = new URL(value);
+      } catch {
+        if (value.includes("@")) {
+          throw Object.assign(new Error("Camera stream URL cannot be safely cleared; replace the stream URL first"), { status: 400 });
+        }
+        continue;
+      }
+      if (parsed.username || parsed.password) {
+        parsed.username = "";
+        parsed.password = "";
+        next[field] = parsed.toString();
+      }
+    }
+  }
+  next.hasCredentials = Boolean(next.username || next.password || ["streamUrl", "rtspUrl", "hlsUrl", "onvifUrl"].some((field) => {
+    if (!next[field]) return false;
+    try {
+      const parsed = new URL(decryptSecret(next[field]));
+      return Boolean(parsed.username || parsed.password);
+    } catch {
+      return false;
+    }
+  }));
   if (!cameraHasStreamConfig(next)) {
     next.status = next.status === "online" ? "unknown" : next.status;
     next.healthReason = "No stream URL configured";
   }
+  // Never persist camera secrets in plaintext (JSON store or PostgreSQL JSONB).
+  // Existing values are already encrypted and pass through unchanged; only new
+  // plaintext values supplied in this request are encrypted here.
+  encryptCameraSecrets(next);
   return next;
 }
 
@@ -2574,7 +3100,7 @@ function integrationStatus() {
       name: "AI Detection Service",
       configured: Boolean(aiServiceUrl),
       status: aiServiceUrl ? "ready" : "setup_required",
-      detail: aiServiceUrl ? (envValue("AI_SERVICE_API_KEY") ? "AI service URL and API key configured." : "AI service URL set; API key authentication is optional but recommended.") : "Enable real detection by configuring the AI service endpoint.",
+      detail: aiServiceUrl ? (envValue("AI_SERVICE_API_KEY") ? "AI service URL and API key configured." : "AI service URL set; AI_SERVICE_API_KEY is required for authenticated inference.") : "Enable real detection by configuring the AI service endpoint.",
       requiredKey: aiServiceUrl ? (envValue("AI_SERVICE_API_KEY") ? null : "AI_SERVICE_API_KEY") : "AI_SERVICE_URL",
       healthUrl: aiServiceUrl ? `${aiServiceUrl.replace(/\/+$/, "")}/health` : "http://localhost:8000/health",
       checkedAt
@@ -2891,6 +3417,106 @@ function unitExclusionReason(unit) {
   return "";
 }
 
+function getUnitCapabilities(unit, db) {
+  const unitId = unit.id || unit.unitId;
+  if (!unitId) return [];
+  return (db.unitCapabilities || []).filter((cap) => cap.unitId === unitId || cap.unit_id === unitId);
+}
+
+function unitHasCapability(unit, db, capabilityType, subtype = null, level = 1) {
+  const caps = getUnitCapabilities(unit, db);
+  return caps.some((cap) => {
+    const capType = cap.capabilityType || cap.capability_type;
+    const capSubtype = cap.subtype;
+    const capLevel = Number(cap.level || 1);
+    if (capType !== capabilityType) return false;
+    if (subtype && capSubtype !== subtype) return false;
+    return capLevel >= level;
+  });
+}
+
+function unitMatchesRequiredCapabilities(unit, db, requiredCapabilities) {
+  if (!requiredCapabilities || !Array.isArray(requiredCapabilities) || requiredCapabilities.length === 0) {
+    return { matches: true, missing: [], reason: "No specific capabilities required" };
+  }
+  const missing = [];
+  for (const req of requiredCapabilities) {
+    const type = req.type || req.capabilityType || req.capability_type;
+    const subtype = req.subtype || req.sub_type || null;
+    const level = Number(req.level || req.minLevel || 1);
+    if (!type) continue;
+    if (!unitHasCapability(unit, db, type, subtype, level)) {
+      missing.push({ type, subtype, level });
+    }
+  }
+  if (missing.length === 0) {
+    return { matches: true, missing: [], reason: "All required capabilities satisfied" };
+  }
+  return { matches: false, missing, reason: `Missing capabilities: ${missing.map(m => `${m.type}${m.subtype ? '/' + m.subtype : ''} (level ${m.level})`).join(', ')}` };
+}
+
+function getEscalationRuleForUnit(unit, db) {
+  const unitSubtype = unit.unitSubtype || unit.unit_subtype;
+  if (!unitSubtype) return null;
+  const caps = getUnitCapabilities(unit, db);
+  const primaryCap = caps[0];
+  if (!primaryCap) return null;
+  const capabilityType = primaryCap.capabilityType || primaryCap.capability_type;
+  return (db.dispatchEscalationRules || []).find((rule) =>
+    rule.active !== false &&
+    (rule.capabilityType || rule.capability_type) === capabilityType &&
+    (rule.unitSubtype || rule.unit_subtype) === unitSubtype
+  );
+}
+
+function checkCrewReadiness(unit, db) {
+  const unitId = unit.id || unit.unitId;
+  if (!unitId) return { ready: true, roles: {}, missing: [], reason: "No unit ID" };
+  const members = (db.responseUnitMembers || []).filter((m) => m.unitId === unitId || m.unit_id === unitId);
+  const roles = {};
+  for (const m of members) {
+    const role = m.role || "member";
+    roles[role] = (roles[role] || 0) + 1;
+  }
+  const hasCommander = (roles.commander || 0) > 0;
+  const hasDriver = (roles.driver || 0) > 0;
+  const hasMedic = (roles.medic || 0) > 0;
+  const missing = [];
+  if (!hasCommander) missing.push("commander");
+  if (!hasDriver) missing.push("driver");
+  const ready = missing.length === 0;
+  return {
+    ready,
+    roles,
+    missing,
+    reason: ready ? "Crew requirements satisfied" : `Missing roles: ${missing.join(', ')}`
+  };
+}
+
+function getStationEligibility(unit, incident, db) {
+  const unitStationId = unit.stationId || unit.station_id;
+  const unitBeatId = unit.beatId || unit.beat_id;
+  const incidentStationId = incident.stationId || incident.station_id;
+  const incidentBeatId = incident.beatId || incident.beat_id;
+  let stationMatch = false;
+  let beatMatch = false;
+  let jurisdictionMatch = false;
+  if (unitStationId && incidentStationId && unitStationId === incidentStationId) {
+    stationMatch = true;
+  }
+  if (unitBeatId && incidentBeatId && unitBeatId === incidentBeatId) {
+    beatMatch = true;
+  }
+  if (!stationMatch && !beatMatch) {
+    const unitJurisdiction = (unit.jurisdiction || "").toLowerCase();
+    const incidentJurisdiction = (incident.jurisdiction || "").toLowerCase();
+    if (unitJurisdiction && incidentJurisdiction && unitJurisdiction === incidentJurisdiction) {
+      jurisdictionMatch = true;
+    }
+  }
+  return { stationMatch, beatMatch, jurisdictionMatch };
+}
+
 function rankedCandidateForResponse(candidate, rank = null) {
   return {
     rank,
@@ -2919,7 +3545,11 @@ function rankedCandidateForResponse(candidate, rank = null) {
     approximate: Boolean(candidate.route.approximate),
     beatMatch: Boolean(candidate.beatMatch),
     loadScore: candidate.loadScore,
-    selectionReason: candidate.selectionReason || ""
+    selectionReason: candidate.selectionReason || "",
+    capabilityMatch: candidate.capabilityMatch,
+    stationEligibility: candidate.stationEligibility,
+    crewReady: candidate.crewReady,
+    escalationRule: candidate.escalationRule
   };
 }
 
@@ -3033,44 +3663,99 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
   const locationError = dispatchLocationError(incident);
   if (locationError) return { error: locationError, status: 409 };
 
+  const requiredCapabilities = incident.requiredCapabilities || incident.required_capabilities || [];
   const policeUnits = db.responseUnits.map(normalizeResponseUnitRecord).filter(isPoliceResponseUnit);
   const operationalPoliceUnits = policeUnits.filter((unit) => unit.operational);
   const assignablePoliceUnits = operationalPoliceUnits.filter(isDispatchAssignablePoliceUnit);
   const realOperationalAvailable = assignablePoliceUnits.some((unit) => unit.status === "available" && !unit.isDemo);
   const available = assignablePoliceUnits.filter((unit) => unit.status === "available" && (!realOperationalAvailable || !unit.isDemo));
+
+  const capabilityExcluded = [];
+  const capabilityMatched = [];
+  for (const unit of available) {
+    const capMatch = unitMatchesRequiredCapabilities(unit, db, requiredCapabilities);
+    if (capMatch.matches) {
+      capabilityMatched.push({ unit, capMatch });
+    } else {
+      capabilityExcluded.push({ unit, capMatch });
+    }
+  }
+
   const excludedUnits = policeUnits
     .map((unit) => ({ ...unitForResponse(unit), exclusionReason: unitExclusionReason(unit) }))
     .map((unit) => (!unit.exclusionReason && realOperationalAvailable && unit.isDemo ? { ...unit, exclusionReason: "Demo unit excluded while real registry units are available" } : unit))
     .filter((unit) => unit.exclusionReason);
+
+  for (const { unit, capMatch } of capabilityExcluded) {
+    excludedUnits.push({
+      ...unitForResponse(unit),
+      exclusionReason: `Capability mismatch: ${capMatch.reason}`
+    });
+  }
+
   const staleUnits = excludedUnits.filter((unit) => /stale/i.test(unit.exclusionReason));
   const warnings = staleUnits.length ? [`${staleUnits.length} available police unit(s) excluded because GPS is stale.`] : [];
   const stationFallbackUnits = available.filter((unit) => normalizeResponseUnitRecord(unit).stationFallback);
   if (stationFallbackUnits.length) warnings.push(`Live GPS unavailable - using station/base location for ${stationFallbackUnits.length} unit(s).`);
   if (available.length && available.every((unit) => normalizeResponseUnitRecord(unit).isDemo)) warnings.push("Demo dispatch mode: using simulated response units.");
-  if (!available.length) return { error: "No available police response units", status: 409, candidates: [], excludedUnits, warnings };
 
-  const withLocation = available.filter((unit) => Boolean(strictPoint(unit)));
-  if (!withLocation.length) return { error: "Available police units have missing or stale GPS", status: 409, candidates: [], excludedUnits, warnings };
+  const capableAvailable = capabilityMatched.map(({ unit }) => unit);
+  if (!capableAvailable.length) {
+    return {
+      error: "No compatible units for required capabilities",
+      status: 409,
+      candidates: [],
+      excludedUnits,
+      warnings,
+      requiredCapabilities,
+      noCompatibleUnit: true
+    };
+  }
+
+  const withLocation = capableAvailable.filter((unit) => Boolean(strictPoint(unit)));
+  if (!withLocation.length) return { error: "Compatible units have missing or stale GPS", status: 409, candidates: [], excludedUnits, warnings };
 
   const candidates = withLocation
-    .map((unit) => ({ unit, freshness: dispatchEligibleFreshness(unit) }))
+    .map((unit) => {
+      const freshness = dispatchEligibleFreshness(unit);
+      const capMatch = unitMatchesRequiredCapabilities(unit, db, requiredCapabilities);
+      const stationElig = getStationEligibility(unit, incident, db);
+      const crewReady = checkCrewReadiness(unit, db);
+      const escalationRule = getEscalationRuleForUnit(unit, db);
+      return {
+        unit,
+        freshness,
+        capMatch,
+        stationElig,
+        crewReady,
+        escalationRule
+      };
+    })
     .filter((item) => item.freshness.eligible)
     .map((item) => ({
       unit: item.unit,
       unitResponse: {
         ...unitForResponse(item.unit),
         locationFreshness: item.freshness.demoGrace ? "Demo" : item.freshness.label,
-        locationAgeMinutes: item.freshness.ageMinutes
+        locationAgeMinutes: item.freshness.ageMinutes,
+        capabilityMatch: item.capMatch,
+        stationEligibility: item.stationElig,
+        crewReadiness: item.crewReady,
+        escalationRule: item.escalationRule
       },
       locationFreshness: item.freshness.demoGrace ? "Demo" : item.freshness.label,
       locationAgeMinutes: item.freshness.ageMinutes,
       beatMatch: unitBeatMatch(item.unit, incident),
+      stationEligibility: item.stationElig,
+      crewReady: item.crewReady,
+      capabilityMatch: item.capMatch,
+      escalationRule: item.escalationRule,
       loadScore: unitLoadScore(item.unit),
       sourcePriority: unitSourcePriority(item.unit),
       straightLineKm: Number(Math.hypot((Number(item.unit.lat) - destination.lat) * 111, (Number(item.unit.lng) - destination.lng) * 100).toFixed(2))
     }))
     .sort((a, b) => a.straightLineKm - b.straightLineKm);
-  if (!candidates.length) return { error: "Available police units have stale GPS", status: 409, candidates: [], excludedUnits, warnings };
+  if (!candidates.length) return { error: "Compatible units have stale GPS", status: 409, candidates: [], excludedUnits, warnings };
 
   const routed = await Promise.all(candidates.map(async (candidate) => ({
     ...candidate,
@@ -3082,20 +3767,33 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
       ...item,
       etaSeconds: item.route.durationSeconds || approximateRouteDurationSeconds(item.route.distanceMeters)
     }))
-    .sort((a, b) => a.etaSeconds - b.etaSeconds
-      || a.route.distanceMeters - b.route.distanceMeters
-      || Number(b.beatMatch) - Number(a.beatMatch)
-      || a.sourcePriority - b.sourcePriority
-      || a.loadScore - b.loadScore
-      || String(a.unit.unitCode || "").localeCompare(String(b.unit.unitCode || "")));
+    .sort((a, b) => {
+      const aCap = a.capabilityMatch?.matches ? 0 : 1;
+      const bCap = b.capabilityMatch?.matches ? 0 : 1;
+      if (aCap !== bCap) return aCap - bCap;
+      const aStation = a.stationEligibility?.stationMatch ? 0 : (a.stationEligibility?.beatMatch ? 1 : (a.stationEligibility?.jurisdictionMatch ? 2 : 3));
+      const bStation = b.stationEligibility?.stationMatch ? 0 : (b.stationEligibility?.beatMatch ? 1 : (b.stationEligibility?.jurisdictionMatch ? 2 : 3));
+      if (aStation !== bStation) return aStation - bStation;
+      return a.etaSeconds - b.etaSeconds
+        || a.route.distanceMeters - b.route.distanceMeters
+        || Number(b.beatMatch) - Number(a.beatMatch)
+        || a.sourcePriority - b.sourcePriority
+        || a.loadScore - b.loadScore
+        || String(a.unit.unitCode || "").localeCompare(String(b.unit.unitCode || ""));
+    });
   if (!usable.length) return { error: "Route service unavailable", status: 503, degraded: true, candidates: [], excludedUnits, warnings };
   const ranked = usable.map((candidate, index) => {
     const etaMinutes = Math.max(1, Math.round(candidate.etaSeconds / 60));
     const distanceKm = Number((candidate.route.distanceMeters / 1000).toFixed(2));
     const sourceLabel = candidate.unitResponse.stationFallback ? "Station fallback" : candidate.unitResponse.sourceLabel;
+    const stationLabel = candidate.stationEligibility?.stationMatch ? "same station"
+      : candidate.stationEligibility?.beatMatch ? "same beat"
+      : candidate.stationEligibility?.jurisdictionMatch ? "same jurisdiction" : "outside jurisdiction";
+    const crewLabel = candidate.crewReady?.ready ? "crew ready" : `crew incomplete (${candidate.crewReady?.missing?.join(', ') || 'unknown'})`;
+    const capLabel = candidate.capabilityMatch?.matches ? "capability match" : "capability mismatch";
     const selectionReason = index === 0
-      ? `Selected because it is available, closest by ETA (${etaMinutes} min), ${distanceKm} km away${candidate.beatMatch ? ", and inside jurisdiction" : ""}. Source: ${sourceLabel}.`
-      : `Ranked by ETA ${etaMinutes} min and distance ${distanceKm} km.`;
+      ? `Selected because it is available, closest by ETA (${etaMinutes} min), ${distanceKm} km away, ${stationLabel}, ${crewLabel}, ${capLabel}. Source: ${sourceLabel}.`
+      : `Ranked by ETA ${etaMinutes} min, distance ${distanceKm} km, station: ${stationLabel}, crew: ${crewLabel}, cap: ${capLabel}.`;
     return { ...candidate, rank: index + 1, selectionReason };
   });
   const selected = ranked[0];
@@ -3107,7 +3805,12 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
     candidates: ranked.map((candidate) => rankedCandidateForResponse(candidate, candidate.rank)),
     excludedUnits,
     warnings,
-    selectionReason: selected.selectionReason
+    selectionReason: selected.selectionReason,
+    requiredCapabilities,
+    capabilityMatch: selected.capabilityMatch,
+    stationEligibility: selected.stationEligibility,
+    crewReady: selected.crewReady,
+    escalationRule: selected.escalationRule
   };
 }
 
@@ -4314,6 +5017,13 @@ async function apiInternal(req, res, url) {
     return sendJson(res, response.status, response.payload);
   }
 
+  const ackIncidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/acknowledge$/);
+  if (req.method === "POST" && ackIncidentMatch) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const response = await acknowledgeIncidentDispatch(ackIncidentMatch[1], body, user);
+    return sendJson(res, response.status, response.payload);
+  }
+
   if (req.method === "POST" && productAssignMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     const response = await assignSelectedIncidentUnit(productAssignMatch[1], body, user);
@@ -4348,10 +5058,11 @@ async function apiInternal(req, res, url) {
     const source = db.cameraSources.find((item) => item.id === cameraConfigMatch[1]);
     if (!source) return sendJson(res, 404, { error: "Camera source not found" });
     if (isDemoCameraSource(source)) return sendJson(res, 400, { error: "Demo camera feeds cannot be converted into real CCTV configuration" });
-    Object.assign(source, safeCameraConfigBody(body, source));
+    const updatedSource = safeCameraConfigBody(body, source);
+    db.cameraSources[db.cameraSources.indexOf(source)] = updatedSource;
     db.auditLogs.unshift({ id: uid("aud"), actorName: user.name, actorRole: user.role, action: "updated_camera_source_config", timestamp: now() });
     await writeDatabase(db);
-    return sendJson(res, 200, { source: cameraSourceForResponse(db, source) });
+    return sendJson(res, 200, { source: cameraSourceForResponse(db, updatedSource) });
   }
 
   const cameraTestMatch = url.pathname.match(/^\/api\/camera-sources\/([^/]+)\/test$/);
@@ -4609,6 +5320,12 @@ async function apiInternal(req, res, url) {
     return sendJson(res, 200, { cleared });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/dispatch/check-escalations") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const result = await runEscalationSweep();
+    return sendJson(res, 200, result);
+  }
+
   const ackAlertMatch = url.pathname.match(/^\/api\/alerts\/([^/]+)\/(?:ack|acknowledge)$/);
   if (["PATCH", "POST"].includes(req.method) && ackAlertMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
@@ -4780,6 +5497,9 @@ module.exports = {
   cameraSourcesForResponse,
   integrationStatus,
   consolidateActiveAiIncidents,
+  checkAndTriggerEscalation,
+  checkAllPendingEscalations,
+  runEscalationSweep,
   __testables: {
     revokeAuthenticatedSession,
     userHasRevokedSession,
@@ -4787,6 +5507,14 @@ module.exports = {
     detectEvidenceMimeType,
     parseEvidenceDataUrl,
     persistEvidenceWithCleanup,
-    videoEvidenceForResponse
+    videoEvidenceForResponse,
+    getUnitCapabilities,
+    unitHasCapability,
+    unitMatchesRequiredCapabilities,
+    getEscalationRuleForUnit,
+    checkCrewReadiness,
+    getStationEligibility,
+    selectBackupUnits,
+    hashString
   }
 };
