@@ -31,6 +31,7 @@ try {
   docker([...args, "up", "--build", "--detach", "--wait", "--wait-timeout", "180", "frontend"]);
   const address = docker([...args, "port", "frontend", "80"], { quiet: true }).trim();
   env.RELEASE_TEST_ORIGIN = `http://${address}`;
+  env.RELEASE_TEST_HTTPS_ORIGIN = env.RELEASE_TEST_ORIGIN.replace(/^http:/, "https:");
   env.RELEASE_TEST_PORT = new URL(env.RELEASE_TEST_ORIGIN).port;
   docker([...args, "up", "--no-deps", "--force-recreate", "--detach", "--wait", "backend"]);
   docker([...args, "up", "--no-deps", "--force-recreate", "--detach", "--wait", "frontend"]);
@@ -39,6 +40,17 @@ try {
   console.log("Isolated PostgreSQL and production frontend release checks passed.");
 } catch (error) {
   console.error(error.message);
+  for (const diagnostic of [
+    [...args, "ps", "--all"],
+    [...args, "logs", "--no-color", "--tail", "200", "frontend"],
+    [...args, "logs", "--no-color", "--tail", "200", "backend"],
+  ]) {
+    try {
+      docker(diagnostic);
+    } catch (diagnosticError) {
+      console.error(`Release diagnostic failed: ${diagnosticError.message}`);
+    }
+  }
   process.exitCode = 1;
 } finally {
   // Only resources labeled with this run's random project name are eligible for cleanup.

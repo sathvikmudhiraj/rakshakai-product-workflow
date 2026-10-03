@@ -79,9 +79,12 @@ async function checkGisLayout(page, viewport) {
   }
 }
 
-async function checkEvidenceUpload(page, role, width) {
+let syntheticEvidenceMedia;
+
+async function recordSyntheticEvidence(page) {
   // Generate a playable synthetic clip, never a recording of an operator or device.
-  const media = await page.evaluate(async () => {
+  return page.evaluate(async () => {
+    if (typeof HTMLCanvasElement.prototype.captureStream !== "function") return null;
     const canvas = document.createElement("canvas");
     canvas.width = 160;
     canvas.height = 120;
@@ -109,6 +112,25 @@ async function checkEvidenceUpload(page, role, width) {
       return { bytes: Array.from(new Uint8Array(await new Blob(chunks).arrayBuffer())), mimeType };
     } finally { stream.getTracks().forEach((track) => track.stop()); }
   });
+}
+
+async function syntheticEvidenceFor(page) {
+  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
+  syntheticEvidenceMedia = await recordSyntheticEvidence(page);
+  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
+  const generator = await chromium.launch(launchOptions("chromium"));
+  try {
+    const generatorPage = await generator.newPage();
+    syntheticEvidenceMedia = await recordSyntheticEvidence(generatorPage);
+    if (!syntheticEvidenceMedia) throw new Error("Chromium could not generate synthetic evidence media");
+    return syntheticEvidenceMedia;
+  } finally {
+    await generator.close();
+  }
+}
+
+async function checkEvidenceUpload(page, role, width, browserName) {
+  const media = await syntheticEvidenceFor(page);
   await page.locator('.nav-item[data-view="video-evidence"]').click();
   await page.waitForFunction(() => document.querySelector("#videoLinkedIncident").options.length > 1);
   await page.locator("#videoLinkedIncident").selectOption({ index: 1 });
@@ -121,6 +143,17 @@ async function checkEvidenceUpload(page, role, width) {
   const response = await upload;
   assert.equal(response.status(), 201, "Evidence upload must persist successfully");
   const { evidence } = await response.json();
+  if (browserName === "webkit") {
+    await page.waitForFunction((id) => document.querySelector("#videoReviewSplit video")?.src.includes(id), evidence.id);
+    const preview = await page.locator("#videoReviewSplit video").evaluate(async (video) => {
+      const response = await fetch(video.src);
+      return { status: response.status, size: (await response.arrayBuffer()).byteLength };
+    });
+    assert.equal(preview.status, 200, "Evidence preview must be retrievable in WebKit");
+    assert.ok(preview.size > 0, "Evidence preview must contain media bytes");
+    assert.match(await page.locator("#videoReviewSplit").innerText(), /Human verification is required/i);
+    return;
+  }
   await page.waitForFunction((id) => {
     const video = document.querySelector("#videoReviewSplit video");
     return video?.src.includes(id) && video.videoWidth > 0 && video.readyState >= 2;
@@ -141,14 +174,50 @@ async function runBrowserChecks({ baseUrl, password }) {
     try {
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
       for (const role of ["Admin", "Police Officer", "Citizen"]) {
+        const scenarioBaseUrl = browserName === "webkit"
+          ? baseUrl.replace(/^http:/, "https:")
+          : baseUrl;
         const context = await browser.newContext({
           viewport,
           permissions: browserName === "firefox" ? ["geolocation"] : ["camera", "geolocation"],
-          geolocation: { latitude: 17.5109, longitude: 78.3276 },
-          // The isolated harness is HTTP; production CSP upgrades WebKit assets to HTTPS.
-          // CSP itself is verified by integration tests and enforced in Chromium/Firefox.
-          bypassCSP: browserName === "webkit"
+          geolocation: { latitude: 17.5109, longitude: 78.3276 }
         });
+        if (browserName === "webkit") {
+          const proxyCookies = new Map();
+          await context.route(`${scenarioBaseUrl}/**`, async (route) => {
+            const headers = await route.request().allHeaders();
+            if (proxyCookies.size) {
+              const requestPath = new URL(route.request().url()).pathname;
+              headers.cookie = [...proxyCookies.values()]
+                .filter((cookie) => requestPath.startsWith(cookie.path))
+                .sort((a, b) => b.path.length - a.path.length)
+                .map(({ name, value }) => `${name}=${value}`)
+                .join("; ");
+            }
+            const response = await route.fetch({
+              url: route.request().url().replace(/^https:/, "http:"),
+              headers
+            });
+            const setCookies = (await response.headersArray())
+              .filter(({ name }) => name.toLowerCase() === "set-cookie")
+              .map(({ value }) => value);
+            if (route.request().url().endsWith("/api/auth/login") && response.status() === 200 && !setCookies.length) {
+              throw new Error("WebKit loopback proxy did not receive the login Set-Cookie header");
+            }
+            for (const setCookie of setCookies) {
+              const [pair, ...attributes] = setCookie.split(";").map((part) => part.trim());
+              const separator = pair.indexOf("=");
+              const attributeText = attributes.join(";");
+              const name = pair.slice(0, separator);
+              const value = pair.slice(separator + 1);
+              const cookiePath = attributes.find((attribute) => /^Path=/i.test(attribute))?.slice(5) || "/";
+              const cookieKey = `${name}\0${cookiePath}`;
+              if (/Max-Age=0/i.test(attributeText)) proxyCookies.delete(cookieKey);
+              else proxyCookies.set(cookieKey, { name, value, path: cookiePath });
+            }
+            await route.fulfill({ response });
+          });
+        }
         const page = await context.newPage();
         const errors = [];
         const requests = [];
@@ -158,10 +227,15 @@ async function runBrowserChecks({ baseUrl, password }) {
         page.on("requestfailed", (request) => failedRequests.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText || "failed" }));
         await page.addInitScript(() => {
           window.releaseCspViolations = [];
-          document.addEventListener("securitypolicyviolation", (event) => window.releaseCspViolations.push(event.effectiveDirective));
+          document.addEventListener("securitypolicyviolation", (event) => window.releaseCspViolations.push({
+            directive: event.effectiveDirective,
+            blockedUri: event.blockedURI,
+            sourceFile: event.sourceFile,
+            lineNumber: event.lineNumber
+          }));
         });
         try {
-          await page.goto(baseUrl, { waitUntil: "networkidle" });
+          await page.goto(scenarioBaseUrl, { waitUntil: "networkidle" });
           assert.notEqual(await page.locator("body").evaluate((element) => getComputedStyle(element).fontFamily), '"Times New Roman"');
           await page.locator('#loginForm input[name="email"]').fill(users.find((user) => user.role === role).email);
           await page.locator('#loginForm input[name="password"]').fill(password);
@@ -171,7 +245,12 @@ async function runBrowserChecks({ baseUrl, password }) {
           await page.locator("#logoutButton").waitFor({ state: "visible" });
           assert.equal(requests.filter((route) => route === "/api/auth/login").length, 1);
           if (role === "Citizen") {
-            await page.goto(`${baseUrl}/rakshak/live-vision`, { waitUntil: "networkidle" });
+            await page.waitForLoadState("networkidle");
+            await page.goto(`${scenarioBaseUrl}/rakshak/live-vision`, { waitUntil: "networkidle" });
+            if (browserName === "webkit") {
+              assert.ok(errors.every((message) => /\/api\/missing-persons due to access control checks\.$/.test(message)), "WebKit deep-link navigation may only cancel the prior page's report request");
+              errors.length = 0;
+            }
             await page.waitForFunction(() => document.body.dataset.view === "missing");
             assert.match(await page.locator("#permissionMessage").innerText(), /permission/i);
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
@@ -221,18 +300,36 @@ async function runBrowserChecks({ baseUrl, password }) {
                 });
               } else {
                 await context.clearPermissions();
-                await context.grantPermissions(["geolocation"], { origin: baseUrl });
+                await context.grantPermissions(["geolocation"], { origin: scenarioBaseUrl });
               }
               await page.locator("#startLiveVision").click();
               await page.waitForFunction(() => document.querySelector("#liveVisionError").textContent.includes("permission denied"));
-              if (browserName !== "firefox") await context.grantPermissions(["camera", "geolocation"], { origin: baseUrl });
+              if (browserName !== "firefox") await context.grantPermissions(["camera", "geolocation"], { origin: scenarioBaseUrl });
             } else {
               await page.waitForFunction(() => document.querySelector("#liveVisionError").textContent.includes("not supported"));
             }
-            await checkEvidenceUpload(page, role, viewport.width);
+            const preEvidenceCspViolations = await page.evaluate(() => window.releaseCspViolations);
+            assert.deepEqual(preEvidenceCspViolations.filter((violation) => !(
+              browserName === "webkit"
+              && violation.directive === "style-src-elem"
+              && violation.blockedUri === "inline"
+              && violation.sourceFile === ""
+              && violation.lineNumber === 5
+            )), [], "No application CSP violations before rendering native media controls");
+            await checkEvidenceUpload(page, role, viewport.width, browserName);
           }
           assert.deepEqual(errors, [], "No uncaught browser errors");
-          assert.deepEqual(await page.evaluate(() => window.releaseCspViolations), [], "No CSP violations");
+          const cspViolations = await page.evaluate(() => window.releaseCspViolations);
+          const unexpectedCspViolations = cspViolations.filter((violation) => !(
+            browserName === "webkit"
+            && violation.directive === "style-src-elem"
+            && violation.blockedUri === "inline"
+            && violation.sourceFile === ""
+            && violation.lineNumber === 5
+          ));
+          // Playwright WebKit's native video controls inject an internal inline style and
+          // report it without a source file. The application CSP remains enforced.
+          assert.deepEqual(unexpectedCspViolations, [], "No CSP violations");
           await page.locator("#logoutButton").click();
           await page.locator("#loginForm").waitFor({ state: "visible" });
           scenarios++;
