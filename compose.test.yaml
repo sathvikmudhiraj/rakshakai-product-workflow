@@ -28,8 +28,8 @@ services:
       SEED_ADMIN_PASSWORD: ${RELEASE_TEST_PASSWORD}
       SEED_POLICE_PASSWORD: ${RELEASE_TEST_PASSWORD}
       SEED_CITIZEN_PASSWORD: ${RELEASE_TEST_PASSWORD}
-      CORS_ORIGIN: ${RELEASE_TEST_ORIGIN:-https://release.example.invalid}
-      FRONTEND_ORIGINS: ${RELEASE_TEST_ORIGIN:-https://release.example.invalid}
+      CORS_ORIGIN: ${RELEASE_TEST_ORIGIN:-https://release.example.invalid},${RELEASE_TEST_HTTPS_ORIGIN:-https://release.example.invalid}
+      FRONTEND_ORIGINS: ${RELEASE_TEST_ORIGIN:-https://release.example.invalid},${RELEASE_TEST_HTTPS_ORIGIN:-https://release.example.invalid}
       EVIDENCE_STORAGE_DRIVER: filesystem
       EVIDENCE_STORAGE_DIR: /app/backend/storage/evidence
       AI_SERVICE_URL: ""

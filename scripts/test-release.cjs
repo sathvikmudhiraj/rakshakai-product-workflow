@@ -31,6 +31,7 @@ try {
   docker([...args, "up", "--build", "--detach", "--wait", "--wait-timeout", "180", "frontend"]);
   const address = docker([...args, "port", "frontend", "80"], { quiet: true }).trim();
   env.RELEASE_TEST_ORIGIN = `http://${address}`;
+  env.RELEASE_TEST_HTTPS_ORIGIN = env.RELEASE_TEST_ORIGIN.replace(/^http:/, "https:");
   env.RELEASE_TEST_PORT = new URL(env.RELEASE_TEST_ORIGIN).port;
   docker([...args, "up", "--no-deps", "--force-recreate", "--detach", "--wait", "backend"]);
   docker([...args, "up", "--no-deps", "--force-recreate", "--detach", "--wait", "frontend"]);
