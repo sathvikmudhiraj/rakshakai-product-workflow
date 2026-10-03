@@ -14,12 +14,20 @@ test("restore PostgreSQL and evidence together into fresh isolated containers", 
   const target = `rakshakai-recovery-target-${suffix}`;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rakshakai-recovery-"));
   const output = path.join(directory, "paired-backup");
-  const env = { ...process.env, RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"), RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex") };
+  const env = {
+    ...process.env,
+    RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"),
+    RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex"),
+    RELEASE_TEST_CAMERA_KEY: crypto.randomBytes(32).toString("hex"),
+  };
   const root = path.resolve(__dirname, "../..");
   function docker(args, quiet = false) {
     const result = spawnSync("docker", args, { cwd: root, env, encoding: "utf8", timeout: 180000, maxBuffer: 15 * 1024 * 1024 });
     if (!quiet) {
-      for (const value of [result.stdout || "", result.stderr || ""]) process.stdout.write(value.replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]").replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]"));
+      for (const value of [result.stdout || "", result.stderr || ""]) process.stdout.write(value
+        .replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]")
+        .replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]")
+        .replaceAll(env.RELEASE_TEST_CAMERA_KEY, "[REDACTED]"));
     }
     if (result.error || result.status !== 0) throw new Error(`Docker ${args[0]} failed in isolated recovery drill`);
     return result.stdout.trim();

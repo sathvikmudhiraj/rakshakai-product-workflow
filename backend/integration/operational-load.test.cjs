@@ -148,12 +148,20 @@ if (process.env.RAKSHAKAI_LOAD_TEST === "isolated") {
 } else {
   test("run isolated operational load drill", { timeout: 360000 }, () => {
     const project = `rakshakai-load-${crypto.randomBytes(6).toString("hex")}`;
-    const env = { ...process.env, RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"), RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex") };
+    const env = {
+      ...process.env,
+      RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"),
+      RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex"),
+      RELEASE_TEST_CAMERA_KEY: crypto.randomBytes(32).toString("hex"),
+    };
     env.DATABASE_URL = `postgresql://release_test:${env.RELEASE_TEST_PASSWORD}@postgres:5432/rakshakai_test_release`;
     const args = ["compose", "--project-name", project, "--file", "compose.test.yaml"];
     function docker(command, quiet = false) {
       const result = spawnSync("docker", command, { cwd: path.resolve(__dirname, "../.."), env, encoding: "utf8", timeout: 240000, maxBuffer: 15 * 1024 * 1024 });
-      if (!quiet) for (const value of [result.stdout || "", result.stderr || ""]) process.stdout.write(value.replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]").replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]"));
+      if (!quiet) for (const value of [result.stdout || "", result.stderr || ""]) process.stdout.write(value
+        .replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]")
+        .replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]")
+        .replaceAll(env.RELEASE_TEST_CAMERA_KEY, "[REDACTED]"));
       if (result.error || result.status !== 0) throw new Error("Isolated load Docker operation failed");
       return result.stdout.trim();
     }

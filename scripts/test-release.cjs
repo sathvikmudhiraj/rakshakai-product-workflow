@@ -3,11 +3,19 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 
 const project = `rakshakai-release-test-${crypto.randomBytes(6).toString("hex")}`;
-const env = { ...process.env, RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"), RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex") };
+const env = {
+  ...process.env,
+  RELEASE_TEST_PASSWORD: crypto.randomBytes(24).toString("hex"),
+  RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex"),
+  RELEASE_TEST_CAMERA_KEY: crypto.randomBytes(32).toString("hex"),
+};
 const args = ["compose", "--project-name", project, "--file", "compose.test.yaml"];
 function docker(command, { quiet = false } = {}) {
   const result = spawnSync("docker", command, { env, cwd: path.resolve(__dirname, ".."), encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-  const redact = (text = "") => text.replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]").replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]");
+  const redact = (text = "") => text
+    .replaceAll(env.RELEASE_TEST_PASSWORD, "[REDACTED]")
+    .replaceAll(env.RELEASE_TEST_JWT, "[REDACTED]")
+    .replaceAll(env.RELEASE_TEST_CAMERA_KEY, "[REDACTED]");
   if (!quiet) {
     process.stdout.write(redact(result.stdout));
     process.stderr.write(redact(result.stderr));
