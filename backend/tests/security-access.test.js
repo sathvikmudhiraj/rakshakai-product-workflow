@@ -3490,7 +3490,7 @@ test("frontend HTML-serving layers enforce a restrictive CSP", () => {
   assert.match(nginx, /add_header Content-Security-Policy "\$\{RAKSHAKAI_CSP\}" always;/);
   assert.match(dockerfile, /COPY csp\.config\.cjs \/etc\/rakshakai\/csp\.config\.cjs/);
   assert.match(dockerfile, /COPY frontend\/nginx\.conf \/etc\/nginx\/templates\/default\.conf\.template/);
-  assert.match(dockerfile, /COPY frontend\/docker-entrypoint\.d\/10-csp-defaults\.sh \/docker-entrypoint\.d\/10-csp-defaults\.envsh/);
+  assert.match(dockerfile, /COPY --chmod=755 frontend\/docker-entrypoint\.d\/10-csp-defaults\.sh \/docker-entrypoint\.d\/10-csp-defaults\.envsh/);
   assert.match(entrypoint, /node \/docker-entrypoint\.d\/render-csp\.cjs/);
   assert.match(renderer, /buildRakshakaiCsp/);
   assert.match(viteConfig, /res\.setHeader\("Content-Security-Policy", DEVELOPMENT_CSP\)/);
