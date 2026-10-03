@@ -39,6 +39,17 @@ try {
   console.log("Isolated PostgreSQL and production frontend release checks passed.");
 } catch (error) {
   console.error(error.message);
+  for (const diagnostic of [
+    [...args, "ps", "--all"],
+    [...args, "logs", "--no-color", "--tail", "200", "frontend"],
+    [...args, "logs", "--no-color", "--tail", "200", "backend"],
+  ]) {
+    try {
+      docker(diagnostic);
+    } catch (diagnosticError) {
+      console.error(`Release diagnostic failed: ${diagnosticError.message}`);
+    }
+  }
   process.exitCode = 1;
 } finally {
   // Only resources labeled with this run's random project name are eligible for cleanup.
