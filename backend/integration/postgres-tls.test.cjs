@@ -75,6 +75,9 @@ if (process.env.RAKSHAKAI_TLS_TEST_CONTAINER === "1") {
     let databaseCreated = false;
     try {
       run(openssl, ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=tls-db.example.invalid", "-addext", "subjectAltName=DNS:tls-db.example.invalid", "-keyout", path.join(directory, "server.key"), "-out", path.join(directory, "server.crt")], { quiet: true });
+      fs.chmodSync(directory, 0o755);
+      fs.chmodSync(path.join(directory, "server.crt"), 0o644);
+      fs.chmodSync(path.join(directory, "server.key"), 0o600);
       run("docker", ["build", "-q", "-f", "backend/Dockerfile", "-t", image, "."]);
       imageCreated = true;
       run("docker", ["network", "create", id]);
@@ -87,6 +90,7 @@ if (process.env.RAKSHAKAI_TLS_TEST_CONTAINER === "1") {
         if (run("docker", ["exec", database, "pg_isready", "-h", "127.0.0.1", "-U", "tls_test", "-d", "tls_test"], { quiet: true, allowFailure: true }) === 0) { ready = true; break; }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
+      if (!ready) run("docker", ["logs", database], { allowFailure: true });
       assert.equal(ready, true, "isolated TLS PostgreSQL becomes ready");
       run("docker", ["run", "--rm", "--name", client, "--network", id,
         "--mount", `type=bind,source=${path.join(directory, "server.crt")},target=/tls/server.crt,readonly`,
