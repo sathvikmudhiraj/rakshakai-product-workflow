@@ -18,7 +18,7 @@ FROM nginx:1.27-alpine
 RUN apk add --no-cache nodejs
 COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template
 COPY csp.config.cjs /etc/rakshakai/csp.config.cjs
-COPY frontend/docker-entrypoint.d/10-csp-defaults.sh /docker-entrypoint.d/10-csp-defaults.envsh
+COPY --chmod=755 frontend/docker-entrypoint.d/10-csp-defaults.sh /docker-entrypoint.d/10-csp-defaults.envsh
 COPY frontend/docker-entrypoint.d/render-csp.cjs /docker-entrypoint.d/render-csp.cjs
 COPY --from=build /app/dist /usr/share/nginx/html
 
