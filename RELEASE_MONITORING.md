@@ -1,10 +1,12 @@
 # Release Gates and Monitoring
 
-The pending `.github/workflows/release-checks.yml` runs syntax/unit tests, frontend
+The `.github/workflows/release-checks.yml` workflow runs syntax/unit tests, frontend
 builds, dependency audits, browser/PostgreSQL release checks, TLS verification,
 paired backup/recovery, and the isolated operational load drill. The workflow
 does not deploy. Require its `verify` job through repository branch protection
-before merging; this is a GitHub setting and has not been configured locally.
+before merging. The repository currently requires the `verify` check on `main`,
+enforces it for administrators, requires one approving review and last-push
+approval, dismisses stale reviews, and blocks force pushes and branch deletion.
 
 Run the same checks locally using the commands in that workflow. A failing
 browser, audit or integration check blocks release; do not bypass it or claim
@@ -67,8 +69,8 @@ deadline. Test representative long requests before setting production timeouts.
 
 ## Deployment Work Still Required
 
-Configure branch protection, a supervised monitor, a real alert receiver,
-durable log retention, an external availability monitor, and an alert owner.
+Maintain branch protection and configure a supervised monitor, a real alert
+receiver, durable log retention, an external availability monitor, and an alert owner.
 Perform a controlled notification drill and verify receipt/recovery at the
 actual receiver. No production infrastructure, repository settings, secret
 values or external notification destinations are changed by this implementation.

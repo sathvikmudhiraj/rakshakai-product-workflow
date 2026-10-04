@@ -135,6 +135,35 @@ CREATE TABLE IF NOT EXISTS app_state (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS evidence_custody_events (
+  id TEXT PRIMARY KEY,
+  evidence_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT NOT NULL,
+  actor_role TEXT NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE OR REPLACE FUNCTION reject_evidence_custody_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'evidence custody events are append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS evidence_custody_events_append_only ON evidence_custody_events;
+CREATE TRIGGER evidence_custody_events_append_only
+BEFORE UPDATE OR DELETE ON evidence_custody_events
+FOR EACH ROW EXECUTE FUNCTION reject_evidence_custody_mutation();
+
+DROP TRIGGER IF EXISTS evidence_custody_events_no_truncate ON evidence_custody_events;
+CREATE TRIGGER evidence_custody_events_no_truncate
+BEFORE TRUNCATE ON evidence_custody_events
+FOR EACH STATEMENT EXECUTE FUNCTION reject_evidence_custody_mutation();
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -260,6 +289,7 @@ CREATE INDEX IF NOT EXISTS idx_response_units_station_id ON response_units(stati
 CREATE INDEX IF NOT EXISTS idx_response_units_beat_id ON response_units(beat_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_events_incident_id ON dispatch_events(incident_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_evidence_custody_evidence_time ON evidence_custody_events(evidence_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_police_stations_operational ON police_stations(operational);
 CREATE INDEX IF NOT EXISTS idx_police_stations_station_code ON police_stations(station_code);
 CREATE INDEX IF NOT EXISTS idx_police_beats_station_id ON police_beats(station_id);

@@ -32,6 +32,7 @@ const responseUnitMembersRepository = require("../repositories/responseUnitMembe
 const unitCapabilitiesRepository = require("../repositories/unitCapabilities.repository");
 const dispatchEscalationLogRepository = require("../repositories/dispatchEscalationLog.repository");
 const dispatchEscalationRulesRepository = require("../repositories/dispatchEscalationRules.repository");
+const evidenceCustodyRepository = require("../repositories/evidenceCustody.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -194,7 +195,8 @@ async function readDatabase() {
     unitCapabilities,
     dispatchEscalationLogs,
     dispatchEscalationRules,
-    stateResult
+    stateResult,
+    evidenceCustodyEvents
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -212,9 +214,20 @@ async function readDatabase() {
     unitCapabilitiesRepository.list(defaults),
     dispatchEscalationLogRepository.list(defaults),
     dispatchEscalationRulesRepository.list(defaults),
-    query("SELECT data FROM app_state WHERE key = 'operational'")
+    query("SELECT data FROM app_state WHERE key = 'operational'"),
+    evidenceCustodyRepository.list()
   ]);
   const state = stateResult.rows[0]?.data || {};
+  const custodyByEvidence = new Map();
+  for (const event of evidenceCustodyEvents) {
+    const events = custodyByEvidence.get(event.evidenceId) || [];
+    events.push(event);
+    custodyByEvidence.set(event.evidenceId, events);
+  }
+  const videoEvidence = (state.videoEvidence || []).map((evidence) => ({
+    ...evidence,
+    chainOfCustody: custodyByEvidence.get(evidence.id) || evidence.chainOfCustody || []
+  }));
   return ensureProductShape({
     ...defaults,
     ...state,
@@ -233,7 +246,8 @@ async function readDatabase() {
     responseUnitMembers,
     unitCapabilities,
     dispatchEscalationLogs,
-    dispatchEscalationRules
+    dispatchEscalationRules,
+    videoEvidence
   });
 }
 
@@ -298,6 +312,7 @@ async function writeDatabase(db) {
         await client.query(`DELETE FROM ${repository.table}`);
       }
     }
+    await evidenceCustodyRepository.appendFromEvidence(db.videoEvidence || [], client);
     await client.query(
       `INSERT INTO app_state (key, data) VALUES ('operational', $1::jsonb)
        ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
@@ -306,7 +321,7 @@ async function writeDatabase(db) {
         zones: db.zones || [],
         devices: db.devices || [],
         detections: db.detections || [],
-        videoEvidence: db.videoEvidence || [],
+        videoEvidence: (db.videoEvidence || []).map((evidence) => ({ ...evidence, chainOfCustody: [] })),
         policeStations: db.policeStations || [],
         policeBeats: db.policeBeats || [],
         officerRanks: db.officerRanks || [],
@@ -337,6 +352,7 @@ async function writeSelectedRecords(db, recordsByRepository) {
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
     }
+    await evidenceCustodyRepository.appendFromEvidence(db.videoEvidence || [], client);
   });
 }
 
@@ -2789,6 +2805,7 @@ function assertSafeEvidencePayload(payload) {
 
 function recordEvidenceAudit(db, evidence, action, user, notes = "", timestamp = now()) {
   const custody = {
+    id: uid("custody"),
     action,
     actorId: user?.id || null,
     actorName: user?.name || "RakshakAI System",
@@ -2796,7 +2813,7 @@ function recordEvidenceAudit(db, evidence, action, user, notes = "", timestamp =
     timestamp,
     notes: String(notes || "").slice(0, 500)
   };
-  evidence.chainOfCustody = [custody, ...(evidence.chainOfCustody || [])].slice(0, 50);
+  evidence.chainOfCustody = [custody, ...(evidence.chainOfCustody || [])];
   return addAuditLog(db, action, user || "RakshakAI System", evidence.linkedIncidentId || null, `${evidence.id}${notes ? `: ${String(notes).slice(0, 180)}` : ""}`, timestamp);
 }
 
@@ -4001,7 +4018,13 @@ async function apiInternal(req, res, url) {
     const role = "Citizen";
     if (name.length < 2) return sendJson(res, 400, { error: "Enter a valid name" });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: "Enter a valid email" });
-    if (password.length < 6) return sendJson(res, 400, { error: "Password must be at least 6 characters" });
+    if (password.length < 12
+      || password.length > 128
+      || !/[a-z]/.test(password)
+      || !/[A-Z]/.test(password)
+      || !/\d/.test(password)) {
+      return sendJson(res, 400, { error: "Password must be 12 to 128 characters and include uppercase, lowercase, and a number" });
+    }
     if (db.users.some((u) => normalizeEmail(u.email) === email)) return sendJson(res, 409, { error: "Email already registered. Please login." });
     const created = { id: uid("u"), name, email, role, passwordHash: await bcrypt.hash(password, 12), createdAt: now() };
     db.users.push(created);

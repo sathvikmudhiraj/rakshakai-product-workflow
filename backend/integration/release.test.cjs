@@ -62,6 +62,22 @@ test("production readiness covers PostgreSQL and writable evidence storage", asy
   assert.equal((await request("/api/live")).status, 200);
 });
 
+test("evidence custody relation rejects mutation and deletion", async () => {
+  const id = "custody_release_append_only";
+  await query(
+    `INSERT INTO evidence_custody_events
+      (id, evidence_id, action, actor_name, actor_role, occurred_at, notes, data)
+     VALUES ($1, 'evd_release_fixture', 'release_check', 'Release Test', 'System', NOW(), 'original', '{}'::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [id]
+  );
+  await assert.rejects(query("UPDATE evidence_custody_events SET notes = 'changed' WHERE id = $1", [id]), /append-only/);
+  await assert.rejects(query("DELETE FROM evidence_custody_events WHERE id = $1", [id]), /append-only/);
+  await assert.rejects(query("TRUNCATE evidence_custody_events"), /append-only/);
+  const stored = await query("SELECT notes FROM evidence_custody_events WHERE id = $1", [id]);
+  assert.equal(stored.rows[0].notes, "original");
+});
+
 test("production readiness rejects unwritable evidence while liveness remains available", async () => {
   const directory = process.env.EVIDENCE_STORAGE_DIR;
   const originalMode = fs.statSync(directory).mode & 0o777;
@@ -96,7 +112,7 @@ test("a real deferred PostgreSQL constraint failure cannot send success or a log
   await query(`CREATE CONSTRAINT TRIGGER release_reject_user AFTER INSERT ON users DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION release_reject_user()`);
   try {
     const before = (await query("SELECT count(*)::int AS count FROM users")).rows[0].count;
-    const response = await request("/api/register", { method: "POST", body: { name: "Release Test", email: "release-test@example.invalid", password } });
+    const response = await request("/api/register", { method: "POST", body: { name: "Release Test", email: "release-test@example.invalid", password: "ReleaseCitizen123" } });
     assert.equal(response.status, 500);
     assert.equal(response.headers.get("set-cookie"), null);
     assert.equal((await query("SELECT count(*)::int AS count FROM users")).rows[0].count, before);

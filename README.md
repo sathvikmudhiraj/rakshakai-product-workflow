@@ -9,6 +9,10 @@ RakshakAI is split into three services:
 The complete stack can also run with Docker Compose. See
 [DOCKER.md](DOCKER.md).
 
+For rollout boundaries and unresolved production gates, see
+[PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) and
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
 ## Run the Full App
 
 ```powershell

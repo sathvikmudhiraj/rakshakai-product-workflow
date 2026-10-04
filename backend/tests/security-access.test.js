@@ -603,13 +603,24 @@ test("more than 100 logouts cannot resurrect an unexpired revoked session", () =
 });
 
 test("Public registration always creates Citizen accounts only", async () => {
+  const weak = await request("/api/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({
+      name: "Weak Password Attempt",
+      email: "weak.password.attempt@rakshakai.local",
+      password: "Citizen123"
+    })
+  });
+  assert.equal(weak.status, 400);
+
   const response = await request("/api/register", {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify({
       name: "Public Staff Attempt",
       email: "public.staff.attempt@rakshakai.local",
-      password: "Citizen123",
+      password: "CitizenAccess123",
       role: "Police Officer"
     })
   });

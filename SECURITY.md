@@ -15,6 +15,13 @@ RakshakAI authenticates browser users with signed JWT session cookies.
 
 Changing `JWT_SECRET` invalidates existing sessions.
 
+Public registration creates Citizen accounts only. New public passwords must be
+12 to 128 characters and contain uppercase, lowercase, and numeric characters.
+Administrative password changes use a separate authenticated workflow. A public
+safety deployment still requires an external identity provider with MFA,
+central revocation, device/session inventory, lockout policy, mandatory reset
+enforcement, and periodic privileged-access review.
+
 ## API protections
 
 - Helmet adds baseline security response headers.
