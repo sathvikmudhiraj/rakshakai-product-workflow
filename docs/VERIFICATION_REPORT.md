@@ -1,5 +1,12 @@
 # RakshakAI — Verification & Hardening Report
 
+> Historical verification snapshot. This document is not a production setup
+> guide and its older readiness labels and test counts are not current release
+> evidence. Use `PRODUCTION_SETUP.md`, `PRODUCTION_READINESS.md`, and the latest
+> protected `main` workflow. The product does not implement face recognition or
+> raw RTSP ingest/playback, and no accuracy claim is approved without a
+> versioned model-validation record.
+
 **Date:** June 23, 2026  
 **Scope:** Full runtime verification, security hardening, UI polish, and stability audit  
 **Status:** Enterprise-ready MVP — ✅ All critical checks passed

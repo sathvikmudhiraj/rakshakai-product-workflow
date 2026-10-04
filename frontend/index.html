@@ -79,7 +79,7 @@
             <label>
               Password
               <span class="password-field">
-                <input type="password" name="password" placeholder="Minimum 6 characters" autocomplete="new-password" required />
+                <input type="password" name="password" minlength="12" maxlength="128" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}" title="Use 12 to 128 characters with uppercase, lowercase, and a number" placeholder="12+ characters with mixed case and a number" autocomplete="new-password" required />
                 <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
