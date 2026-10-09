@@ -29,6 +29,10 @@ import {
 import { renderDetectionBoxes } from "./liveVisionOverlay.js";
 import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveillanceSeverity } from "./liveVisionPolicy.js";
 import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
+import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } from "./browserGeolocation.js";
+import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
+import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
+import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
@@ -52,14 +56,19 @@ const state = {
   alertFilter: "all",
   auditFilter: "all",
   alerts: [],
+  escalationAlerts: [],
   reports: [],
   responseUnits: [],
   responseUnitSummary: {},
+  telemetryUnit: null,
   policeStations: [],
   mapDefaultCenter: { lat: 17.5109, lng: 78.3276 },
   selectedUnitId: null,
   dispatchCandidates: [],
   dispatchWarnings: [],
+  dispatchRecommendation: null,
+  dispatchSupportRoutes: [],
+  dispatchAlternativesVisible: false,
   zones: [],
   cameraSources: [],
   cameraFilters: { kind: "all", sourceType: "all", status: "all" },
@@ -88,8 +97,18 @@ const state = {
 };
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
+let realtimeUnsubscribers = [];
 let registerSubmissionInFlight = false;
 let browserNavigationRestoreInProgress = false;
+let browserLocationWatchId = null;
+let lastUnitTelemetrySent = null;
+let pendingUnitTelemetryPoint = null;
+let unitTelemetryInFlight = false;
+let backendUnitTrackingActive = false;
+let unitTelemetryPollTimer = null;
+let unitGpsStatusTimer = null;
+let lastUnitTelemetryRenderFingerprint = "";
+let unitGpsUi = { mode: "stopped", message: "GPS tracking stopped", point: null, updatedAt: null };
 const TILE_SIZE = 256;
 const MIN_MAP_ZOOM = 2;
 const MAX_MAP_ZOOM = 19;
@@ -336,9 +355,57 @@ function setAuthMode(mode = "login", message = "") {
 }
 
 function showPortal(message = "", mode = "login") {
+  stopUnitTelemetryPolling();
+  disconnectSocket();
+  realtimeUnsubscribers.forEach((unsubscribe) => unsubscribe());
+  realtimeUnsubscribers = [];
+  removeGlobalBanner();
+  removeRequiresAttentionPanel();
   $("#portalLogin").classList.remove("app-hidden");
   $("#appShell").classList.add("app-hidden");
   setAuthMode(mode, message);
+}
+
+function openEscalationIncident(incidentId) {
+  state.selectedIncidentId = incidentId;
+  setView("incident-command");
+  renderIncidentCommand();
+}
+
+async function acknowledgeEscalation(alertId) {
+  await api(`/api/escalation/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST" });
+  await loadPersistentEscalations();
+}
+
+function renderPersistentEscalations(modalAlert = null) {
+  if (!isOperatorRole()) return;
+  const active = state.escalationAlerts.filter((alert) => alert.active);
+  const criticalCount = active.filter((alert) => String(alert.severity).toUpperCase() === "CRITICAL").length;
+  createGlobalBanner(criticalCount, () => setView("incident-command"));
+  const panel = createRequiresAttentionPanel(active, openEscalationIncident, acknowledgeEscalation);
+  const host = document.querySelector("[data-panel='dashboard'] .dashboard-grid") || document.querySelector("[data-panel='incident-command'] .incident-command-rail");
+  if (host && !panel.isConnected) host.prepend(panel);
+  if (modalAlert && String(modalAlert.severity).toUpperCase() === "CRITICAL" && modalAlert.active) {
+    createCriticalModal(modalAlert, openEscalationIncident, acknowledgeEscalation);
+  }
+}
+
+async function loadPersistentEscalations(modalAlert = null) {
+  if (!isOperatorRole()) return;
+  const response = await api("/api/escalation/alerts?active=true&limit=100");
+  state.escalationAlerts = response.alerts || [];
+  const persisted = modalAlert?.id ? state.escalationAlerts.find((alert) => alert.id === modalAlert.id) : null;
+  renderPersistentEscalations(persisted);
+}
+
+function initializeRealtimeAlerts() {
+  if (!isOperatorRole()) return;
+  initializeSocket(state.user);
+  if (realtimeUnsubscribers.length) return;
+  const events = ["critical_incident_created", "incident_assignment_warning", "incident_assignment_breached", "response_sla_breached", "escalation_level_changed", "investigation_overdue", "escalation_alert_created", "escalation_alert_resolved"];
+  realtimeUnsubscribers = events.map((eventName) => onRealtime(eventName, (payload) => {
+    loadPersistentEscalations(payload?.alert || null).catch((error) => console.warn("Could not refresh escalation alerts:", error.message));
+  }));
 }
 
 function showApp() {
@@ -1284,6 +1351,13 @@ function updateGisButtonStates() {
   applyGisButtonState($("#streetMapLayer"), states.street);
   applyGisButtonState($("#satelliteMapLayer"), states.satellite);
   applyGisButtonState($("#useMyLocation"), states.location);
+  applyGisButtonState($("#toggleLocationTracking"), states.tracking);
+  const trackingButton = $("#toggleLocationTracking");
+  if (trackingButton && state.user?.role === "Police Officer" && !state.telemetryUnit && !state.mapNavigation.locationTracking) {
+    trackingButton.disabled = true;
+    trackingButton.title = "No authorised response unit is assigned to this Police account.";
+    trackingButton.setAttribute("aria-label", trackingButton.title);
+  }
   applyGisButtonState($("#fitGisMap"), states.fit);
   applyGisButtonState($("#resetGisMap"), states.reset);
   applyGisButtonState($("#setMapStart"), states.start);
@@ -1400,7 +1474,7 @@ function markerStatusClass(value) {
 
 function activeRouteWorkflow() {
   const nav = state.mapNavigation;
-  return Boolean(nav.route || nav.routeLoading || nav.selectionMode || nav.start || nav.destination || nav.searchPreview);
+  return Boolean(nav.route || nav.routeLoading || nav.locationTracking || nav.selectionMode || nav.start || nav.destination || nav.searchPreview || nav.currentLocation);
 }
 
 function markerDescriptorKey(descriptor) {
@@ -1505,6 +1579,23 @@ function renderNavigationOverlay(instance) {
       renderSatelliteMaps();
     });
   });
+  (state.dispatchSupportRoutes || []).forEach((support, index) => {
+    const points = (support.route?.geometry?.coordinates || [])
+      .map(([lng, lat]) => validMapPoint({ lat, lng }))
+      .filter(Boolean)
+      .map((point) => [point.lat, point.lng]);
+    if (points.length >= 2) {
+      L.polyline(points, {
+        className: `route-line leaflet-route-line station-support ${support.route?.isApproximate ? "approximate" : ""}`,
+        color: index ? "#6750a4" : "#cf5b20",
+        weight: 5,
+        opacity: 0.86,
+        dashArray: support.route?.isApproximate || support.route?.approximate ? "10 8" : "7 5"
+      }).addTo(instance.leafletRouteLayer);
+    }
+    const stationPoint = validMapPoint(support);
+    if (stationPoint) addLeafletMarker(instance, stationPoint, "route-marker support-marker", `S${index + 1}`, "Station support", `${support.stationName} support route`);
+  });
   [
     [routeWorkflow ? start : null, "route-marker start-marker", "S"],
     [routeWorkflow ? destination : null, "route-marker destination-marker", "D"],
@@ -1602,7 +1693,7 @@ function renderNavigationOverlay(instance) {
       const status = unitDispatchStatus(unit);
       const assigned = activeIncident()?.assignedUnitId === unit.id ? " assigned" : "";
       const selected = state.selectedUnitId === unit.id ? " selected" : "";
-      const title = `${unitLabel(unit)}: ${displayValue(status)} - ${unitTypeLabel(unit)} - ${unit.sourceBadge || unit.sourceLabel || displayValue(unit.source)} - ${unit.currentAddress || unit.zone || "Location unavailable"} - updated ${unit.lastLocationUpdatedAt ? alertTime(unit.lastLocationUpdatedAt) : "unknown"}`;
+      const title = `${unitLabel(unit)}: ${displayValue(status)} - ${unitTypeLabel(unit)} - ${unit.sourceBadge || unit.sourceLabel || displayValue(unit.source)} - ${unit.currentAddress || unit.zone || "Location unavailable"} - ${unitLocationAgeText(unit)} - ${unitAccuracyText(unit)} - ${unitFreshnessText(unit)}`;
       descriptors.push({
         type: "unit",
         id: unit.id || unit.unitCode || unit.name,
@@ -1646,7 +1737,14 @@ function clearGisSelectionUi() {
 }
 
 function resetGisNavigationState(message = "", { preserveRoute = false } = {}) {
-  if (!preserveRoute) state.mapNavigation = emptyMapNavigationState();
+  if (!preserveRoute) {
+    if (browserLocationWatchId !== null || state.mapNavigation.locationTracking || backendUnitTrackingActive) {
+      stopLocationTracking("Tracking stopped", { updateNavigation: false });
+    } else {
+      releaseLocationTracking();
+    }
+    state.mapNavigation = emptyMapNavigationState();
+  }
   else state.mapNavigation.selectionMode = null;
   clearGisSelectionUi();
   satelliteMaps.forEach(removeNavigationLayerArtifacts);
@@ -1773,7 +1871,7 @@ function unitCard(unit, compact = false) {
     node("span", "", `${displayValue(status)} - ${unitTypeLabel(unit)} - ${unit.sourceBadge || unit.sourceLabel || displayValue(unit.source)}`),
     node("small", "", unit.currentAddress || unit.address || unit.zone || "Location address unavailable"),
     node("small", "", `Station: ${unit.stationName || unit.station || "Not linked"} - Beat: ${unit.beat || unit.sector || "Unassigned"}`),
-    node("small", "", `Updated: ${unit.lastLocationUpdatedAt ? alertTime(unit.lastLocationUpdatedAt) : "unknown"}${unit.locationFreshness ? ` - ${unit.locationFreshness}` : ""}`)
+    node("small", "", `${unitLocationAgeText(unit)} - ${unitAccuracyText(unit)} - ${unitFreshnessText(unit)}`)
   );
   if (unit.isDemo || unit.sourceNotes) card.append(node("small", unit.isDemo ? "location-warning" : "", unit.sourceNotes || "Simulated unit for demo"));
   if (point) {
@@ -1822,14 +1920,97 @@ function renderUnitPanel(selector) {
   panel.append(list);
 }
 
+function renderHybridDispatchRecommendation(panel, recommendation) {
+  if (!recommendation) return;
+  const primary = recommendation.primary;
+  const primaryCard = node("article", "hybrid-dispatch-card primary-response");
+  primaryCard.append(node("span", "eyebrow", "Primary Rapid Response"));
+  if (primary) {
+    const unitName = primary.unit?.unitCode || primary.unitId;
+    const officerName = (primary.officers || []).map((officer) => officer.name).join(", ") || primary.unit?.officerName || "Assigned officer";
+    const routeState = primary.route?.approximate ? "ROUTE: APPROXIMATE" : "Verified route";
+    const freshness = primary.unit?.locationFreshnessState || primary.unit?.locationFreshness || "UNAVAILABLE";
+    primaryCard.append(
+      node("strong", "", unitName + " · " + officerName),
+      node("small", "", primary.etaMinutes + " min · " + primary.distanceKm + " km · " + routeState),
+      node("small", "", "GPS " + freshness + " · " + (primary.unit?.locationAgeSeconds ?? "--") + " sec · accuracy " + (primary.unit?.locationAccuracy ?? "--") + "m"),
+      node("p", "dispatch-reason", primary.selectionReason || "Fastest eligible live responder")
+    );
+  } else {
+    primaryCard.append(node("strong", "location-warning", "No eligible live responder"), node("small", "", "Station-team fallback is active."));
+  }
+  panel.append(primaryCard);
+  (recommendation.stationSupport?.allocations || []).forEach((allocation, index) => {
+    const supportCard = node("article", "hybrid-dispatch-card " + (index ? "additional-support" : "station-support"));
+    const routeState = allocation.approximate ? "ROUTE: APPROXIMATE" : "Verified route";
+    supportCard.append(
+      node("span", "eyebrow", index ? "Additional Support" : "Station Support"),
+      node("strong", "", allocation.stationName || allocation.stationCode),
+      node("small", "", "ETA " + allocation.etaMinutes + " min · " + allocation.distanceKm + " km · " + routeState),
+      node("small", "", "Available: " + allocation.availableOfficers + " officers, " + allocation.availableUnits + " units"),
+      node("small", "", "Recommended: " + allocation.recommendedOfficers + " officers, " + allocation.recommendedUnits + " units"),
+      node("p", "dispatch-reason", allocation.reason)
+    );
+    panel.append(supportCard);
+  });
+  const remainingOfficers = recommendation.stationSupport?.officersRemaining || 0;
+  const remainingUnits = recommendation.stationSupport?.unitsRemaining || 0;
+  if (remainingOfficers || remainingUnits) {
+    panel.append(node("p", "location-warning", "Unfilled requirement: " + remainingOfficers + " officers and " + remainingUnits + " units."));
+  }
+  const excludedUnits = recommendation.primaryExcludedUnits || [];
+  const allocatedStationIds = new Set((recommendation.stationSupport?.allocations || []).map((allocation) => allocation.stationId));
+  const otherStations = (recommendation.stationSupport?.candidates || [])
+    .filter((candidate) => !allocatedStationIds.has(candidate.stationId));
+  const alternatives = node("div", "dispatch-alternatives");
+  alternatives.hidden = !state.dispatchAlternativesVisible;
+  alternatives.append(node("strong", "", "Alternatives and exclusions"));
+  excludedUnits.slice(0, 8).forEach((unit) => alternatives.append(node("small", "", `${unit.unitCode || unit.name || unit.id}: ${unit.exclusionReason || "Not eligible"}`)));
+  otherStations.slice(0, 8).forEach((station) => {
+    const reason = station.rejectionReason || (station.eligible ? "Not required after nearer capacity was allocated" : "Not eligible");
+    alternatives.append(node("small", "", `${station.stationName || station.stationCode || station.stationId}: ${reason}`));
+  });
+  if (!excludedUnits.length && !otherStations.length) alternatives.append(node("small", "", "No additional candidates were evaluated."));
+  panel.append(alternatives);
+  if (recommendation.status === "recommended") {
+    const actions = node("div", "hybrid-dispatch-actions");
+    const confirm = node("button", "primary", "Confirm Dispatch");
+    confirm.type = "button";
+    confirm.addEventListener("click", confirmHybridDispatchRecommendation);
+    const viewAlternatives = node("button", "ghost", state.dispatchAlternativesVisible ? "Hide Alternatives" : "View Alternatives");
+    viewAlternatives.type = "button";
+    viewAlternatives.addEventListener("click", () => {
+      state.dispatchAlternativesVisible = !state.dispatchAlternativesVisible;
+      renderDispatchCandidatePanel();
+    });
+    const cancel = node("button", "ghost", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => withButtonBusy(cancel, "Cancelling...", async () => {
+      await api(`/api/incidents/${encodeURIComponent(recommendation.incidentId)}/dispatch-recommendation/reject`, {
+        method: "POST",
+        body: { recommendationId: recommendation.id, reason: "Cancelled by operator" }
+      });
+      state.dispatchRecommendation = null;
+      state.dispatchSupportRoutes = [];
+      state.dispatchAlternativesVisible = false;
+      await refresh();
+      setText("#routeSummary", "Dispatch recommendation cancelled.");
+    }).catch((error) => alert(dispatchErrorMessage(error))));
+    actions.append(confirm, viewAlternatives, cancel);
+    panel.append(actions);
+  }
+}
+
 function renderDispatchCandidatePanel() {
   const panel = $("#dispatchCandidatePanel");
   if (!panel) return;
   panel.textContent = "";
   const warnings = state.dispatchWarnings || [];
   warnings.forEach((warning) => panel.append(node("p", "location-warning", warning)));
+  const recommendation = state.dispatchRecommendation;
+  renderHybridDispatchRecommendation(panel, recommendation);
   if (!state.dispatchCandidates?.length) {
-    panel.append(node("div", "empty-state", "Assign nearest unit to view ranked candidates."));
+    if (!recommendation) panel.append(node("div", "empty-state", "Review dispatch to compare live responders and station support."));
     return;
   }
   panel.append(node("strong", "dispatch-candidate-title", "Candidate Ranking"));
@@ -1865,6 +2046,25 @@ function renderDispatchCandidatePanel() {
   });
 }
 
+async function confirmHybridDispatchRecommendation() {
+  const incident = activeIncident();
+  const recommendation = state.dispatchRecommendation;
+  if (!incident || !recommendation || recommendation.status !== "recommended") return;
+  try {
+    const result = await api("/api/incidents/" + encodeURIComponent(incident.id) + "/assign-unit", {
+      method: "POST",
+      body: { recommendationId: recommendation.id, expectedAssignedUnitId: incident.assignedUnitId || null }
+    });
+    state.dispatchRecommendation = result.recommendation || null;
+    applyDispatchResult(result);
+    await refresh();
+    setText("#routeSummary", result.message || "Hybrid dispatch confirmed.");
+  } catch (error) {
+    setText("#routeSummary", dispatchErrorMessage(error));
+    alert(dispatchErrorMessage(error));
+  }
+}
+
 function renderDispatchPanels() {
   renderRouteOptionsPanel();
   renderUnitPanel("#gisUnitPanel");
@@ -1879,13 +2079,22 @@ function applyDispatchResult(result) {
   const route = normalizeRouteForMap(result.route);
   state.dispatchCandidates = result.candidates || state.dispatchCandidates || [];
   state.dispatchWarnings = result.warnings || [];
+  state.dispatchRecommendation = result.recommendation || state.dispatchRecommendation;
+  state.dispatchAlternativesVisible = false;
+  state.dispatchSupportRoutes = (state.dispatchRecommendation?.stationSupport?.allocations || [])
+    .map((allocation) => ({
+      ...allocation,
+      route: normalizeRouteForMap(allocation.route)
+    }))
+    .filter((allocation) => allocation.route);
   if (incident?.id) state.selectedIncidentId = incident.id;
   if (unit?.id) state.selectedUnitId = unit.id;
   if (route && incident) {
-    const start = validMapPoint(unit) || incidentCoordinates(incident, "unitLocation", null);
+    const fallbackSupport = state.dispatchSupportRoutes[0];
+    const start = validMapPoint(unit) || incidentCoordinates(incident, "unitLocation", null) || validMapPoint(fallbackSupport);
     const destination = incidentCoordinates(incident, "location", null);
     if (start && destination) {
-      state.mapNavigation.start = { ...start, label: `${unitLabel(unit)} location` };
+      state.mapNavigation.start = { ...start, label: unit ? `${unitLabel(unit)} location` : `${fallbackSupport?.stationName || "Support station"} location` };
       state.mapNavigation.destination = { ...destination, label: incident.address || incident.title || "Incident" };
       state.mapNavigation = applyRouteResponse(state.mapNavigation, route);
       updateNavigationPanel(result.selectionReason || route.alternativeMessage || "Dispatch route ready.");
@@ -2206,6 +2415,24 @@ function unitLabel(unit) {
   return unit?.unitCode || unit?.name || unit?.id || "Unit";
 }
 
+function unitLocationAgeText(unit) {
+  const timestamp = unit?.locationCapturedAt || unit?.lastLocationUpdatedAt;
+  const age = secondsAgo(timestamp);
+  if (age === null) return "update unavailable";
+  if (age < 60) return `updated ${age} sec ago`;
+  return `updated ${Math.floor(age / 60)} min ago`;
+}
+
+function unitAccuracyText(unit) {
+  const value = unit?.locationAccuracy ?? unit?.accuracy;
+  const accuracy = value === null || value === undefined ? NaN : Number(value);
+  return Number.isFinite(accuracy) ? `accuracy ${Math.round(accuracy)}m` : "accuracy unavailable";
+}
+
+function unitFreshnessText(unit) {
+  return String(unit?.locationFreshnessState || unit?.locationFreshness || "UNAVAILABLE").toUpperCase();
+}
+
 function unitSummary(units = state.responseUnits) {
   return {
     total: units.length,
@@ -2295,8 +2522,7 @@ function setResponseControls(incident) {
   const routeButton = $("#routeIncident");
   if (assignButton) assignButton.disabled = !(enabled && isDispatchableIncident(incident) && !incident?.assignedUnitId);
   if (routeButton) routeButton.disabled = !(enabled && incidentNavigationReady(incident));
-  const unit = responseUnit(incident);
-  setText("#assignIncident", enabled ? `Assign ${unit}` : "Assign Unit");
+  setText("#assignIncident", "Review Dispatch");
   setText("#routeIncident", enabled ? "Suggest Route" : "Route Locked");
   setText("#closeIncident", enabled ? "Close Incident" : "Close Incident");
 }
@@ -2362,6 +2588,10 @@ function renderIncidents(incidents) {
     wrap.append(card);
   });
   const selected = activeIncident();
+  state.dispatchRecommendation = selected?.dispatchRecommendation || null;
+  state.dispatchSupportRoutes = (state.dispatchRecommendation?.stationSupport?.allocations || [])
+    .map((allocation) => ({ ...allocation, route: normalizeRouteForMap(allocation.route) }))
+    .filter((allocation) => allocation.route);
   renderTimeline(selected?.timeline);
   setResponseControls(selected);
   setText("#routeSummary", routeIntro(selected));
@@ -2419,10 +2649,9 @@ async function commandAction(action) {
     clearRouteResult();
   } else if (action === "assign") {
     try {
-      const result = await api(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST" });
+      const result = await api(`/api/incidents/${incident.id}/recommend-unit`, { method: "POST" });
       applyDispatchResult(result);
-      const routeLabel = result.route?.approximate ? "Assigned using approximate fallback route." : "Assigned with verified driving route.";
-      setText("#routeSummary", `${responseUnit(result.incident)} assigned. ${routeLabel}`);
+      setText("#routeSummary", "Dispatch recommendation ready. Review primary and station support, then confirm.");
     } catch (error) {
       throw new Error(dispatchErrorMessage(error));
     }
@@ -2496,8 +2725,8 @@ function renderIncidentCommandDetailSafe(incident) {
   if (incidentCoordinates(incident, "location", null)) addAction("Recheck Address", "recheck-address");
   if (incident.status === "New") addAction("Verify", "Verified", "primary");
   if (incident.status === "Verification Required" && incidentCoordinates(incident, "location", null)) addAction("Verify", "Verified", "primary");
-  if (incident.status === "Verified" && isDispatchableIncident(incident) && !incident.assignedUnitId) addAction("Assign Nearest Unit", "assign", "primary");
-  if (incident.assignedUnitId && incident.status === "Assigned") addAction("Mark En Route", "En Route");
+  if (incident.status === "Verified" && isDispatchableIncident(incident) && !incident.assignedUnitId && !incident.dispatchConfirmedAt) addAction("Review Dispatch", "assign", "primary");
+  if (incident.status === "Assigned" && (incident.assignedUnitId || incident.dispatchConfirmedAt)) addAction("Mark En Route", "En Route");
   if (incident.status === "En Route") addAction("Mark On Scene", "On Scene");
   if (incident.status === "On Scene") addAction("Resolve", "Resolved");
   if (incident.status === "Resolved") addAction("Close", "Closed");
@@ -3751,7 +3980,10 @@ function renderUnitRegistry(units = state.responseUnits) {
       ["Beat", unit.beat || unit.sector],
       ["Jurisdiction", unit.jurisdiction],
       ["Address", unit.currentAddress || unit.address],
-      ["Last seen", unit.lastSeen ? alertTime(unit.lastSeen) : "Unknown"]
+      ["Last seen", unit.lastSeen ? alertTime(unit.lastSeen) : "Unknown"],
+      ["GPS freshness", unitFreshnessText(unit)],
+      ["GPS update", unitLocationAgeText(unit)],
+      ["GPS accuracy", unitAccuracyText(unit)]
     ].forEach(([label, value]) => meta.append(node("span", "", `${label}: ${displayValue(value, "--")}`)));
     if (unit.sourceNotes) card.append(node("p", "location-warning", unit.sourceNotes));
     const actions = node("div", "unit-registry-row-actions");
@@ -3881,6 +4113,8 @@ function policeUserCard(user) {
     ["Station", user.station],
     ["Beat / Sector", user.beat],
     ["Jurisdiction", user.jurisdiction],
+    ["Duty", displayValue(user.dutyStatus)],
+    ["Availability", displayValue(user.availabilityStatus)],
     ["Created", user.createdAt ? alertTime(user.createdAt) : ""],
     ["Updated", user.updatedAt ? alertTime(user.updatedAt) : ""]
   ].forEach(([label, value]) => meta.append(node("span", "", `${label}: ${displayValue(value, "--")}`)));
@@ -3903,6 +4137,24 @@ function policeUserCard(user) {
     input.type = name === "email" ? "email" : "text";
     input.required = ["name", "email"].includes(name);
     field.append(input);
+    form.append(field);
+  });
+  [
+    ["dutyStatus", "Duty Status", user.dutyStatus || "on_duty", [["on_duty", "On Duty"], ["off_duty", "Off Duty"], ["leave", "Leave"], ["suspended", "Suspended"]]],
+    ["availabilityStatus", "Availability", user.availabilityStatus || "available", [["available", "Available"], ["busy", "Busy"], ["unavailable", "Unavailable"]]]
+  ].forEach(([name, label, value, options]) => {
+    const field = node("label", "");
+    field.append(document.createTextNode(label));
+    const select = document.createElement("select");
+    select.name = name;
+    options.forEach(([optionValue, optionLabel]) => {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionLabel;
+      option.selected = optionValue === value;
+      select.append(option);
+    });
+    field.append(select);
     form.append(field);
   });
   const actions = node("div", "police-user-row-actions");
@@ -4095,14 +4347,7 @@ async function suggestPoliceRoute() {
 }
 
 function browserLocation() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error("Location is not supported by this browser."));
-    navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude, label: "Current device location" }),
-      () => reject(new Error("Location permission denied. Use manual search or map click.")),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
-    );
-  });
+  return getBrowserLocation(navigator.geolocation);
 }
 
 function gisMapInstance() {
@@ -4212,6 +4457,170 @@ async function useCurrentLocation() {
       button.classList.remove("loading");
     }
     updateGisButtonStates();
+  }
+}
+
+function telemetryUnitId(unit = state.telemetryUnit) {
+  return unit?.id || unit?.unitId || null;
+}
+
+function secondsAgo(timestamp) {
+  const time = Date.parse(String(timestamp || ""));
+  return Number.isFinite(time) ? Math.max(0, Math.floor((Date.now() - time) / 1000)) : null;
+}
+
+function renderUnitGpsStatus() {
+  const panel = $("#unitGpsTelemetryStatus");
+  if (!panel) return;
+  const police = state.user?.role === "Police Officer";
+  const unit = state.telemetryUnit;
+  const freshness = String(unit?.locationFreshnessState || "UNAVAILABLE").toUpperCase();
+  const stale = police && freshness === "STALE";
+  const unavailable = police && unit && freshness === "UNAVAILABLE";
+  panel.classList.toggle("active", !stale && !unavailable && (unitGpsUi.mode === "active" || unitGpsUi.mode === "syncing"));
+  panel.classList.toggle("stale", stale || unavailable);
+  panel.classList.toggle("error", unitGpsUi.mode === "error");
+  const defaultMessage = police
+    ? unit
+      ? stale
+        ? `GPS stale · ${unitLabel(unit)}`
+        : unavailable
+          ? `GPS unavailable · ${unitLabel(unit)}`
+          : `Live GPS: ${state.mapNavigation.locationTracking ? "Active" : "Stopped"} · ${unitLabel(unit)}`
+      : "Unit GPS unavailable · no authorised response unit"
+    : state.mapNavigation.locationTracking ? "Device GPS: Active · local GIS only" : "Device GPS: Stopped";
+  setText("#unitGpsState", stale || unavailable ? defaultMessage : unitGpsUi.message || defaultMessage);
+  const age = secondsAgo(unitGpsUi.updatedAt || unit?.locationReceivedAt || unit?.locationCapturedAt);
+  const accuracyValue = unitGpsUi.point?.accuracy ?? unit?.locationAccuracy ?? unit?.accuracy;
+  setText("#unitGpsLastUpdate", `Last update: ${age === null ? "--" : `${age} sec ago`}`);
+  setText("#unitGpsAccuracy", `Accuracy: ${accuracyValue !== null && accuracyValue !== undefined && Number.isFinite(Number(accuracyValue)) ? `${Math.round(Number(accuracyValue))}m` : "--"}`);
+}
+
+function setUnitGpsUi(patch = {}) {
+  unitGpsUi = { ...unitGpsUi, ...patch };
+  renderUnitGpsStatus();
+}
+
+function releaseLocationTracking({ notifyBackend = true } = {}) {
+  clearBrowserLocationWatch(browserLocationWatchId, navigator.geolocation);
+  browserLocationWatchId = null;
+  if (unitGpsStatusTimer) window.clearInterval(unitGpsStatusTimer);
+  unitGpsStatusTimer = null;
+  const unitId = telemetryUnitId();
+  if (notifyBackend && backendUnitTrackingActive && unitId) {
+    api(`/api/response-units/${encodeURIComponent(unitId)}/tracking`, { method: "POST", body: { action: "stop" } })
+      .catch(() => setUnitGpsUi({ mode: "error", message: "Tracking stopped locally · backend stop update failed" }));
+  }
+  backendUnitTrackingActive = false;
+  unitTelemetryInFlight = false;
+  pendingUnitTelemetryPoint = null;
+  lastUnitTelemetrySent = null;
+}
+
+function liveGpsStatus(point) {
+  const accuracy = Number.isFinite(point.accuracy) ? ` ±${Math.round(point.accuracy)} m` : "";
+  const updated = new Date(point.capturedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return `Live GPS tracking active${accuracy} · updated ${updated}.`;
+}
+
+function stopLocationTracking(message = "Tracking stopped", { error = false, notifyBackend = true, updateNavigation = true } = {}) {
+  releaseLocationTracking({ notifyBackend });
+  state.mapNavigation.locationTracking = false;
+  state.mapNavigation.locationTrackingFixes = 0;
+  updateGisButtonStates();
+  setUnitGpsUi({ mode: error ? "error" : "stopped", message, point: null, updatedAt: null });
+  if (message && updateNavigation) updateNavigationPanel(message);
+}
+
+async function ensureBackendUnitTrackingStarted(unit) {
+  if (backendUnitTrackingActive) return;
+  const unitId = telemetryUnitId(unit);
+  if (!unitId) throw new Error("No authorised response unit is assigned to this account.");
+  await api(`/api/response-units/${encodeURIComponent(unitId)}/tracking`, { method: "POST", body: { action: "start" } });
+  backendUnitTrackingActive = true;
+}
+
+function applyTelemetryUnitUpdate(unit) {
+  if (!unit) return;
+  state.telemetryUnit = unit;
+  const index = state.responseUnits.findIndex((item) => item.id === unit.id);
+  if (index >= 0) state.responseUnits.splice(index, 1, unit);
+  else state.responseUnits.push(unit);
+  renderDispatchPanels();
+  renderUnitRegistry(state.responseUnits);
+  renderSatelliteMaps();
+  lastUnitTelemetryRenderFingerprint = unitTelemetryRenderFingerprint(state.responseUnits, state.responseUnitSummary);
+}
+
+async function transmitUnitTelemetry(point) {
+  const unit = state.telemetryUnit;
+  if (state.user?.role !== "Police Officer" || !unit || !state.mapNavigation.locationTracking) return;
+  if (!shouldTransmitUnitTelemetry({ lastSent: lastUnitTelemetrySent, point })) return;
+  if (unitTelemetryInFlight) {
+    pendingUnitTelemetryPoint = point;
+    return;
+  }
+  unitTelemetryInFlight = true;
+  lastUnitTelemetrySent = { point, sentAt: Date.now() };
+  setUnitGpsUi({ mode: "syncing", message: `Live GPS: Syncing · ${unitLabel(unit)}`, point });
+  try {
+    await ensureBackendUnitTrackingStarted(unit);
+    const result = await api(`/api/response-units/${encodeURIComponent(telemetryUnitId(unit))}/location`, {
+      method: "POST",
+      body: unitTelemetryPayload(point)
+    });
+    applyTelemetryUnitUpdate(result.unit);
+    setUnitGpsUi({ mode: "active", message: `Live GPS: Active · ${unitLabel(result.unit)}`, point, updatedAt: result.receivedAt || point.capturedAt });
+  } catch (error) {
+    setUnitGpsUi({ mode: "error", message: `Network update failed · ${error.message}`, point });
+  } finally {
+    unitTelemetryInFlight = false;
+    const pending = pendingUnitTelemetryPoint;
+    pendingUnitTelemetryPoint = null;
+    if (pending) transmitUnitTelemetry(pending);
+  }
+}
+
+function startLocationTracking() {
+  if (browserLocationWatchId !== null || state.mapNavigation.locationTracking) {
+    stopLocationTracking();
+    return;
+  }
+  if (state.user?.role === "Police Officer" && !state.telemetryUnit) {
+    setUnitGpsUi({ mode: "error", message: "Unit GPS unavailable · no authorised response unit" });
+    updateNavigationPanel("No authorised response unit is assigned to this Police account.");
+    return;
+  }
+  state.mapNavigation.locationTracking = true;
+  state.mapNavigation.locationTrackingFixes = 0;
+  updateNavigationPanel("Waiting for a live GPS fix...");
+  setUnitGpsUi({ mode: "syncing", message: state.user?.role === "Police Officer" ? "Live GPS: Waiting for fix" : "Device GPS: Waiting for fix", point: null, updatedAt: null });
+  unitGpsStatusTimer = window.setInterval(renderUnitGpsStatus, 1000);
+  updateGisButtonStates();
+  try {
+    browserLocationWatchId = watchBrowserLocation({
+      geolocation: navigator.geolocation,
+      onLocation(point) {
+        if (!state.mapNavigation.locationTracking) return;
+        const firstFix = state.mapNavigation.locationTrackingFixes === 0;
+        state.mapNavigation.locationTrackingFixes += 1;
+        state.mapNavigation.currentLocation = point;
+        setRouteStart(point, "Live device location");
+        const instance = gisMapInstance();
+        if (instance) {
+          if (firstFix) setMapView(instance, point, Math.max(instance.zoom, 14), point.label);
+          renderSatelliteMap(instance);
+        }
+        if (state.user?.role === "Police Officer") transmitUnitTelemetry(point);
+        else setUnitGpsUi({ mode: "active", message: "Device GPS: Active · local GIS only", point, updatedAt: point.capturedAt });
+        updateNavigationPanel(liveGpsStatus(point));
+      },
+      onError(error) {
+        stopLocationTracking(error.message, { error: true });
+      }
+    });
+  } catch (error) {
+    stopLocationTracking(error.message, { error: true });
   }
 }
 
@@ -4612,7 +5021,7 @@ async function refresh() {
   const operator = isOperatorRole();
   const admin = isAdminRole();
   const aiVision = loadAiVisionData({ role: state.user?.role, api });
-  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
+  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
     operator ? api("/api/dashboard") : Promise.resolve({ summary: {} }),
     api("/api/reports"),
     operator ? api("/api/zones") : Promise.resolve({ zones: [] }),
@@ -4624,6 +5033,8 @@ async function refresh() {
     admin ? api("/api/audit-logs") : Promise.resolve({ auditLogs: [] }),
     admin ? api("/api/integrations/status") : Promise.resolve({ integrations: [] }),
     admin ? api("/api/admin/police-users") : Promise.resolve({ users: [] }),
+    operator ? api("/api/incidents/history") : Promise.resolve({ incidents: [] }),
+    operator ? api("/api/escalation/alerts?active=true&limit=100") : Promise.resolve({ alerts: [] }),
     aiVision
   ]);
   const aiConnected = aiHealth.status === "connected";
@@ -4656,8 +5067,10 @@ async function refresh() {
   state.reports = reports.reports;
   state.incidents = incidents.incidents;
   state.alerts = alerts.alerts;
+  state.escalationAlerts = escalations.alerts || [];
   state.responseUnits = units.units;
   state.responseUnitSummary = units.summary || unitSummary(units.units || []);
+  state.telemetryUnit = units.telemetryUnit || null;
   state.policeStations = stations.stations || [];
   state.mapDefaultCenter = stations.defaultCenter || DEFAULT_MAP_CENTER;
   state.zones = zones.zones;
@@ -4682,12 +5095,47 @@ async function refresh() {
   renderAuditLogs(audits.auditLogs);
   renderIntegrations(integrations.integrations);
   renderPoliceUsers(policeUsers.users);
-  if (isOperatorRole()) {
-    const history = await api("/api/incidents/history");
-    renderHistory(history.incidents);
-  } else {
-    renderHistory([]);
+  renderHistory(history.incidents || []);
+  renderUnitGpsStatus();
+  lastUnitTelemetryRenderFingerprint = unitTelemetryRenderFingerprint(state.responseUnits, state.responseUnitSummary);
+  startUnitTelemetryPolling();
+  renderPersistentEscalations();
+  initializeRealtimeAlerts();
+}
+
+async function pollResponseUnitTelemetry() {
+  if (!isOperatorRole() || document.hidden || !state.user) return;
+  try {
+    const result = await api("/api/response-units");
+    const nextUnits = result.units || [];
+    const nextSummary = result.summary || unitSummary(nextUnits);
+    const nextFingerprint = unitTelemetryRenderFingerprint(nextUnits, nextSummary);
+    const renderChangedUnits = nextFingerprint !== lastUnitTelemetryRenderFingerprint;
+    state.responseUnits = nextUnits;
+    state.responseUnitSummary = nextSummary;
+    state.telemetryUnit = result.telemetryUnit || null;
+    if (renderChangedUnits) {
+      renderDispatchPanels();
+      renderUnitRegistry(state.responseUnits);
+      renderSatelliteMaps();
+      lastUnitTelemetryRenderFingerprint = nextFingerprint;
+    }
+    updateGisButtonStates();
+    renderUnitGpsStatus();
+  } catch (error) {
+    if (error.status === 401) stopUnitTelemetryPolling();
   }
+}
+
+function startUnitTelemetryPolling() {
+  if (unitTelemetryPollTimer || !isOperatorRole()) return;
+  unitTelemetryPollTimer = window.setInterval(pollResponseUnitTelemetry, 5000);
+}
+
+function stopUnitTelemetryPolling() {
+  if (unitTelemetryPollTimer) window.clearInterval(unitTelemetryPollTimer);
+  unitTelemetryPollTimer = null;
+  lastUnitTelemetryRenderFingerprint = "";
 }
 
 async function checkSession() {
@@ -5003,6 +5451,7 @@ $("#retryLiveVision").addEventListener("click", async () => {
   }
 });
 window.addEventListener("beforeunload", stopLiveVision);
+window.addEventListener("beforeunload", releaseLocationTracking);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && document.body.dataset.view === "live-vision") stopLiveVision();
 });
@@ -5012,12 +5461,11 @@ $("#assignIncident").addEventListener("click", async () => {
   const incident = activeIncident();
   if (!incident) return;
   try {
-    await withButtonBusy($("#assignIncident"), "Assigning...", async () => {
-      const result = await api(`/api/incidents/${incident.id}/assign-nearest`, { method: "POST" });
+    await withButtonBusy($("#assignIncident"), "Calculating...", async () => {
+      const result = await api(`/api/incidents/${incident.id}/recommend-unit`, { method: "POST" });
       applyDispatchResult(result);
       await refresh();
-      const routeLabel = result.route?.approximate ? "Assigned using approximate fallback route." : "Assigned with verified driving route.";
-      setText("#routeSummary", `${responseUnit(result.incident)} assigned. ${routeLabel}`);
+      setText("#routeSummary", "Dispatch recommendation ready. Open Incident Command to review and confirm.");
     });
   } catch (error) {
     setText("#routeSummary", dispatchErrorMessage(error));
@@ -5037,6 +5485,7 @@ $("#satelliteMapLayer").addEventListener("click", () => {
 $("#fitGisMap").addEventListener("click", fitGisMapToOperationalMarkers);
 $("#resetGisMap").addEventListener("click", resetGisMapView);
 $("#useMyLocation").addEventListener("click", useCurrentLocation);
+$("#toggleLocationTracking").addEventListener("click", startLocationTracking);
 $("#recalculateRoute").addEventListener("click", calculateMapRoute);
 $("#openExternalRoute").addEventListener("click", openExternalRoute);
 $("#clearMapRoute").addEventListener("click", clearMapRoute);
@@ -5466,7 +5915,9 @@ $("#policeUserForm")?.addEventListener("submit", async (event) => {
         unitId: data.get("unitId"),
         station: data.get("station"),
         beat: data.get("beat"),
-        jurisdiction: data.get("jurisdiction")
+        jurisdiction: data.get("jurisdiction"),
+        dutyStatus: data.get("dutyStatus"),
+        availabilityStatus: data.get("availabilityStatus")
       }
     });
     form.reset();
@@ -5505,7 +5956,9 @@ $("#policeUserList")?.addEventListener("submit", async (event) => {
         unitId: data.get("unitId"),
         station: data.get("station"),
         beat: data.get("beat"),
-        jurisdiction: data.get("jurisdiction")
+        jurisdiction: data.get("jurisdiction"),
+        dutyStatus: data.get("dutyStatus"),
+        availabilityStatus: data.get("availabilityStatus")
       }
     });
     if (status) {

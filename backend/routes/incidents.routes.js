@@ -10,6 +10,7 @@ router.get("/history", controller.history);
 router.delete("/history", controller.clearHistory);
 router.get("/:id/timeline", controller.timeline);
 router.post("/:id/recommend-unit", controller.recommendUnit);
+router.post("/:id/dispatch-recommendation/reject", controller.rejectDispatchRecommendation);
 router.patch("/:id/location", controller.updateLocation);
 router.post("/:id/confirm-location", controller.confirmLocation);
 router.post("/:id/assign-unit", controller.assignUnit);

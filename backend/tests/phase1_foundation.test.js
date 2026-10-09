@@ -1,4 +1,4 @@
-const test = require("node:test");
+﻿const test = require("node:test");
 const assert = require("node:assert/strict");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");
 
@@ -450,7 +450,7 @@ test("Phase 1: response_units table has station_id and beat_id columns", async (
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'response_units' AND column_name IN ('station_id', 'beat_id')
+    WHERE table_schema = current_schema() AND table_name = 'response_units' AND column_name IN ('station_id', 'beat_id')
   `);
   assert.equal(columns.rows.length, 2);
 
@@ -463,7 +463,8 @@ test("Phase 1: composite FK constraints exist", async () => {
 
   const constraints = await client.query(`
     SELECT constraint_name FROM information_schema.table_constraints
-    WHERE table_name IN ('police_officers', 'response_units')
+    WHERE constraint_schema = current_schema()
+    AND table_name IN ('police_officers', 'response_units')
     AND constraint_type = 'FOREIGN KEY'
     AND constraint_name LIKE '%station_beat%'
   `);
@@ -478,7 +479,7 @@ test("Phase 1: indexes exist for new tables", async () => {
 
   const indexes = await client.query(`
     SELECT indexname FROM pg_indexes
-    WHERE tablename IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers', 'response_units')
+    WHERE schemaname = current_schema() AND tablename IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers', 'response_units')
     AND indexname LIKE 'idx_%'
   `);
   assert.ok(indexes.rows.length >= 15);
@@ -492,7 +493,8 @@ test("Phase 1: unique constraints exist", async () => {
 
   const constraints = await client.query(`
     SELECT constraint_name FROM information_schema.table_constraints
-    WHERE table_name IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers')
+    WHERE constraint_schema = current_schema()
+    AND table_name IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers')
     AND constraint_type = 'UNIQUE'
   `);
   const constraintNames = constraints.rows.map(r => r.constraint_name);

@@ -1,8 +1,10 @@
 const express = require("express");
+const http = require("http");
 const helmet = require("helmet");
 const { rateLimit } = require("express-rate-limit");
 const net = require("node:net");
 const crypto = require("node:crypto");
+const { Server } = require("socket.io");
 
 const authRoutes = require("./routes/auth.routes");
 const incidentRoutes = require("./routes/incidents.routes");
@@ -17,7 +19,7 @@ const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
 const { aiFrameLimiter } = require("./middleware/aiFrameLimiter.middleware");
-const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData, runEscalationSweep } = require("./services/core.service");
+const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData, runEscalationSweep, runSlaEscalationSweep } = require("./services/core.service");
 const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
@@ -26,7 +28,124 @@ const { legacyHandler } = require("./services/legacyRoute.service");
 const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./services/evidenceStorage.service");
 const { validateCameraCredentialConfig } = require("./services/cameraSecrets.service");
 const { installShutdownHandlers } = require("./services/shutdown.service");
+const realtimeEvents = require("./services/realtimeEvents.service");
 const { helmetDirectives } = require("../csp.config.cjs");
+
+let io = null;
+
+function initializeSocketIO(httpServer) {
+  io = new Server(httpServer, {
+    cors: {
+      origin: (origin, callback) => {
+        if (!origin || isAllowedOrigin(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Origin not allowed"));
+        }
+      },
+      credentials: true
+    }
+  });
+
+  io.use(async (socket, next) => {
+    try {
+      const db = await readDatabase();
+      const user = userFromReq(socket.request, db);
+      if (!user || !hasRole(user, ["Admin", "Police Officer"])) {
+        return next(new Error("Authentication required"));
+      }
+      socket.data.user = user;
+      return next();
+    } catch (error) {
+      return next(new Error("Authentication unavailable"));
+    }
+  });
+
+  io.on("connection", (socket) => {
+    console.log(`Socket.IO client connected: ${socket.id}`);
+
+    socket.on("join_incident_room", (incidentId) => {
+      if (incidentId) {
+        socket.join(`incident:${incidentId}`);
+        console.log(`Client ${socket.id} joined incident room: ${incidentId}`);
+      }
+    });
+
+    socket.on("join_dashboard", () => {
+      const role = socket.data.user.role;
+      socket.join(`dashboard:${role}`);
+      console.log(`Client ${socket.id} joined dashboard room: ${role}`);
+    });
+
+    socket.on("leave_incident_room", (incidentId) => {
+      if (incidentId) socket.leave(`incident:${incidentId}`);
+    });
+
+    socket.on("disconnect", () => {
+      console.log(`Socket.IO client disconnected: ${socket.id}`);
+    });
+  });
+
+  const criticalHandler = (incident) => {
+    broadcastToAllDashboards("critical_incident_created", { incident });
+    emitToIncidentRoom(incident.id, "critical_incident_created", { incident });
+  };
+  realtimeEvents.on("critical_incident_created", criticalHandler);
+  httpServer.once("close", () => realtimeEvents.off("critical_incident_created", criticalHandler));
+
+  return io;
+}
+
+const SLA_REALTIME_EVENTS = {
+  ASSIGNMENT_WARNING: "incident_assignment_warning",
+  ASSIGNMENT_BREACH: "incident_assignment_breached",
+  RESPONSE_BREACH: "response_sla_breached",
+  INVESTIGATION_MISSING_IO: "investigation_overdue",
+  INVESTIGATION_INACTIVE: "investigation_overdue"
+};
+
+function emitSlaSweepEvents(result) {
+  for (const alert of result.createdAlerts || []) {
+    const payload = { alert, incidentId: alert.incidentId, escalationLevel: alert.escalationLevel };
+    broadcastToAllDashboards("escalation_alert_created", payload);
+    emitToIncidentRoom(alert.incidentId, "escalation_alert_created", payload);
+    const specificEvent = alert.alertType.startsWith("ESCALATION_")
+      ? "escalation_level_changed"
+      : SLA_REALTIME_EVENTS[alert.alertType];
+    if (specificEvent) {
+      broadcastToAllDashboards(specificEvent, payload);
+      emitToIncidentRoom(alert.incidentId, specificEvent, payload);
+    }
+  }
+  for (const alert of result.resolvedAlerts || []) {
+    const payload = { alert, incidentId: alert.incidentId };
+    broadcastToAllDashboards("escalation_alert_resolved", payload);
+    emitToIncidentRoom(alert.incidentId, "escalation_alert_resolved", payload);
+  }
+}
+
+function getIO() {
+  return io;
+}
+
+function emitToIncidentRoom(incidentId, event, data) {
+  if (io) {
+    io.to(`incident:${incidentId}`).emit(event, data);
+  }
+}
+
+function emitToDashboard(role, event, data) {
+  if (io) {
+    io.to(`dashboard:${role}`).emit(event, data);
+  }
+}
+
+function broadcastToAllDashboards(event, data) {
+  if (io) {
+    io.to("dashboard:Admin").emit(event, data);
+    io.to("dashboard:Police Officer").emit(event, data);
+  }
+}
 
 const app = express();
 let draining = false;
@@ -106,6 +225,13 @@ const geocodeLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many place searches. Please wait and try again.", code: "GEOCODER_RATE_LIMIT" }
 });
+const unitTelemetryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.UNIT_GPS_RATE_LIMIT || 30),
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many unit GPS updates. Reduce the tracking update rate.", code: "UNIT_GPS_RATE_LIMIT" }
+});
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -118,6 +244,7 @@ app.use(generalLimiter);
 app.use((req, res, next) => {
   req.requestId = crypto.randomUUID();
   res.setHeader("X-Request-Id", req.requestId);
+  if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   const started = performance.now();
   if (process.env.NODE_ENV === "production") {
     res.once("finish", () => {
@@ -523,6 +650,8 @@ app.use("/api/audit-logs", auditRoutes);
 app.get("/api/integrations/status", auditController.integrations);
 app.get("/api/response-units", legacyHandler("/api/response-units"));
 app.post("/api/response-units", legacyHandler("/api/response-units"));
+app.post("/api/response-units/:id/location", unitTelemetryLimiter, legacyHandler((req) => `/api/response-units/${req.params.id}/location`));
+app.post("/api/response-units/:id/tracking", unitTelemetryLimiter, legacyHandler((req) => `/api/response-units/${req.params.id}/tracking`));
 app.patch("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
 app.delete("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
 app.get("/api/police-stations", legacyHandler("/api/police-stations"));
@@ -530,6 +659,23 @@ app.post("/api/police-stations", legacyHandler("/api/police-stations"));
 app.patch("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.delete("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.get("/api/response-units/nearest", legacyHandler("/api/response-units/nearest"));
+app.get("/api/sla/config", legacyHandler("/api/sla/config"));
+app.patch("/api/sla/config", legacyHandler("/api/sla/config"));
+app.post("/api/sla/escalation-sweep", legacyHandler("/api/sla/escalation-sweep"));
+app.get("/api/escalation/alerts", legacyHandler("/api/escalation/alerts"));
+app.post("/api/escalation/alerts/:id/acknowledge", legacyHandler((req) => `/api/escalation/alerts/${req.params.id}/acknowledge`));
+app.post("/api/escalation/alerts/:id/resolve", legacyHandler((req) => `/api/escalation/alerts/${req.params.id}/resolve`));
+app.post("/api/incidents/:id/severity", legacyHandler((req) => `/api/incidents/${req.params.id}/severity`));
+app.get("/api/incidents/:id/timeline", legacyHandler((req) => `/api/incidents/${req.params.id}/timeline`));
+app.get("/api/incidents/:id/sla-status", legacyHandler((req) => `/api/incidents/${req.params.id}/sla-status`));
+app.post("/api/incidents/:id/investigation/assign-officer", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/assign-officer`));
+app.post("/api/incidents/:id/investigation/update", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/update`));
+app.post("/api/incidents/:id/investigation/complete", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/complete`));
+app.get("/api/severity/rules", legacyHandler("/api/severity/rules"));
+app.post("/api/severity/rules", legacyHandler("/api/severity/rules"));
+app.patch("/api/severity/rules/:id", legacyHandler((req) => `/api/severity/rules/${req.params.id}`));
+app.get("/api/investigation/categories", legacyHandler("/api/investigation/categories"));
+app.post("/api/investigation/categories", legacyHandler("/api/investigation/categories"));
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
@@ -577,7 +723,7 @@ async function start(listenPort = port) {
       "app_state"
     ];
     const result = await query(
-      "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1::text[])",
+      "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = ANY($1::text[])",
       [requiredTables]
     );
     const available = new Set(result.rows.map((row) => row.tablename));
@@ -591,8 +737,11 @@ async function start(listenPort = port) {
     console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
   }
   return new Promise((resolve, reject) => {
-    const server = app.listen(listenPort, () => {
-      const address = server.address();
+    const httpServer = http.createServer(app);
+    initializeSocketIO(httpServer);
+
+    httpServer.listen(listenPort, () => {
+      const address = httpServer.address();
       const activePort = typeof address === "object" && address ? address.port : listenPort;
       console.log(`RakshakAI Backend running at http://localhost:${activePort}/api (${getDatabaseMode()})`);
       // Dispatch escalation sweep: flips expired "pending" ACK windows and auto-dispatches
@@ -611,12 +760,37 @@ async function start(listenPort = port) {
           sweepRunning = false;
         }
       }, sweepIntervalMs);
+
+      // SLA Escalation sweep - runs every 30 seconds
+      const slaSweepIntervalMs = Math.max(30000, Number(process.env.SLA_SWEEP_INTERVAL_MS || 30000));
+      let slaSweepRunning = false;
+      const slaEscalationTimer = setInterval(async () => {
+        if (slaSweepRunning) return;
+        slaSweepRunning = true;
+        try {
+          const result = await runSlaEscalationSweep();
+          emitSlaSweepEvents(result);
+          if (result.escalated > 0) {
+            console.log(`SLA Escalation sweep: ${result.escalated} alerts created for ${result.results.filter(r => r.alertsCreated > 0).length} incidents`);
+          }
+        } catch (error) {
+          console.error("RakshakAI SLA escalation sweep failed:", error.message);
+        } finally {
+          slaSweepRunning = false;
+        }
+      }, slaSweepIntervalMs);
+
       escalationTimer.unref();
-      server.once("close", () => clearInterval(escalationTimer));
+      slaEscalationTimer.unref();
+      httpServer.once("close", () => {
+        clearInterval(escalationTimer);
+        clearInterval(slaEscalationTimer);
+      });
       console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
-      resolve(server);
+      console.log(`RakshakAI SLA escalation sweep every ${slaSweepIntervalMs}ms`);
+      resolve(httpServer);
     });
-    server.once("error", reject);
+    httpServer.once("error", reject);
   });
 }
 
@@ -629,4 +803,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig };
+module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig, getIO, emitToIncidentRoom, emitToDashboard, broadcastToAllDashboards, emitSlaSweepEvents };

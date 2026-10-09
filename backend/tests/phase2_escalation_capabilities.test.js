@@ -1,4 +1,4 @@
-const test = require("node:test");
+﻿const test = require("node:test");
 const assert = require("node:assert/strict");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");
 const fs = require("fs");
@@ -159,7 +159,7 @@ test("Phase 2: response_units has unit_subtype column", async () => {
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'response_units' AND column_name IN ('unit_subtype', 'last_ack_at', 'ack_timeout_seconds')
+    WHERE table_schema = current_schema() AND table_name = 'response_units' AND column_name IN ('unit_subtype', 'last_ack_at', 'ack_timeout_seconds')
   `);
   assert.equal(columns.rows.length, 3);
 
@@ -172,7 +172,7 @@ test("Phase 2: incidents has new columns", async () => {
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'incidents' AND column_name IN ('assigned_unit_id', 'required_capabilities', 'escalation_status', 'escalation_started_at', 'primary_unit_acked_at')
+    WHERE table_schema = current_schema() AND table_name = 'incidents' AND column_name IN ('assigned_unit_id', 'required_capabilities', 'escalation_status', 'escalation_started_at', 'primary_unit_acked_at')
   `);
   assert.equal(columns.rows.length, 5);
 
@@ -402,7 +402,7 @@ test("Phase 2: required_capabilities column is GIN indexable", async () => {
   // Check if GIN index exists
   const indexes = await client.query(`
     SELECT indexname FROM pg_indexes
-    WHERE tablename = 'incidents' AND indexname = 'idx_incidents_required_capabilities'
+    WHERE schemaname = current_schema() AND tablename = 'incidents' AND indexname = 'idx_incidents_required_capabilities'
   `);
   assert.equal(indexes.rows.length, 1);
 

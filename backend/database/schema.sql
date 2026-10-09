@@ -13,6 +13,16 @@ CREATE TABLE IF NOT EXISTS incidents (
   status TEXT NOT NULL,
   severity TEXT,
   occurrence_count INTEGER NOT NULL DEFAULT 1,
+  response_requirements JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dispatch_recommendation JSONB,
+  support_allocations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dispatch_confirmed_at TIMESTAMPTZ,
+  dispatch_confirmed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  assignment_breached_at TIMESTAMPTZ,
+  response_breached_at TIMESTAMPTZ,
+  escalation_l2_at TIMESTAMPTZ,
+  escalation_l3_at TIMESTAMPTZ,
+  escalation_l4_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   data JSONB NOT NULL DEFAULT '{}'::jsonb
@@ -77,6 +87,9 @@ CREATE TABLE IF NOT EXISTS police_officers (
   beat TEXT,
   jurisdiction TEXT,
   active BOOLEAN NOT NULL DEFAULT TRUE,
+  duty_status TEXT NOT NULL DEFAULT 'on_duty',
+  availability_status TEXT NOT NULL DEFAULT 'available',
+  assigned_incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   id TEXT UNIQUE,
@@ -89,6 +102,12 @@ CREATE TABLE IF NOT EXISTS response_units (
   assigned_incident_id TEXT,
   station_id TEXT,
   beat_id TEXT,
+  latitude DOUBLE PRECISION CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
+  longitude DOUBLE PRECISION CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180),
+  location_accuracy DOUBLE PRECISION CHECK (location_accuracy IS NULL OR location_accuracy >= 0),
+  location_captured_at TIMESTAMPTZ,
+  location_received_at TIMESTAMPTZ,
+  location_source TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   data JSONB NOT NULL DEFAULT '{}'::jsonb
 );
@@ -287,6 +306,9 @@ CREATE INDEX IF NOT EXISTS idx_alerts_acknowledged ON alerts(acknowledged);
 CREATE INDEX IF NOT EXISTS idx_response_units_status ON response_units(status);
 CREATE INDEX IF NOT EXISTS idx_response_units_station_id ON response_units(station_id);
 CREATE INDEX IF NOT EXISTS idx_response_units_beat_id ON response_units(beat_id);
+CREATE INDEX IF NOT EXISTS idx_response_units_location_captured_at ON response_units(location_captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_police_officers_dispatch_availability ON police_officers(station_id, active, duty_status, availability_status);
+CREATE INDEX IF NOT EXISTS idx_police_officers_assigned_incident ON police_officers(assigned_incident_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_events_incident_id ON dispatch_events(incident_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_evidence_custody_evidence_time ON evidence_custody_events(evidence_id, occurred_at DESC);

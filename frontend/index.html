@@ -60,6 +60,10 @@
             <p class="auth-assurance"><span></span> Encrypted session · Role-based access</p>
           </form>
           <form id="registerForm" class="login-form auth-form app-hidden" data-auth-panel="register">
+            <button class="auth-back" type="button" data-auth-mode="login" aria-label="Back to sign in">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              <span>Back to sign in</span>
+            </button>
             <div class="auth-heading">
               <span class="auth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
@@ -216,11 +220,16 @@
           <div class="gis-layout">
             <section class="panel gis-map-card">
               <div class="gis-toolbar" aria-label="GIS navigation controls">
-                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
+                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
                 <div class="gis-tool-group"><span>Points</span><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button></div>
                 <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Choose a point or calculate a route before clearing." disabled>Clear Route</button></div>
               </div>
               <p id="mapNavigationStatus" class="gis-status-bar" aria-live="polite">Select "Set Start," then click the map.</p>
+              <div id="unitGpsTelemetryStatus" class="unit-gps-status" aria-live="polite">
+                <strong id="unitGpsState">GPS tracking stopped</strong>
+                <span id="unitGpsLastUpdate">Last update: --</span>
+                <span id="unitGpsAccuracy">Accuracy: --</span>
+              </div>
               <div id="gisMap" class="event-map large" data-satellite-map data-map-layer="satellite" data-map-lat="17.5109" data-map-lng="78.3276" data-map-zoom="12"></div>
             </section>
             <aside class="navigation-panel">
@@ -527,12 +536,14 @@
                 <label>Unit Name<input name="unitName" placeholder="Patancheru Patrol" required /></label>
                 <label>Unit Type<select name="unitType"><option value="police_patrol">Police Patrol</option><option value="police_station">Police Station</option><option value="traffic">Traffic</option><option value="medical">Medical</option><option value="fire">Fire</option><option value="backup">Backup</option></select></label>
                 <label>Source<select name="source"><option value="admin_registry">Admin Registry</option><option value="live_gps">Live GPS</option><option value="station_registry">Station Fallback</option><option value="demo_seed">Demo Seed</option></select></label>
-                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option></select></label>
+                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option><option value="decommissioned">Decommissioned</option></select></label>
                 <label>Officer / Team<input name="officerName" placeholder="Officer or team" /></label>
                 <label>Linked Station<select name="linkedStationId" id="unitStationSelect"><option value="">No station link</option></select></label>
                 <label>Station<input name="stationName" placeholder="Station name" /></label>
                 <label>Beat / Sector<input name="beat" placeholder="Beat / sector" /></label>
                 <label>Jurisdiction<input name="jurisdiction" placeholder="Jurisdiction" /></label>
+                <label>Duty Status<select name="dutyStatus"><option value="on_duty">On Duty</option><option value="off_duty">Off Duty</option><option value="leave">Leave</option></select></label>
+                <label>Availability<select name="availabilityStatus"><option value="available">Available</option><option value="busy">Busy</option><option value="unavailable">Unavailable</option></select></label>
                 <label>Latitude<input name="lat" type="number" step="any" placeholder="17.5285" /></label>
                 <label>Longitude<input name="lng" type="number" step="any" placeholder="78.2636" /></label>
                 <label>Address<input name="address" placeholder="Current/base address" /></label>
