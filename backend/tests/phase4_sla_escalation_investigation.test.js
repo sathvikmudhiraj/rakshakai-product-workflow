@@ -11,6 +11,10 @@ if (!TEST_DB_URL) {
   process.exit(0);
 }
 
+test.after(async () => {
+  await closePool();
+});
+
 function createTestClient() {
   return getPool();
 }
@@ -25,19 +29,23 @@ async function setupTestData(client) {
   // Don't clean up append-only tables (incident_timeline, escalation_alerts, incident_severity_audit)
   // They only accumulate test data which is fine for isolated test runs
   // Don't clean up incidents table either, as FK cascade to incident_timeline triggers append-only trigger
-  await client.query("DELETE FROM investigation_categories WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM severity_recommendation_rules WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM sla_config WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
+  await client.query(`
+    DELETE FROM investigation_categories WHERE id LIKE 'test_%';
+    DELETE FROM severity_recommendation_rules WHERE id LIKE 'test_%';
+    DELETE FROM sla_config WHERE id LIKE 'test_%';
+    DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules WHERE id LIKE 'test_%';
+    DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%';
+    DELETE FROM users WHERE id LIKE 'test_%';
+  `);
   // Skip incidents table to avoid FK cascade to incident_timeline
   // await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%';
+    DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 
   await client.query(`
     INSERT INTO officer_ranks (id, code, name, level, active) VALUES
@@ -83,19 +91,23 @@ async function cleanupTestData(client) {
   // Don't clean up append-only tables (incident_timeline, escalation_alerts, incident_severity_audit)
   // They only accumulate test data which is fine for isolated test runs
   // Don't clean up incidents table either, as FK cascade to incident_timeline triggers append-only trigger
-  await client.query("DELETE FROM investigation_categories WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM severity_recommendation_rules WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM sla_config WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
+  await client.query(`
+    DELETE FROM investigation_categories WHERE id LIKE 'test_%';
+    DELETE FROM severity_recommendation_rules WHERE id LIKE 'test_%';
+    DELETE FROM sla_config WHERE id LIKE 'test_%';
+    DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules WHERE id LIKE 'test_%';
+    DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%';
+    DELETE FROM users WHERE id LIKE 'test_%';
+  `);
   // Skip incidents table to avoid FK cascade to incident_timeline
   // await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%';
+    DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 }
 
 test("Phase 4: incidents table has all new SLA/escalation/investigation columns", async () => {

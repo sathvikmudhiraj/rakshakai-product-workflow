@@ -11,22 +11,22 @@ if (!TEST_DB_URL) {
   process.exit(0);
 }
 
+test.after(async () => {
+  await closePool();
+});
+
 function createTestClient() {
   return getPool();
 }
 
 async function setupTestData(client) {
-  await client.query("DELETE FROM response_unit_members");
-  await client.query("DELETE FROM unit_capabilities");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM response_unit_members; DELETE FROM unit_capabilities; DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules; DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%'; DELETE FROM users WHERE id LIKE 'test_%';
+    DELETE FROM incidents WHERE id LIKE 'test_%'; DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%'; DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 
   await client.query(`
     INSERT INTO officer_ranks (id, code, name, level, active) VALUES
@@ -66,17 +66,13 @@ async function setupTestData(client) {
 }
 
 async function cleanupTestData(client) {
-  await client.query("DELETE FROM response_unit_members");
-  await client.query("DELETE FROM unit_capabilities");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM response_unit_members; DELETE FROM unit_capabilities; DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules; DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%'; DELETE FROM users WHERE id LIKE 'test_%';
+    DELETE FROM incidents WHERE id LIKE 'test_%'; DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%'; DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 }
 
 test("Phase 3: incidents table has escalation columns", async () => {

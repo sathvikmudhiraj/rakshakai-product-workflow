@@ -1,5 +1,6 @@
 ﻿const test = require("node:test");
 const assert = require("node:assert/strict");
+const { after } = require("node:test");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -8,6 +9,10 @@ if (!TEST_DB_URL) {
   console.log("Skipping Phase 1 integration tests: DATABASE_URL not set");
   process.exit(0);
 }
+
+after(async () => {
+  await closePool();
+});
 
 function createTestClient() {
   return getPool();
@@ -24,13 +29,15 @@ function createTestClient() {
 }
 
 async function setupTestData(client) {
-  await client.query("DELETE FROM police_officers");
-  await client.query("DELETE FROM response_units");
-  await client.query("DELETE FROM police_beats");
-  await client.query("DELETE FROM police_stations");
-  await client.query("DELETE FROM officer_ranks WHERE code IN ('SI', 'ASI', 'CI', 'TEST_RANK')");
-  await client.query("DELETE FROM users WHERE role = 'Police Officer'");
-  await client.query("DELETE FROM users WHERE email LIKE 'test_%@example.com'");
+  await client.query(`
+    DELETE FROM police_officers;
+    DELETE FROM response_units;
+    DELETE FROM police_beats;
+    DELETE FROM police_stations;
+    DELETE FROM officer_ranks WHERE code IN ('SI', 'ASI', 'CI', 'TEST_RANK');
+    DELETE FROM users WHERE role = 'Police Officer';
+    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+  `);
 
   await client.query(`
     INSERT INTO officer_ranks (id, code, name, level, active) VALUES
@@ -55,14 +62,16 @@ async function setupTestData(client) {
 }
 
 async function cleanupTestData(client) {
-  await client.query("DELETE FROM police_officers");
-  await client.query("DELETE FROM response_units");
-  await client.query("DELETE FROM police_beats");
-  await client.query("DELETE FROM police_stations");
-  await client.query("DELETE FROM officer_ranks WHERE code IN ('TEST_RANK')");
-  await client.query("DELETE FROM users WHERE role = 'Police Officer'");
-  await client.query("DELETE FROM users WHERE email LIKE 'test_%@example.com'");
-  await client.query("DELETE FROM app_state WHERE key = 'operational'");
+  await client.query(`
+    DELETE FROM police_officers;
+    DELETE FROM response_units;
+    DELETE FROM police_beats;
+    DELETE FROM police_stations;
+    DELETE FROM officer_ranks WHERE code IN ('TEST_RANK');
+    DELETE FROM users WHERE role = 'Police Officer';
+    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+    DELETE FROM app_state WHERE key = 'operational';
+  `);
 }
 
 test("Phase 1: station can contain multiple beats", async () => {
