@@ -37,6 +37,7 @@ import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
   "incident-command": "Incident Command",
+  "unit-assignment": "Unit Assignment",
   gis: "GIS Monitoring",
   cctv: "CCTV Monitoring",
   "live-vision": "Rakshak Live Vision",
@@ -79,6 +80,9 @@ const state = {
   activeDashboardKpi: null,
   activeCommandKpi: null,
   commandFilters: { search: "", severity: "all", status: "all", source: "all", assignment: "all" },
+  assignmentFilters: { search: "", incident: "unassigned", unit: "available" },
+  assignmentSelectedIncidentId: null,
+  assignmentRecommendation: null,
   liveVisionStream: null,
   liveVisionTimer: null,
   liveVisionBusy: false,
@@ -289,6 +293,7 @@ function setView(view, options = {}) {
     return;
   }
   if (view === "incident-command") renderIncidentCommand();
+  if (view === "unit-assignment") renderUnitAssignment();
   requestAnimationFrame(renderSatelliteMaps);
 }
 
@@ -402,9 +407,12 @@ function initializeRealtimeAlerts() {
   if (!isOperatorRole()) return;
   initializeSocket(state.user);
   if (realtimeUnsubscribers.length) return;
-  const events = ["critical_incident_created", "incident_assignment_warning", "incident_assignment_breached", "response_sla_breached", "escalation_level_changed", "investigation_overdue", "escalation_alert_created", "escalation_alert_resolved"];
+  const events = ["critical_incident_created", "incident_assignment_warning", "incident_assignment_breached", "response_sla_breached", "escalation_level_changed", "investigation_overdue", "escalation_alert_created", "escalation_alert_resolved", "unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"];
   realtimeUnsubscribers = events.map((eventName) => onRealtime(eventName, (payload) => {
     loadPersistentEscalations(payload?.alert || null).catch((error) => console.warn("Could not refresh escalation alerts:", error.message));
+    if (["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"].includes(eventName)) {
+      refresh().catch((error) => console.warn("Could not refresh assignment data:", error.message));
+    }
   }));
   realtimeUnsubscribers.push(onRealtime("camera_health_changed", ({ camera }) => {
     if (!camera) return;
@@ -3963,6 +3971,168 @@ function fillUnitRegistryForm(unit) {
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+function assignmentSlaLabel(incident) {
+  const deadline = Date.parse(incident.assignmentDeadline || "");
+  if (!Number.isFinite(deadline)) return "SLA unavailable";
+  const seconds = Math.round((deadline - Date.now()) / 1000);
+  if (seconds <= 0) return `SLA BREACHED ${Math.abs(seconds)} sec ago`;
+  const minutes = Math.floor(seconds / 60);
+  return `SLA ${minutes}:${String(seconds % 60).padStart(2, "0")} remaining`;
+}
+
+function assignmentEscalationLabel(incident) {
+  const level = incident.escalationLevel || "L0";
+  if (incident.assignmentBreached) return `${level} · ASSIGNMENT BREACH`;
+  return `${level}${level !== "L0" ? " · ESCALATED" : ""}`;
+}
+
+function assignmentIncidentPriority(incident) {
+  const severity = { CRITICAL: 3, HIGH: 2, MEDIUM: 1, LOW: 0 }[String(incident.severity || "").toUpperCase()] || 0;
+  return [incident.assignmentBreached ? 1 : 0, severity, -Date.parse(incident.createdAt || incident.updatedAt || 0)];
+}
+
+function assignmentMatchesSearch(incident, query) {
+  const text = `${incident.id} ${incident.incidentId} ${incidentTitle(incident)} ${incident.address || incident.zone || ""}`.toLowerCase();
+  return !query || text.includes(query);
+}
+
+function assignmentIncidentMatchesFilter(incident, filter) {
+  if (filter === "all") return true;
+  if (filter === "unassigned") return !incident.assignedUnitId;
+  if (filter === "critical" || filter === "high") return String(incident.severity).toLowerCase() === filter;
+  if (filter === "warning") return !incident.assignedUnitId && !incident.assignmentBreached && Date.parse(incident.assignmentDeadline || "") > Date.now() && Date.parse(incident.assignmentDeadline || "") - Date.now() < 60000;
+  if (filter === "breached") return Boolean(incident.assignmentBreached);
+  if (filter === "escalated") return String(incident.escalationLevel || "L0") !== "L0";
+  return true;
+}
+
+async function loadAssignmentRecommendation(incident) {
+  if (!incident || incident.assignedUnitId) return;
+  try {
+    const result = await api(`/api/incidents/${encodeURIComponent(incident.id)}/recommend-unit`, { method: "POST" });
+    if (state.assignmentSelectedIncidentId !== incident.id) return;
+    state.assignmentRecommendation = result;
+    renderUnitAssignment();
+  } catch (error) {
+    if (state.assignmentSelectedIncidentId === incident.id) {
+      state.assignmentRecommendation = { error: dispatchErrorMessage(error) };
+      renderUnitAssignment();
+    }
+  }
+}
+
+function selectAssignmentIncident(incident) {
+  state.assignmentSelectedIncidentId = incident.id;
+  state.assignmentRecommendation = null;
+  renderUnitAssignment();
+  loadAssignmentRecommendation(incident);
+}
+
+async function assignUnitFromAssignmentPage(incident, unit) {
+  const isReassignment = Boolean(incident.assignedUnitId);
+  const reason = isReassignment ? window.prompt(`Reason for changing ${unitLabel(incident.assignedUnit)} to ${unitLabel(unit)}:`) : "";
+  if (isReassignment && !String(reason || "").trim()) return;
+  if (!window.confirm(`${isReassignment ? "Reassign" : "Assign"} ${unitLabel(unit)} to ${incident.incidentId || incident.id} — ${incidentTitle(incident)}?`)) return;
+  try {
+    await api(`/api/incidents/${encodeURIComponent(incident.id)}/assign-unit`, {
+      method: "POST",
+      body: { unitId: unit.id, expectedAssignedUnitId: incident.assignedUnitId || null, reason: String(reason || "").trim() }
+    });
+    state.assignmentRecommendation = null;
+    await refresh();
+  } catch (error) {
+    alert(error.message);
+    await refresh();
+  }
+}
+
+async function releaseUnitFromAssignmentPage(incident) {
+  const unit = incident.assignedUnit;
+  const reason = window.prompt(`Reason for releasing ${unitLabel(unit)} from ${incident.incidentId || incident.id}:`);
+  if (!String(reason || "").trim()) return;
+  if (!window.confirm(`Release ${unitLabel(unit)} from this incident?`)) return;
+  try {
+    await api(`/api/incidents/${encodeURIComponent(incident.id)}/release-unit`, {
+      method: "POST", body: { expectedAssignedUnitId: incident.assignedUnitId, reason: String(reason).trim() }
+    });
+    state.assignmentRecommendation = null;
+    await refresh();
+  } catch (error) {
+    alert(error.message);
+    await refresh();
+  }
+}
+
+function renderUnitAssignment() {
+  const incidentList = $("#assignmentIncidentList");
+  const unitList = $("#assignmentUnitList");
+  const selectedPanel = $("#assignmentSelectedIncident");
+  const recommendationPanel = $("#assignmentRecommendation");
+  const activeList = $("#assignmentActiveList");
+  if (!incidentList || !unitList || !selectedPanel || !recommendationPanel || !activeList) return;
+  const filters = state.assignmentFilters;
+  const query = String(filters.search || "").trim().toLowerCase();
+  const dispatchable = state.incidents.filter(isDispatchableIncident);
+  const waiting = dispatchable.filter((incident) => assignmentIncidentMatchesFilter(incident, filters.incident) && assignmentMatchesSearch(incident, query))
+    .sort((a, b) => {
+      const [ab, as, at] = assignmentIncidentPriority(a); const [bb, bs, bt] = assignmentIncidentPriority(b);
+      return bb - ab || bs - as || at - bt;
+    });
+  if (!waiting.some((incident) => incident.id === state.assignmentSelectedIncidentId)) state.assignmentSelectedIncidentId = waiting[0]?.id || null;
+  const selected = dispatchable.find((incident) => incident.id === state.assignmentSelectedIncidentId) || null;
+  incidentList.textContent = "";
+  if (!waiting.length) incidentList.append(node("div", "command-detail-empty", "No incidents currently require unit assignment."));
+  waiting.forEach((incident) => {
+    const card = node("button", `assignment-incident-card ${incident.id === selected?.id ? "active" : ""}`);
+    card.type = "button";
+    card.append(node("strong", "", `${incident.incidentId || incident.id} · ${incidentTitle(incident)}`), node("span", `severity ${sevClass(incident.severity)}`, incident.severity), node("small", "", displayLocation(incident.address || incident.zone)), node("small", incident.assignmentBreached ? "assignment-breach" : "", assignmentSlaLabel(incident)), node("small", "", assignmentEscalationLabel(incident)));
+    card.addEventListener("click", () => selectAssignmentIncident(incident));
+    incidentList.append(card);
+  });
+  selectedPanel.textContent = "";
+  recommendationPanel.textContent = "";
+  unitList.textContent = "";
+  if (!selected) {
+    selectedPanel.append(node("div", "command-detail-empty", "Select an incident to review compatible response units."));
+  } else {
+    selectedPanel.append(node("strong", "", `${selected.incidentId || selected.id} · ${incidentTitle(selected)}`), node("small", "", `${displayLocation(selected.address || selected.zone)} · ${assignmentSlaLabel(selected)} · ${assignmentEscalationLabel(selected)}`));
+    const recommendation = state.assignmentRecommendation;
+    const recommended = recommendation?.unit || recommendation?.recommendation?.primary?.unit;
+    if (recommended) recommendationPanel.append(node("strong", "", `Recommended: ${unitLabel(recommended)}`), node("small", "", recommendation.selectionReason || recommendation.recommendation?.primary?.selectionReason || "Best available compatible unit. Operator confirmation required."));
+    else if (recommendation?.error) recommendationPanel.append(node("strong", "assignment-breach", "No response unit available"), node("small", "", `${recommendation.error}. Supervisor attention required.`));
+    else recommendationPanel.append(node("small", "", selected.assignedUnitId ? "Choose an available unit to change the assignment." : "Calculating the existing dispatch recommendation…"));
+    const candidateIds = new Set((recommendation?.candidates || recommendation?.recommendation?.primaryCandidates || []).map((candidate) => candidate.unit?.id || candidate.unitId || candidate.id));
+    const units = state.responseUnits.filter((unit) => {
+      const status = unitDispatchStatus(unit);
+      const text = `${unitLabel(unit)} ${unit.name || ""} ${unit.stationName || unit.station || ""}`.toLowerCase();
+      return (filters.unit === "all" || status === filters.unit) && (!query || text.includes(query));
+    }).sort((a, b) => Number(candidateIds.has(b.id)) - Number(candidateIds.has(a.id)) || unitLabel(a).localeCompare(unitLabel(b)));
+    if (!units.length) unitList.append(node("div", "command-detail-empty", "No response units match this filter."));
+    units.forEach((unit) => {
+      const status = unitDispatchStatus(unit);
+      const assignable = status === "available" && unit.operational !== false;
+      const card = node("article", `assignment-unit-card status-${status}`);
+      card.append(node("strong", "", unitLabel(unit)), node("small", "", `${unitTypeLabel(unit)} · ${displayValue(status)} · ${unit.stationName || unit.station || "Station unavailable"}`), node("small", "", `${unitLocationAgeText(unit)} · GPS ${unitFreshnessText(unit)}`));
+      const action = node("button", assignable ? "primary" : "ghost", assignable ? (selected.assignedUnitId ? "Change Unit" : "Assign Unit") : displayValue(status));
+      action.type = "button"; action.disabled = !assignable;
+      action.addEventListener("click", () => assignUnitFromAssignmentPage(selected, unit));
+      card.append(action); unitList.append(card);
+    });
+  }
+  const active = dispatchable.filter((incident) => incident.assignedUnitId);
+  activeList.textContent = "";
+  if (!active.length) activeList.append(node("div", "command-detail-empty", "No active unit assignments."));
+  active.forEach((incident) => {
+    const card = node("article", "assignment-active-card");
+    card.append(node("strong", "", `${incident.incidentId || incident.id} · ${unitLabel(incident.assignedUnit)}`), node("small", "", `${incidentTitle(incident)} · ${displayValue(incident.status)} · ${incident.etaMinutes ? `${incident.etaMinutes} min ETA` : "ETA pending"}`));
+    const actions = node("div", "command-action-grid");
+    const view = node("button", "ghost", "View Incident"); view.type = "button"; view.addEventListener("click", () => { state.selectedIncidentId = incident.id; setView("incident-command"); });
+    const change = node("button", "ghost", "Change Unit"); change.type = "button"; change.addEventListener("click", () => selectAssignmentIncident(incident));
+    const release = node("button", "ghost", "Release Unit"); release.type = "button"; release.addEventListener("click", () => releaseUnitFromAssignmentPage(incident));
+    actions.append(view, change, release); card.append(actions); activeList.append(card);
+  });
+}
+
 function renderUnitRegistry(units = state.responseUnits) {
   const list = $("#unitRegistryList");
   if (!list) return;
@@ -5099,6 +5269,7 @@ async function refresh() {
   reports.reports.forEach((r) => $("#caseList").append(reportCard(r)));
   renderAlerts(alerts.alerts);
   renderIncidentCommand();
+  renderUnitAssignment();
   renderDeviceHealth(devices.devices);
   renderAuditLogs(audits.auditLogs);
   renderIntegrations(integrations.integrations);
@@ -5185,6 +5356,24 @@ $$(".nav-item").forEach((button) => button.addEventListener("click", () => setVi
 $$("[data-layer]").forEach((button) => button.addEventListener("click", () => setLayer(button.dataset.layer)));
 $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewJump)));
 $("#refreshCommand")?.addEventListener("click", () => refresh().catch((error) => alert(error.message)));
+$("#refreshUnitAssignment")?.addEventListener("click", () => refresh().catch((error) => alert(error.message)));
+$("#assignmentSearch")?.addEventListener("input", (event) => {
+  state.assignmentFilters.search = event.currentTarget.value;
+  renderUnitAssignment();
+});
+$("#assignmentIncidentFilter")?.addEventListener("change", (event) => {
+  state.assignmentFilters.incident = event.currentTarget.value;
+  renderUnitAssignment();
+});
+$("#assignmentUnitFilter")?.addEventListener("change", (event) => {
+  state.assignmentFilters.unit = event.currentTarget.value;
+  renderUnitAssignment();
+});
+$("#assignmentOpenMap")?.addEventListener("click", () => {
+  const incident = state.incidents.find((item) => item.id === state.assignmentSelectedIncidentId);
+  if (incident) state.selectedIncidentId = incident.id;
+  setView("gis");
+});
 $("#commandIncidentSearch")?.addEventListener("input", (event) => {
   state.commandFilters.search = event.currentTarget.value;
   renderIncidentCommand();

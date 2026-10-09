@@ -100,6 +100,15 @@ function initializeSocketIO(httpServer) {
   httpServer.once("close", () => {
     for (const [event, handler] of cameraHealthHandlers) realtimeEvents.off(event, handler);
   });
+  const assignmentEvents = ["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"];
+  const assignmentHandlers = new Map(assignmentEvents.map((event) => [event, (payload) => {
+    broadcastToAllDashboards(event, payload);
+    if (payload?.incident?.id) emitToIncidentRoom(payload.incident.id, event, payload);
+  }]));
+  for (const [event, handler] of assignmentHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of assignmentHandlers) realtimeEvents.off(event, handler);
+  });
 
   return io;
 }

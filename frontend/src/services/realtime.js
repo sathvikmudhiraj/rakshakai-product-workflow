@@ -70,6 +70,10 @@ function setupEventListeners() {
     "incident_assigned",
     "incident_en_route",
     "incident_on_scene",
+    "unit_assigned",
+    "unit_reassigned",
+    "unit_released",
+    "incident_assignment_changed",
     "escalation_alert_created",
     "escalation_alert_acknowledged",
     "escalation_alert_resolved"

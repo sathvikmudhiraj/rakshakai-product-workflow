@@ -1077,6 +1077,11 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
     if (incident.assignedUnitId === unit.id) return assignmentConflictResponse();
     const expectedAssignedUnitId = normalizeExpectedAssignedUnitId(body);
     if ((incident.assignedUnitId || null) !== expectedAssignedUnitId) return assignmentChangedResponse();
+    const isReassignment = Boolean(incident.assignedUnitId && incident.assignedUnitId !== unit.id);
+    const assignmentReason = String(body.reason || "").trim().slice(0, 240);
+    if (isReassignment && !assignmentReason) {
+      return { status: 400, payload: { error: "A reason is required when changing an assigned unit" } };
+    }
     if (unitClaimedByAnotherIncident(lockedDb, unit, incident.id)) return assignmentConflictResponse();
     if (!normalizeResponseUnitRecord(unit).operational) return { status: 409, payload: { error: `${unit.unitCode} is not operational` } };
     if (!isPoliceResponseUnit(unit)) return { status: 400, payload: { error: "Select an available police unit" } };
@@ -1122,12 +1127,69 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
     });
     const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
     const statusEvent = addDispatchEvent(lockedDb, incident.id, "status_updated", "Incident status changed to Assigned", user.name);
-    const assignEvent = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${unit.unitCode} assigned to ${incident.title}`, user.name);
-    const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, unit.unitCode);
+    const assignmentDescription = isReassignment
+      ? `${previousAssignedUnit?.unitCode || "Previous unit"} reassigned to ${unit.unitCode}: ${assignmentReason}`
+      : `${unit.unitCode} assigned to ${incident.title}`;
+    const assignEvent = addDispatchEvent(lockedDb, incident.id, isReassignment ? "unit_reassigned" : "unit_assigned", assignmentDescription, user.name);
+    lockedDb.incidentTimeline ||= [];
+    lockedDb.incidentTimeline.unshift({
+      id: uid("timeline"), incidentId: incident.id, eventType: isReassignment ? "UNIT_REASSIGNED" : "UNIT_ASSIGNED",
+      actorId: user?.id || null, actorName: user?.name || "System", actorRole: user?.role || "System",
+      description: assignmentDescription,
+      metadata: { unitId: unit.id, unitCode: unit.unitCode, previousUnitId: previousAssignedUnit?.id || null, previousUnitCode: previousAssignedUnit?.unitCode || null, reason: assignmentReason || null },
+      createdAt: incident.updatedAt
+    });
+    const audit = addAuditLog(lockedDb, isReassignment ? "unit_reassigned" : "unit_assigned", user, incident.id,
+      isReassignment ? `previousUnitId=${previousAssignedUnit?.id || ""}; unitId=${unit.id}; reason=${assignmentReason}` : unit.unitCode);
     const overrideAudit = body.unitId ? addAuditLog(lockedDb, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
     const escalationAudit = addAuditLog(lockedDb, "escalation_started", user, incident.id, `ACK timeout ${ackTimeout}s started for ${unit.unitCode}`, incident.updatedAt);
     await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit, escalationAudit] });
-    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route, ackTimeoutSeconds: ackTimeout } };
+    const payload = { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route, ackTimeoutSeconds: ackTimeout };
+    realtimeEvents.emit(isReassignment ? "unit_reassigned" : "unit_assigned", { ...payload, previousUnit: previousAssignedUnit ? unitForResponse(previousAssignedUnit) : null });
+    realtimeEvents.emit("incident_assignment_changed", { ...payload, action: isReassignment ? "reassigned" : "assigned" });
+    return { status: 200, payload };
+  });
+}
+
+async function releaseAssignedIncidentUnit(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const lockedDb = await readDatabase();
+    const incident = lockedDb.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (!incident.assignedUnitId) return { status: 409, payload: { error: "Incident has no assigned response unit" } };
+    if (!["Assigned", "En Route", "On Scene"].includes(canonicalIncidentStatus(incident.status))) {
+      return { status: 409, payload: { error: "This incident cannot release a response unit in its current state" } };
+    }
+    const reason = String(body.reason || "").trim().slice(0, 240);
+    if (!reason) return { status: 400, payload: { error: "A reason is required when releasing a unit" } };
+    const expectedAssignedUnitId = normalizeExpectedAssignedUnitId(body);
+    if ((incident.assignedUnitId || null) !== expectedAssignedUnitId) return assignmentChangedResponse();
+    const unit = lockedDb.responseUnits.find((item) => item.id === incident.assignedUnitId);
+    if (!unit) return { status: 409, payload: { error: "Assigned response unit is unavailable" } };
+    const releasedAt = now();
+    Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: releasedAt, lastAckAt: null, last_ack_at: null });
+    incident.assignedUnitId = null;
+    incident.recommendedUnitId = null;
+    incident.status = "Verified";
+    incident.escalationStatus = incident.escalation_status = "pending";
+    incident.escalationStartedAt = incident.escalation_started_at = null;
+    incident.primaryUnitAckedAt = incident.primary_unit_acked_at = null;
+    incident.updatedAt = releasedAt;
+    const event = addDispatchEvent(lockedDb, incident.id, "unit_released", `${unit.unitCode} released: ${reason}`, user.name, releasedAt);
+    lockedDb.incidentTimeline ||= [];
+    lockedDb.incidentTimeline.unshift({
+      id: uid("timeline"), incidentId: incident.id, eventType: "UNIT_RELEASED",
+      actorId: user?.id || null, actorName: user?.name || "System", actorRole: user?.role || "System",
+      description: `${unit.unitCode} released: ${reason}`,
+      metadata: { unitId: unit.id, unitCode: unit.unitCode, reason }, createdAt: releasedAt
+    });
+    const audit = addAuditLog(lockedDb, "unit_released", user, incident.id, `unitId=${unit.id}; reason=${reason}`, releasedAt);
+    const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit], reports: [linkedReport], events: [event], audits: [audit] });
+    const payload = { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit) };
+    realtimeEvents.emit("unit_released", payload);
+    realtimeEvents.emit("incident_assignment_changed", { ...payload, action: "released" });
+    return { status: 200, payload };
   });
 }
 
@@ -5581,6 +5643,13 @@ async function apiInternal(req, res, url) {
     const response = body.recommendationId
       ? await confirmHybridDispatch(productAssignMatch[1], body, user)
       : await assignSelectedIncidentUnit(productAssignMatch[1], body, user);
+    return sendJson(res, response.status, response.payload);
+  }
+
+  const releaseUnitMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/release-unit$/);
+  if (req.method === "POST" && releaseUnitMatch) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const response = await releaseAssignedIncidentUnit(releaseUnitMatch[1], body, user);
     return sendJson(res, response.status, response.payload);
   }
 

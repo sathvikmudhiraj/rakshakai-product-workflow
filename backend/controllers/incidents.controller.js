@@ -16,5 +16,6 @@ exports.confirmLocation = legacyHandler((req) => `/api/incidents/${req.params.id
 exports.history = legacyHandler("/api/incidents/history");
 exports.clearHistory = legacyHandler("/api/incidents/history");
 exports.assignUnit = legacyHandler((req) => `/api/incidents/${req.params.id}/assign-unit`);
+exports.releaseUnit = legacyHandler((req) => `/api/incidents/${req.params.id}/release-unit`);
 exports.close = legacyHandler((req) => `/api/incidents/${req.params.id}/close`);
 exports.updateStatus = legacyHandler((req) => `/api/incidents/${req.params.id}/status`);

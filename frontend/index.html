@@ -107,6 +107,7 @@
         <nav class="navigation">
           <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
           <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
+          <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
           <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
           <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
           <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
@@ -210,6 +211,23 @@
               <div id="commandReviewQueue" class="command-review-list"></div>
             </section>
             </aside>
+          </div>
+        </section>
+
+        <section class="view" data-panel="unit-assignment">
+          <div class="command-page-head">
+            <div><span class="eyebrow">Human-confirmed dispatch</span><h2>Unit Assignment</h2><p>Prioritize incidents awaiting a response unit and assign only from the current operational registry.</p></div>
+            <button id="refreshUnitAssignment" class="ghost" type="button">Refresh Assignment Data</button>
+          </div>
+          <div class="unit-assignment-filters" aria-label="Unit assignment filters">
+            <label><span>Search</span><input id="assignmentSearch" type="search" placeholder="Incident ID, unit, location" autocomplete="off" /></label>
+            <label><span>Incidents</span><select id="assignmentIncidentFilter"><option value="unassigned">Unassigned</option><option value="all">All dispatchable</option><option value="critical">Critical</option><option value="high">High</option><option value="warning">SLA warning</option><option value="breached">SLA breached</option><option value="escalated">Escalated</option></select></label>
+            <label><span>Units</span><select id="assignmentUnitFilter"><option value="available">Available</option><option value="all">All units</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option></select></label>
+          </div>
+          <div class="unit-assignment-workspace">
+            <section class="panel assignment-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Response queue</span><h2>Incidents Requiring Response</h2></div></div><div id="assignmentIncidentList" class="assignment-list"></div></section>
+            <section class="panel assignment-units-panel"><div class="panel-head"><div><span class="eyebrow">Operator decision</span><h2>Recommended / Available Units</h2></div><button id="assignmentOpenMap" class="ghost" type="button">Open in GIS</button></div><div id="assignmentSelectedIncident" class="assignment-selected"></div><div id="assignmentRecommendation" class="assignment-recommendation"></div><div id="assignmentUnitList" class="assignment-list"></div></section>
+            <section class="panel assignment-active-panel"><div class="panel-head"><div><span class="eyebrow">Current workload</span><h2>Active Assignments</h2></div></div><div id="assignmentActiveList" class="assignment-list"></div></section>
           </div>
         </section>
 

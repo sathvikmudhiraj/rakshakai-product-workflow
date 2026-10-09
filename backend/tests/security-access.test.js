@@ -5024,7 +5024,7 @@ test("manual reassignment succeeds only when expected assignment matches", async
   const response = await request(`/api/incidents/${incident.id}/assign-unit`, {
     method: "POST",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: unitAssignmentBody(secondUnit.id, firstUnit.id)
+    body: JSON.stringify({ unitId: secondUnit.id, expectedAssignedUnitId: firstUnit.id, reason: "Closer unit became available" })
   });
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -5040,6 +5040,42 @@ test("manual reassignment succeeds only when expected assignment matches", async
   assert.equal(updatedFirstUnit.currentIncidentId, null);
   assert.equal(updatedSecondUnit.status, "busy");
   assert.equal(updatedSecondUnit.assignedIncidentId, incident.id);
+  assert.ok(updatedDb.dispatchEvents.some((event) => event.incidentId === incident.id && event.type === "unit_reassigned"));
+  assert.ok(updatedDb.auditLogs.some((event) => event.incidentId === incident.id && event.action === "unit_reassigned" && /Closer unit/.test(event.details)));
+  assert.ok(updatedDb.incidentTimeline.some((event) => event.incidentId === incident.id && event.eventType === "UNIT_REASSIGNED"));
+});
+
+test("manual reassignment requires a reason and release returns the unit to available", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const firstUnit = createAssignmentTestUnit({ unitCode: `RELEASE-A-${Date.now()}`, status: "busy" });
+  const secondUnit = createAssignmentTestUnit({ unitCode: `RELEASE-B-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, { status: "Assigned", assignedUnitId: firstUnit.id });
+  firstUnit.assignedIncidentId = incident.id;
+  firstUnit.currentIncidentId = incident.id;
+  db.responseUnits.unshift(firstUnit, secondUnit);
+  db.incidents.unshift(incident);
+  await writeDatabase(db);
+
+  const missingReason = await request(`/api/incidents/${incident.id}/assign-unit`, {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: unitAssignmentBody(secondUnit.id, firstUnit.id)
+  });
+  assert.equal(missingReason.status, 400);
+
+  const released = await request(`/api/incidents/${incident.id}/release-unit`, {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ expectedAssignedUnitId: firstUnit.id, reason: "Incident cancelled" })
+  });
+  assert.equal(released.status, 200);
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  const updatedUnit = updatedDb.responseUnits.find((item) => item.id === firstUnit.id);
+  assert.equal(updatedIncident.assignedUnitId, null);
+  assert.equal(updatedIncident.status, "Verified");
+  assert.equal(updatedUnit.status, "available");
+  assert.ok(updatedDb.auditLogs.some((event) => event.incidentId === incident.id && event.action === "unit_released"));
+  assert.ok(updatedDb.incidentTimeline.some((event) => event.incidentId === incident.id && event.eventType === "UNIT_RELEASED"));
 });
 
 test("manual reassignment rejects stale expected assignment without side effects", async () => {
