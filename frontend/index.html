@@ -283,6 +283,8 @@
               <label class="camera-field field-half">Location<input name="location" placeholder="Gate A / Sector 7" required /></label>
               <label class="camera-field field-half">Source type<select name="sourceType"><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option></select></label>
               <label class="camera-field field-half">Status<select name="status"><option value="unknown">Unknown</option><option value="online">Online</option><option value="offline">Offline</option></select></label>
+              <label class="camera-field field-half">Criticality<select name="criticality"><option value="NORMAL">Normal</option><option value="IMPORTANT">Important</option><option value="CRITICAL">Critical</option></select></label>
+              <label class="camera-field field-half">Expected FPS<input name="expectedFps" type="number" min="1" max="120" value="25" /></label>
               <label class="camera-field field-full">Stream URL<input name="streamUrl" placeholder="rtsp://<user>:<password>@<camera-host>/<path>" /></label>
               <label class="camera-field field-half">Username<input name="username" autocomplete="off" placeholder="Optional backend credential" /></label>
               <label class="camera-field field-half">Password<input name="password" type="password" autocomplete="new-password" placeholder="Optional backend credential" /></label>

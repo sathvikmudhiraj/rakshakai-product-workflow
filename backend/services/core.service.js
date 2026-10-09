@@ -39,6 +39,8 @@ const investigationCategoriesRepository = require("../repositories/investigation
 const incidentSeverityAuditRepository = require("../repositories/incidentSeverityAudit.repository");
 const escalationAlertsRepository = require("../repositories/escalationAlerts.repository");
 const incidentTimelineRepository = require("../repositories/incidentTimeline.repository");
+const cameraHealthEventsRepository = require("../repositories/cameraHealthEvents.repository");
+const cameraHealthAlertsRepository = require("../repositories/cameraHealthAlerts.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -114,6 +116,8 @@ const repositories = [
   incidentSeverityAuditRepository,
   escalationAlertsRepository,
   incidentTimelineRepository
+  , cameraHealthEventsRepository
+  , cameraHealthAlertsRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -176,6 +180,9 @@ function seedDb() {
     incidentSeverityAudit: [],
     escalationAlerts: [],
     incidentTimeline: [],
+    cameraHealthEvents: [],
+    cameraHealthAlerts: [],
+    cameraHealthThresholds: {},
     devices: [
       { id: "d1", name: "Camera C-19", type: "CCTV", status: "online", zone: "Red Zone", latencyMs: 210 },
       { id: "d2", name: "Drone D-03", type: "Drone", status: "warning", zone: "Transit Hub", latencyMs: 380 },
@@ -281,7 +288,9 @@ async function readDatabase() {
     escalationAlerts,
     incidentTimeline,
     stateResult,
-    evidenceCustodyEvents
+    evidenceCustodyEvents,
+    cameraHealthEvents,
+    cameraHealthAlerts
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -306,7 +315,9 @@ async function readDatabase() {
     escalationAlertsRepository.list(defaults),
     incidentTimelineRepository.list(defaults),
     query("SELECT data FROM app_state WHERE key = 'operational'"),
-    evidenceCustodyRepository.list()
+    evidenceCustodyRepository.list(),
+    cameraHealthEventsRepository.list(defaults),
+    cameraHealthAlertsRepository.list(defaults)
   ]);
   const state = stateResult.rows[0]?.data || {};
   const custodyByEvidence = new Map();
@@ -344,7 +355,9 @@ async function readDatabase() {
     incidentSeverityAudit,
     escalationAlerts,
     incidentTimeline,
-    videoEvidence
+    videoEvidence,
+    cameraHealthEvents,
+    cameraHealthAlerts
   });
 }
 
@@ -384,7 +397,9 @@ async function writeDatabase(db) {
       [investigationCategoriesRepository, db.investigationCategories || []],
       [incidentSeverityAuditRepository, db.incidentSeverityAudit || []],
       [incidentTimelineRepository, db.incidentTimeline || []],
-      [escalationAlertsRepository, db.escalationAlerts || []]
+      [escalationAlertsRepository, db.escalationAlerts || []],
+      [cameraHealthEventsRepository, db.cameraHealthEvents || []],
+      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -410,6 +425,7 @@ async function writeDatabase(db) {
       [severityRecommendationRulesRepository, db.severityRecommendationRules || []],
       [investigationCategoriesRepository, db.investigationCategories || []],
       [escalationAlertsRepository, db.escalationAlerts || []]
+      , [cameraHealthAlertsRepository, db.cameraHealthAlerts || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
       const ids = records.map((record) => record.id);
@@ -443,6 +459,7 @@ async function writeDatabase(db) {
         incidentSeverityAudit: db.incidentSeverityAudit || [],
         escalationAlerts: db.escalationAlerts || [],
         incidentTimeline: db.incidentTimeline || []
+        , cameraHealthThresholds: db.cameraHealthThresholds || []
       })]
     );
   });
@@ -2842,6 +2859,17 @@ function cameraSourceForResponse(db, source) {
     lastCheckedAt: source.lastCheckedAt || source.lastTestedAt || source.lastSeenAt || null,
     lastFrameStatus: source.lastFrameStatus || source.lastSnapshotStatus || (isDemo ? "simulated demo frame" : "snapshot unavailable"),
     healthReason: source.healthReason || (isDemo ? "Simulated feed for demonstration only" : hasStreamConfig ? "Connection test pending" : "No backend stream configuration"),
+    healthStatus: String(source.healthStatus || "UNKNOWN").toUpperCase(),
+    healthSeverity: String(source.healthSeverity || "NORMAL").toUpperCase(),
+    criticality: String(source.criticality || "NORMAL").toUpperCase(),
+    expectedFps: source.expectedFps ?? null,
+    healthIssueStartedAt: source.healthIssueStartedAt || null,
+    lastHeartbeatAt: source.lastHeartbeatAt || null,
+    lastStreamReceivedAt: source.lastStreamReceivedAt || null,
+    lastFrameReceivedAt: source.lastFrameReceivedAt || null,
+    lastHealthyAt: source.lastHealthyAt || null,
+    maintenanceMode: Boolean(source.maintenanceMode),
+    maintenanceReason: source.maintenanceReason || null,
     latestDetection,
     latestAlertTime: relatedAlerts[0]?.lastDetectedAt || relatedAlerts[0]?.createdAt || null,
     incidentCount,
@@ -2899,6 +2927,9 @@ function safeCameraConfigBody(body, existing = {}) {
     location: location || "Unassigned",
     zone: location || "Unassigned",
     status: CAMERA_STATUSES.has(String(body.status || "").toLowerCase()) ? String(body.status).toLowerCase() : (existing.status || "unknown"),
+    criticality: ["NORMAL", "IMPORTANT", "CRITICAL"].includes(String(body.criticality || existing.criticality || "NORMAL").toUpperCase())
+      ? String(body.criticality || existing.criticality || "NORMAL").toUpperCase() : "NORMAL",
+    expectedFps: body.expectedFps === undefined ? (existing.expectedFps ?? null) : Math.max(1, Math.min(120, Number(body.expectedFps) || 25)),
     aiEnabled: body.aiEnabled === undefined ? Boolean(existing.aiEnabled) : Boolean(body.aiEnabled),
     enabled: body.enabled === undefined ? existing.enabled !== false : Boolean(body.enabled),
     isDemo: false,

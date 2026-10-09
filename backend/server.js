@@ -13,6 +13,7 @@ const cameraRoutes = require("./routes/cameras.routes");
 const aiRoutes = require("./routes/ai.routes");
 const missingPersonRoutes = require("./routes/missingPersons.routes");
 const deviceHealthRoutes = require("./routes/deviceHealth.routes");
+const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
@@ -29,6 +30,7 @@ const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./servi
 const { validateCameraCredentialConfig } = require("./services/cameraSecrets.service");
 const { installShutdownHandlers } = require("./services/shutdown.service");
 const realtimeEvents = require("./services/realtimeEvents.service");
+const { runCameraHealthSweep } = require("./services/cameraHealthMonitor.service");
 const { helmetDirectives } = require("../csp.config.cjs");
 
 let io = null;
@@ -92,6 +94,12 @@ function initializeSocketIO(httpServer) {
   };
   realtimeEvents.on("critical_incident_created", criticalHandler);
   httpServer.once("close", () => realtimeEvents.off("critical_incident_created", criticalHandler));
+  const cameraHealthEvents = ["camera_health_changed", "camera_offline", "camera_online", "camera_no_signal", "camera_no_video_frames", "camera_low_fps", "camera_tamper_suspected", "camera_obstructed", "camera_storage_error", "camera_health_alert_created", "camera_health_alert_acknowledged", "camera_health_alert_resolved"];
+  const cameraHealthHandlers = new Map(cameraHealthEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of cameraHealthHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of cameraHealthHandlers) realtimeEvents.off(event, handler);
+  });
 
   return io;
 }
@@ -624,6 +632,7 @@ app.post("/api/incidents/:id/acknowledge", legacyHandler((req) => `/api/incident
 app.post("/api/dispatch/check-escalations", legacyHandler("/api/dispatch/check-escalations"));
 app.post("/api/send-alert", legacyHandler("/api/send-alert"));
 app.use("/api/cameras", cameraRoutes);
+app.use("/api/camera-health", cameraHealthRoutes);
 app.post("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-feeds", legacyHandler("/api/camera-feeds"));
@@ -780,14 +789,27 @@ async function start(listenPort = port) {
         }
       }, slaSweepIntervalMs);
 
+      const cameraHealthSweepIntervalMs = Math.max(5_000, Number(process.env.CAMERA_HEALTH_SWEEP_INTERVAL_MS || 15_000));
+      let cameraHealthSweepRunning = false;
+      const cameraHealthTimer = setInterval(async () => {
+        if (cameraHealthSweepRunning) return;
+        cameraHealthSweepRunning = true;
+        try { await runCameraHealthSweep(); }
+        catch (error) { console.error("RakshakAI camera health sweep failed:", error.message); }
+        finally { cameraHealthSweepRunning = false; }
+      }, cameraHealthSweepIntervalMs);
+
       escalationTimer.unref();
       slaEscalationTimer.unref();
+      cameraHealthTimer.unref();
       httpServer.once("close", () => {
         clearInterval(escalationTimer);
         clearInterval(slaEscalationTimer);
+        clearInterval(cameraHealthTimer);
       });
       console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
       console.log(`RakshakAI SLA escalation sweep every ${slaSweepIntervalMs}ms`);
+      console.log(`RakshakAI camera health sweep every ${cameraHealthSweepIntervalMs}ms`);
       resolve(httpServer);
     });
     httpServer.once("error", reject);

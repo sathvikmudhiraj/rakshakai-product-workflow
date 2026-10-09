@@ -406,6 +406,11 @@ function initializeRealtimeAlerts() {
   realtimeUnsubscribers = events.map((eventName) => onRealtime(eventName, (payload) => {
     loadPersistentEscalations(payload?.alert || null).catch((error) => console.warn("Could not refresh escalation alerts:", error.message));
   }));
+  realtimeUnsubscribers.push(onRealtime("camera_health_changed", ({ camera }) => {
+    if (!camera) return;
+    state.cameraRegistry = (state.cameraRegistry || []).map((item) => item.id === camera.id ? { ...item, ...camera } : item);
+    renderCameras(state.cameraRegistry);
+  }));
 }
 
 function showApp() {
@@ -3082,8 +3087,9 @@ function cameraSummaryCards(cameras) {
   const demo = cameras.filter((camera) => camera.isDemo);
   return [
     { label: "Total Cameras", value: cameras.length },
-    { label: "Online", value: cameras.filter((camera) => camera.status === "online").length },
-    { label: "Offline", value: cameras.filter((camera) => camera.status === "offline").length },
+    { label: "Healthy", value: cameras.filter((camera) => camera.healthStatus === "ONLINE").length },
+    { label: "Needs attention", value: cameras.filter((camera) => !["ONLINE", "UNKNOWN", "MAINTENANCE"].includes(camera.healthStatus)).length },
+    { label: "Offline", value: cameras.filter((camera) => camera.healthStatus === "OFFLINE").length },
     { label: "Real Configured", value: real.filter((camera) => camera.hasStreamConfig).length },
     { label: "Demo Feeds", value: demo.length }
   ];
@@ -3119,6 +3125,8 @@ function cameraRegistryRow(camera) {
     ["AI enabled", camera.aiEnabled ? "Yes" : "No"],
     ["Last checked", cameraTime(camera.lastCheckedAt)],
     ["Frame status", camera.lastFrameStatus || "Snapshot unavailable"],
+    ["Health", camera.healthStatus || "UNKNOWN"],
+    ["FPS / latency", `${camera.healthTelemetry?.fps ?? "--"} / ${camera.healthTelemetry?.latencyMs ?? "--"} ms`],
     ["Health reason", camera.healthReason || "No health detail"]
   ].forEach(([label, value]) => {
     const item = node("span", "");
@@ -5211,6 +5219,8 @@ function openCameraConfig(camera = null) {
   form.elements.namedItem("sourceType").value = camera?.isDemo ? "rtsp" : camera?.type || "rtsp";
   form.elements.namedItem("aiEnabled").value = camera?.aiEnabled ? "true" : "false";
   form.elements.namedItem("status").value = camera?.status || "unknown";
+  form.elements.namedItem("criticality").value = camera?.criticality || "NORMAL";
+  form.elements.namedItem("expectedFps").value = camera?.expectedFps || 25;
   const streamUrl = form.elements.namedItem("streamUrl");
   const username = form.elements.namedItem("username");
   const password = form.elements.namedItem("password");
@@ -5249,7 +5259,9 @@ $("#cameraConfigForm")?.addEventListener("submit", async (event) => {
       location: data.get("location"),
       sourceType: data.get("sourceType"),
       aiEnabled: data.get("aiEnabled") === "true",
-      status: data.get("status")
+      status: data.get("status"),
+      criticality: data.get("criticality"),
+      expectedFps: Number(data.get("expectedFps"))
     };
     const streamUrl = String(data.get("streamUrl") || "").trim();
     const username = String(data.get("username") || "").trim();

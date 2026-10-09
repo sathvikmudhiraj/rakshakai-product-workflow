@@ -2,7 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const bcrypt = require("bcryptjs");
 const { io: createClient } = require("socket.io-client");
-const { query, closePool } = require("../services/postgres.service");
+const { query, closePool, getPool } = require("../services/postgres.service");
+const { __testables: { runMigrations } } = require("../scripts/migrate");
 const { start, emitSlaSweepEvents } = require("../server");
 const realtimeEvents = require("../services/realtimeEvents.service");
 
@@ -15,6 +16,8 @@ function once(socket, event, timeout = 5000) {
 
 test("authenticated Socket.IO carries critical and SLA events and REST restores persisted state", async (t) => {
   if (!process.env.DATABASE_URL) return t.skip("PostgreSQL test schema is required");
+  const migrationClient = await getPool().connect();
+  try { await runMigrations({ client: migrationClient }); } finally { migrationClient.release(); }
   process.env.AI_SERVICE_ALLOW_INSECURE = "true";
   const suffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const userId = `socket_admin_${suffix}`;
@@ -100,6 +103,10 @@ test("authenticated Socket.IO carries critical and SLA events and REST restores 
   emitSlaSweepEvents({ createdAlerts: [alert], resolvedAlerts: [] });
   assert.equal((await genericPromise).alert.id, alertId);
   assert.equal((await specificPromise).alert.alertType, "ASSIGNMENT_BREACH");
+
+  const cameraHealthPromise = once(socket, "camera_health_changed");
+  realtimeEvents.emit("camera_health_changed", { camera: { id: "cam_c19", healthStatus: "NO_VIDEO_FRAMES" }, status: "NO_VIDEO_FRAMES", severity: "HIGH" });
+  assert.equal((await cameraHealthPromise).camera.healthStatus, "NO_VIDEO_FRAMES");
 
   socket.close();
   const persisted = await fetch(`http://127.0.0.1:${port}/api/escalation/alerts?active=true`, { headers: { Cookie: cookie } });
