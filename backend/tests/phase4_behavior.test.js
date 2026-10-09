@@ -10,10 +10,32 @@ const {
   isInvestigationInactive,
   isInvestigationOfficerMissing
 } = require("../services/core.service");
+const severityRecommendationRulesRepository = require("../repositories/severityRecommendationRules.repository");
+const investigationCategoriesRepository = require("../repositories/investigationCategories.repository");
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const baseTime = Date.parse("2026-01-01T10:00:00.000Z");
+
+test("Phase 4 repositories bind PostgreSQL text arrays as arrays", async () => {
+  const calls = [];
+  const client = { query: async (sql, values) => calls.push({ sql, values }) };
+
+  await severityRecommendationRulesRepository.upsert({
+    id: "rule-array-test",
+    incidentType: "murder",
+    recommendedSeverity: "CRITICAL",
+    keywords: ["murder", "homicide"]
+  }, client);
+  await investigationCategoriesRepository.upsert({
+    id: "category-array-test",
+    categoryName: "Homicide",
+    incidentTypes: ["murder", "homicide"]
+  }, client);
+
+  assert.deepEqual(calls[0].values[4], ["murder", "homicide"]);
+  assert.deepEqual(calls[1].values[2], ["murder", "homicide"]);
+});
 const configs = [
   ["CRITICAL", 1, 5, 1, 1], ["HIGH", 3, 10, 1, 2],
   ["MEDIUM", 10, 30, 3, 5], ["LOW", 30, 120, 10, 15]

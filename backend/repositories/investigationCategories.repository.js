@@ -5,7 +5,7 @@ module.exports = createRepository({
   jsonKey: "investigationCategories",
   columns: [
     { name: "category_name", value: (item) => item.categoryName || item.category_name || "" },
-    { name: "incident_types", value: (item) => JSON.stringify(item.incidentTypes || item.incident_types || []) },
+    { name: "incident_types", value: (item) => item.incidentTypes || item.incident_types || [] },
     { name: "requires_investigation", value: (item) => Boolean(item.requiresInvestigation !== undefined ? item.requiresInvestigation : true) },
     { name: "investigation_deadline_hours", value: (item) => item.investigationDeadlineHours || item.investigation_deadline_hours || null },
     { name: "active", value: (item) => Boolean(item.active !== undefined ? item.active : true) }

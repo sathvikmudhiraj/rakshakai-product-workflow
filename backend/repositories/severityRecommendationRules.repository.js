@@ -7,7 +7,7 @@ module.exports = createRepository({
     { name: "incident_type", value: (item) => item.incidentType || item.incident_type || "" },
     { name: "category", value: (item) => item.category || null },
     { name: "recommended_severity", value: (item) => item.recommendedSeverity || item.recommended_severity || "MEDIUM" },
-    { name: "keywords", value: (item) => JSON.stringify(item.keywords || []) },
+    { name: "keywords", value: (item) => item.keywords || [] },
     { name: "priority", value: (item) => Number(item.priority || 0) },
     { name: "active", value: (item) => Boolean(item.active !== undefined ? item.active : true) }
   ],
