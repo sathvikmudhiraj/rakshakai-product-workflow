@@ -1310,8 +1310,19 @@ test("Admin can manage response unit registry while Police and Citizen cannot", 
   assert.equal(deactivatedBody.unit.operational, false);
   assert.equal(deactivatedBody.unit.status, "offline");
 
+  const archived = await request(`/api/response-units/${createdBody.unit.id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ archive: true, archiveReason: "Vehicle retired from service" })
+  });
+  assert.equal(archived.status, 200);
+  const archivedBody = await archived.json();
+  assert.equal(archivedBody.unit.status, "decommissioned");
+  assert.equal(archivedBody.unit.operational, false);
+  assert.equal(archivedBody.unit.archiveReason, "Vehicle retired from service");
+
   const audits = (await (await request("/api/audit-logs", { headers: authHeaders("Admin") })).json()).auditLogs.map((log) => log.action);
-  for (const action of ["unit_created", "unit_updated", "unit_status_changed", "unit_location_updated"]) {
+  for (const action of ["unit_created", "unit_updated", "unit_status_changed", "unit_location_updated", "unit_archived"]) {
     assert.ok(audits.includes(action), action);
   }
 });

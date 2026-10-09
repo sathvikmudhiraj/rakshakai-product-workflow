@@ -5053,6 +5053,15 @@ async function apiInternal(req, res, url) {
     if (!unit) return sendJson(res, 404, { error: "Response unit not found" });
     const before = normalizeResponseUnitRecord(unit);
     try {
+      const archiveReason = String(body.archiveReason || "").trim().slice(0, 240);
+      if (req.method === "PATCH" && body.archive === true) {
+        if (unit.assignedIncidentId || unit.currentIncidentId) return sendJson(res, 409, { error: "Release the active incident assignment before archiving this unit" });
+        if (!archiveReason) return sendJson(res, 400, { error: "An archive reason is required" });
+        Object.assign(unit, normalizeResponseUnitRecord({ ...unit, operational: false, status: "decommissioned", archivedAt: now(), archivedBy: user.id, archiveReason, lastUpdated: now() }));
+        const audit = addAuditLog(db, "unit_archived", user, null, `${unit.unitCode}: ${archiveReason}`);
+        await writeSelectedRecords(db, [[responseUnitsRepository, [unit]], [auditLogsRepository, [audit]]]);
+        return sendJson(res, 200, { unit: unitForResponse(unit), audit: { id: audit.id, action: audit.action, timestamp: audit.timestamp } });
+      }
       const next = req.method === "DELETE"
         ? normalizeResponseUnitRecord({ ...unit, operational: false, status: "offline", lastUpdated: now() })
         : safeResponseUnitBody(body, unit, db.policeStations);

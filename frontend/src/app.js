@@ -3968,6 +3968,8 @@ function fillUnitRegistryForm(unit) {
   form.elements.namedItem("lng").value = unit.longitude ?? unit.lng ?? "";
   form.elements.namedItem("address").value = unit.address || unit.currentAddress || "";
   form.elements.namedItem("operational").checked = unit.operational !== false;
+  form.elements.namedItem("dutyStatus").value = unit.dutyStatus || "on_duty";
+  form.elements.namedItem("availabilityStatus").value = unit.availabilityStatus || "available";
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -4183,7 +4185,22 @@ function renderUnitRegistry(units = state.responseUnits) {
         setText("#unitRegistryStatus", error.message);
       }
     });
-    actions.append(edit, deactivate);
+    const archive = node("button", "ghost", unit.archivedAt ? "Archived" : "Archive");
+    archive.type = "button";
+    archive.disabled = Boolean(unit.archivedAt);
+    archive.addEventListener("click", async () => {
+      const reason = window.prompt(`Reason for archiving ${unitLabel(unit)}:`);
+      if (!String(reason || "").trim()) return;
+      if (!window.confirm(`Archive ${unitLabel(unit)}? Archived units cannot be dispatched.`)) return;
+      try {
+        await api(`/api/response-units/${unit.id}`, { method: "PATCH", body: { archive: true, archiveReason: String(reason).trim() } });
+        setText("#unitRegistryStatus", "Unit archived.");
+        await refresh();
+      } catch (error) {
+        setText("#unitRegistryStatus", error.message);
+      }
+    });
+    actions.append(edit, deactivate, archive);
     card.append(head, meta, actions);
     list.append(card);
   });
@@ -6021,6 +6038,8 @@ $("#unitRegistryForm")?.addEventListener("submit", async (event) => {
     lat: data.get("lat"),
     lng: data.get("lng"),
     address: data.get("address"),
+    dutyStatus: data.get("dutyStatus"),
+    availabilityStatus: data.get("availabilityStatus"),
     operational: data.get("operational") === "on"
   };
   status.className = "form-status";
