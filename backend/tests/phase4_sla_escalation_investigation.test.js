@@ -290,6 +290,26 @@ test("Phase 4: investigation_categories table seeded with defaults", async () =>
   await cleanupTestData(client);
 });
 
+test("Phase 4: configuration repositories have JSONB data columns", async () => {
+  const client = createTestClient();
+  await setupTestData(client);
+
+  const columns = await client.query(`
+    SELECT table_name, data_type
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND column_name = 'data'
+      AND table_name IN ('severity_recommendation_rules', 'investigation_categories')
+    ORDER BY table_name
+  `);
+  assert.deepEqual(columns.rows, [
+    { table_name: 'investigation_categories', data_type: 'jsonb' },
+    { table_name: 'severity_recommendation_rules', data_type: 'jsonb' }
+  ]);
+
+  await cleanupTestData(client);
+});
+
 test("Phase 4: SLA deadline calculation works correctly", async () => {
   const client = createTestClient();
   await setupTestData(client);
