@@ -15,6 +15,7 @@ const missingPersonRoutes = require("./routes/missingPersons.routes");
 const deviceHealthRoutes = require("./routes/deviceHealth.routes");
 const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
+const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
@@ -108,6 +109,19 @@ function initializeSocketIO(httpServer) {
   for (const [event, handler] of assignmentHandlers) realtimeEvents.on(event, handler);
   httpServer.once("close", () => {
     for (const [event, handler] of assignmentHandlers) realtimeEvents.off(event, handler);
+  });
+
+  const trackingEvents = [
+    "tracking_session_created",
+    "tracking_candidates_found",
+    "tracking_candidate_verified",
+    "tracking_session_closed",
+    "tracking_last_seen_updated"
+  ];
+  const trackingHandlers = new Map(trackingEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of trackingHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of trackingHandlers) realtimeEvents.off(event, handler);
   });
 
   return io;
@@ -649,6 +663,21 @@ app.patch("/api/camera-sources/:id/config", legacyHandler((req) => `/api/camera-
 app.post("/api/camera-sources/:id/test", legacyHandler((req) => `/api/camera-sources/${req.params.id}/test`));
 app.post("/api/camera-sources/:id/analyze", legacyHandler((req) => `/api/camera-sources/${req.params.id}/analyze`));
 app.delete("/api/camera-sources/:id", legacyHandler((req) => `/api/camera-sources/${req.params.id}`));
+
+app.post("/api/tracking/sessions", trackingController.createTrackingSession);
+app.get("/api/tracking/sessions", trackingController.listTrackingSessions);
+app.get("/api/tracking/sessions/:sessionId", trackingController.getTrackingSession);
+app.post("/api/tracking/sessions/:sessionId/search", trackingController.searchCandidates);
+app.get("/api/tracking/sessions/:sessionId/timeline", trackingController.getSessionTimeline);
+app.get("/api/tracking/sessions/:sessionId/map", trackingController.getSessionMapData);
+app.post("/api/tracking/sessions/:sessionId/candidates/:candidateId/verify", trackingController.verifyCandidate);
+app.get("/api/tracking/sessions/:sessionId/candidates/:candidateId", trackingController.getCandidateDetails);
+app.post("/api/tracking/sessions/:sessionId/close", trackingController.closeTrackingSession);
+
+app.get("/api/tracking/camera-adjacency", trackingController.getCameraAdjacency);
+app.post("/api/tracking/camera-adjacency", trackingController.createCameraAdjacency);
+app.get("/api/tracking/score-config", trackingController.getScoreConfig);
+app.post("/api/tracking/score-config", trackingController.updateScoreConfig);
 app.use("/api/ai", aiRoutes);
 app.post("/api/rakshak/analyze-frame", aiFrameLimiter, require("./controllers/ai.controller").analyzeFrame);
 app.use("/api/missing-persons", missingPersonRoutes);

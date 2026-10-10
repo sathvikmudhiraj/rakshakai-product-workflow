@@ -33,6 +33,7 @@ import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } f
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
 import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
+import { configureTracking, renderTrackingPage, cleanupTracking } from "./components/MultiCameraTracking.js";
 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
@@ -46,7 +47,8 @@ const VIEW_TITLES = {
   alerts: "Emergency Alert Center",
   history: "Incident History",
   "police-management": "Police Management",
-  settings: "System Settings"
+  settings: "System Settings",
+  "multi-camera-tracking": "Multi-Camera Tracking"
 };
 
 const state = {
@@ -99,6 +101,8 @@ const state = {
   mapLayers: { incidents: true, responseUnits: true, dangerZones: false, heatOverlay: false, policeStations: false, labels: false },
   sosLiveVisionAllowed: location.pathname === "/rakshak/live-vision"
 };
+
+configureTracking({ cameraSources: () => state.cameraSources || [] });
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
 let realtimeUnsubscribers = [];
@@ -266,6 +270,7 @@ function dispatchErrorMessage(error) {
 function setView(view, options = {}) {
   const previousView = document.body.dataset.view;
   if (document.body.dataset.view === "live-vision" && view !== "live-vision") stopLiveVision();
+  if (document.body.dataset.view === "multi-camera-tracking" && view !== "multi-camera-tracking") cleanupTracking();
   const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
   if (nav?.hidden) landingForRole(state.user?.role);
   view = resolveViewAccess({ view, role: state.user?.role, document, viewTitles: VIEW_TITLES });
@@ -294,6 +299,7 @@ function setView(view, options = {}) {
   }
   if (view === "incident-command") renderIncidentCommand();
   if (view === "unit-assignment") renderUnitAssignment();
+  if (view === "multi-camera-tracking") renderTrackingPage();
   requestAnimationFrame(renderSatelliteMaps);
 }
 
@@ -6302,3 +6308,5 @@ checkSession()
       : "Unable to restore your session. Please log in again.");
     console.error(error);
   });
+
+export { node, setText, titleCase, statusClass, displayValue, $, $$ };

@@ -41,6 +41,12 @@ const escalationAlertsRepository = require("../repositories/escalationAlerts.rep
 const incidentTimelineRepository = require("../repositories/incidentTimeline.repository");
 const cameraHealthEventsRepository = require("../repositories/cameraHealthEvents.repository");
 const cameraHealthAlertsRepository = require("../repositories/cameraHealthAlerts.repository");
+const trackingSessionsRepository = require("../repositories/trackingSessions.repository");
+const trackingObservationsRepository = require("../repositories/trackingObservations.repository");
+const trackingCandidatesRepository = require("../repositories/trackingCandidates.repository");
+const trackingVerificationsRepository = require("../repositories/trackingVerifications.repository");
+const cameraAdjacencyRepository = require("../repositories/cameraAdjacency.repository");
+const trackingScoreConfigRepository = require("../repositories/trackingScoreConfig.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -115,9 +121,15 @@ const repositories = [
   investigationCategoriesRepository,
   incidentSeverityAuditRepository,
   escalationAlertsRepository,
-  incidentTimelineRepository
-  , cameraHealthEventsRepository
-  , cameraHealthAlertsRepository
+  incidentTimelineRepository,
+  cameraHealthEventsRepository,
+  cameraHealthAlertsRepository,
+  trackingSessionsRepository,
+  trackingObservationsRepository,
+  trackingCandidatesRepository,
+  trackingVerificationsRepository,
+  cameraAdjacencyRepository,
+  trackingScoreConfigRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -290,7 +302,13 @@ async function readDatabase() {
     stateResult,
     evidenceCustodyEvents,
     cameraHealthEvents,
-    cameraHealthAlerts
+    cameraHealthAlerts,
+    trackingSessions,
+    trackingObservations,
+    trackingCandidates,
+    trackingVerifications,
+    cameraAdjacency,
+    trackingScoreConfig
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -317,7 +335,13 @@ async function readDatabase() {
     query("SELECT data FROM app_state WHERE key = 'operational'"),
     evidenceCustodyRepository.list(),
     cameraHealthEventsRepository.list(defaults),
-    cameraHealthAlertsRepository.list(defaults)
+    cameraHealthAlertsRepository.list(defaults),
+    trackingSessionsRepository.list(defaults),
+    trackingObservationsRepository.list(defaults),
+    trackingCandidatesRepository.list(defaults),
+    trackingVerificationsRepository.list(defaults),
+    cameraAdjacencyRepository.list(defaults),
+    trackingScoreConfigRepository.list(defaults)
   ]);
   const state = stateResult.rows[0]?.data || {};
   const custodyByEvidence = new Map();
@@ -357,7 +381,13 @@ async function readDatabase() {
     incidentTimeline,
     videoEvidence,
     cameraHealthEvents,
-    cameraHealthAlerts
+    cameraHealthAlerts,
+    trackingSessions,
+    trackingObservations,
+    trackingCandidates,
+    trackingVerifications,
+    cameraAdjacency,
+    trackingScoreConfig
   });
 }
 
@@ -399,7 +429,13 @@ async function writeDatabase(db) {
       [incidentTimelineRepository, db.incidentTimeline || []],
       [escalationAlertsRepository, db.escalationAlerts || []],
       [cameraHealthEventsRepository, db.cameraHealthEvents || []],
-      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []]
+      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []],
+      [trackingSessionsRepository, db.trackingSessions || []],
+      [trackingObservationsRepository, db.trackingObservations || []],
+      [trackingCandidatesRepository, db.trackingCandidates || []],
+      [trackingVerificationsRepository, db.trackingVerifications || []],
+      [cameraAdjacencyRepository, db.cameraAdjacency || []],
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -424,8 +460,14 @@ async function writeDatabase(db) {
       [slaConfigRepository, db.slaConfig || []],
       [severityRecommendationRulesRepository, db.severityRecommendationRules || []],
       [investigationCategoriesRepository, db.investigationCategories || []],
-      [escalationAlertsRepository, db.escalationAlerts || []]
-      , [cameraHealthAlertsRepository, db.cameraHealthAlerts || []]
+      [escalationAlertsRepository, db.escalationAlerts || []],
+      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []],
+      [trackingVerificationsRepository, db.trackingVerifications || []],
+      [trackingCandidatesRepository, db.trackingCandidates || []],
+      [trackingObservationsRepository, db.trackingObservations || []],
+      [trackingSessionsRepository, db.trackingSessions || []],
+      [cameraAdjacencyRepository, db.cameraAdjacency || []],
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
       const ids = records.map((record) => record.id);

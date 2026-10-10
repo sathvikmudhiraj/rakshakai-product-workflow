@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "";
+const SOCKET_URL = import.meta.env?.VITE_SOCKET_URL || "";
 
 let socket = null;
 let isConnected = false;
@@ -76,7 +76,12 @@ function setupEventListeners() {
     "incident_assignment_changed",
     "escalation_alert_created",
     "escalation_alert_acknowledged",
-    "escalation_alert_resolved"
+    "escalation_alert_resolved",
+    "tracking_session_created",
+    "tracking_candidates_found",
+    "tracking_candidate_verified",
+    "tracking_session_closed",
+    "tracking_last_seen_updated"
   ];
 
   events.forEach((event) => {

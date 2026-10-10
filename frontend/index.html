@@ -115,6 +115,7 @@
           <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
           <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
           <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
+          <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
           <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
           <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
         </nav>
@@ -422,6 +423,9 @@
             <div class="panel-head"><div><span class="eyebrow">Human Verification</span><h2>Observation Review</h2></div></div>
             <div id="videoReviewSplit" class="video-review-split"><div class="empty-state">Select evidence to review observations.</div></div>
           </section>
+        </section>
+        <section class="view" data-panel="multi-camera-tracking">
+          <div id="multiCameraTrackingPanel"></div>
         </section>
         <section class="view" data-panel="missing"><div class="dashboard-grid single"><section class="panel"><span class="eyebrow">Citizen Intake</span><h2>Submit Missing Person / Object Report</h2><form id="missingForm" class="form missing-report-form"><label>Report Type<select name="reportType"><option value="missing_person">Missing Person</option><option value="missing_object">Missing Object</option><option value="emergency_report">Emergency Report</option></select></label><label>Urgency Level<select name="urgency"><option value="medium">Normal Urgency</option><option value="high">High Urgency</option><option value="critical">Critical Emergency</option><option value="low">Low Urgency</option></select></label><label>Person/Object Name<input name="personName" value="Aarav Sharma" placeholder="Enter missing person or object name" required /></label><label>Age / Estimated Age<input name="age" value="8" type="number" min="0" placeholder="Enter age if person, or leave blank for object" /></label><label>Last Seen Location<input name="lastSeen" value="Gate A, Sector 7" placeholder="Enter last seen location" required /></label><div class="form-coordinate-row"><label>Latitude<input name="lat" type="number" step="any" placeholder="Latitude" /></label><label>Longitude<input name="lng" type="number" step="any" placeholder="Longitude" /></label></div><div class="form-actions"><button id="useReportLocation" class="ghost" type="button">Use My Current Location</button></div><label>Description / Identifying Details<input name="description" placeholder="Add clothing, color, object details, contact notes, or other useful information" /></label><label class="file-drop" for="personFile"><span>Upload Photo or Evidence</span><strong id="fileName">No file selected</strong><input id="personFile" name="personFile" type="file" accept="image/*,video/*" /></label><div id="filePreview" class="file-preview" hidden></div><div class="form-actions"><button id="registerReportBtn" class="primary" type="submit">Submit Report for Review</button></div><p id="missingFormStatus" class="form-status" aria-live="polite"></p></form></section><section id="caseQueuePanel" class="panel"><h2>My Submitted Reports</h2><div id="caseList" class="stack"></div></section></div></section>
         <section class="view" data-panel="alerts">
