@@ -82,6 +82,17 @@ function angleDifference(a, b) {
   return diff > 180 ? 360 - diff : diff;
 }
 
+async function persistTrackingRecord(repository, collection, record, db) {
+  if (getDatabaseMode() === "json") {
+    const records = db[collection] || (db[collection] = []);
+    const index = records.findIndex((item) => item.id === record.id);
+    if (index >= 0) records[index] = record;
+    else records.push(record);
+    return;
+  }
+  await repository.upsert(record, db.client);
+}
+
 async function getScoreWeights(trackType, db = {}) {
   const configs = await trackingScoreConfigRepository.list(db);
   const weights = trackType === TRACK_TYPES.PERSON ? { ...DEFAULT_PERSON_WEIGHTS } : { ...DEFAULT_VEHICLE_WEIGHTS };
@@ -305,7 +316,10 @@ async function buildCameraGraph(db) {
 }
 
 async function getAdjacentCameras(cameraId, db, maxDistance = 5000) {
-  const adjacency = await cameraAdjacencyRepository.list({});
+  let adjacency = await cameraAdjacencyRepository.list(db);
+  if (getDatabaseMode() === "json" && adjacency.length === 0) {
+    adjacency = await buildCameraGraph(db);
+  }
   const connected = new Set();
   for (const adj of adjacency) {
     if (adj.cameraAId === cameraId && adj.distanceMeters <= maxDistance) connected.add(adj.cameraBId);
@@ -531,7 +545,7 @@ async function createTrackingSession(db, { trackType, referenceDetectionId, refe
     createdAt: isoNow(),
     updatedAt: isoNow()
   };
-  await trackingSessionsRepository.upsert(session, db.client);
+  await persistTrackingRecord(trackingSessionsRepository, "trackingSessions", session, db);
   return session;
 }
 
@@ -545,14 +559,14 @@ async function createObservation(db, { sessionId, cameraId, detectedAt, detectio
     ...fields,
     data: {}
   };
-  await trackingObservationsRepository.upsert(obs, db.client);
+  await persistTrackingRecord(trackingObservationsRepository, "trackingObservations", obs, db);
   return obs;
 }
 
 async function createCandidates(db, candidates) {
   const created = [];
   for (const cand of candidates) {
-    await trackingCandidatesRepository.upsert(cand, db.client);
+    await persistTrackingRecord(trackingCandidatesRepository, "trackingCandidates", cand, db);
     created.push(cand);
   }
   return created;
