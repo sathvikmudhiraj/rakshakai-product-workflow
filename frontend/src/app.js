@@ -34,6 +34,7 @@ import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderF
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
 import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 import { configureTracking, renderTrackingPage, cleanupTracking } from "./components/MultiCameraTracking.js";
+import { configureCopilot, mountCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
@@ -103,6 +104,7 @@ const state = {
 };
 
 configureTracking({ cameraSources: () => state.cameraSources || [] });
+configureCopilot({ context: () => ({ page: document.body.dataset.view || "dashboard", entityId: state.selectedIncidentId || state.selectedUnitId || null }) });
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
 let realtimeUnsubscribers = [];
@@ -366,6 +368,7 @@ function setAuthMode(mode = "login", message = "") {
 }
 
 function showPortal(message = "", mode = "login") {
+  unmountCopilot();
   stopUnitTelemetryPolling();
   disconnectSocket();
   realtimeUnsubscribers.forEach((unsubscribe) => unsubscribe());
@@ -430,6 +433,7 @@ function initializeRealtimeAlerts() {
 function showApp() {
   $("#portalLogin").classList.add("app-hidden");
   $("#appShell").classList.remove("app-hidden");
+  if (["Admin", "Police Officer"].includes(state.user?.role)) mountCopilot();
 }
 
 function setLayer(layer) {

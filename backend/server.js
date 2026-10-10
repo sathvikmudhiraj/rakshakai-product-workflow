@@ -15,6 +15,7 @@ const missingPersonRoutes = require("./routes/missingPersons.routes");
 const deviceHealthRoutes = require("./routes/deviceHealth.routes");
 const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
+const copilotRoutes = require("./routes/copilot.routes");
 const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
@@ -629,6 +630,7 @@ app.get("/api/maps/health", async (req, res, next) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/copilot", copilotRoutes);
 app.get("/api/me", legacyHandler("/api/me"));
 app.post("/api/login", authLimiter, legacyHandler("/api/login"));
 app.post("/api/register", legacyHandler("/api/register"));

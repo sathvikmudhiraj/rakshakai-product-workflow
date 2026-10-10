@@ -6660,6 +6660,8 @@ module.exports = {
   writeDb,
   readDatabase,
   writeDatabase,
+  writeSelectedRecords,
+  addAuditLog,
   repairLegacyPersistedData,
   seedDb,
   ensureProductShape,
