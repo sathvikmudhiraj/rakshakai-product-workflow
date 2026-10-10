@@ -1,4 +1,4 @@
-const test = require("node:test");
+﻿const test = require("node:test");
 const assert = require("node:assert/strict");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");
 const fs = require("fs");
@@ -11,22 +11,22 @@ if (!TEST_DB_URL) {
   process.exit(0);
 }
 
+test.after(async () => {
+  await closePool();
+});
+
 function createTestClient() {
   return getPool();
 }
 
 async function setupTestData(client) {
-  await client.query("DELETE FROM response_unit_members");
-  await client.query("DELETE FROM unit_capabilities");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM response_unit_members; DELETE FROM unit_capabilities; DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules; DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%'; DELETE FROM users WHERE id LIKE 'test_%';
+    DELETE FROM incidents WHERE id LIKE 'test_%'; DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%'; DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 
   await client.query(`
     INSERT INTO officer_ranks (id, code, name, level, active) VALUES
@@ -50,17 +50,13 @@ async function setupTestData(client) {
 }
 
 async function cleanupTestData(client) {
-  await client.query("DELETE FROM response_unit_members");
-  await client.query("DELETE FROM unit_capabilities");
-  await client.query("DELETE FROM dispatch_escalation_log");
-  await client.query("DELETE FROM dispatch_escalation_rules");
-  await client.query("DELETE FROM response_units WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_officers WHERE user_id LIKE 'test_%'");
-  await client.query("DELETE FROM users WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM incidents WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_beats WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM police_stations WHERE id LIKE 'test_%'");
-  await client.query("DELETE FROM officer_ranks WHERE code = 'TEST_RANK'");
+  await client.query(`
+    DELETE FROM response_unit_members; DELETE FROM unit_capabilities; DELETE FROM dispatch_escalation_log;
+    DELETE FROM dispatch_escalation_rules; DELETE FROM response_units WHERE id LIKE 'test_%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_%'; DELETE FROM users WHERE id LIKE 'test_%';
+    DELETE FROM incidents WHERE id LIKE 'test_%'; DELETE FROM police_beats WHERE id LIKE 'test_%';
+    DELETE FROM police_stations WHERE id LIKE 'test_%'; DELETE FROM officer_ranks WHERE code = 'TEST_RANK';
+  `);
 }
 
 test("Phase 2: response_unit_members table exists and can be queried", async () => {
@@ -159,7 +155,7 @@ test("Phase 2: response_units has unit_subtype column", async () => {
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'response_units' AND column_name IN ('unit_subtype', 'last_ack_at', 'ack_timeout_seconds')
+    WHERE table_schema = current_schema() AND table_name = 'response_units' AND column_name IN ('unit_subtype', 'last_ack_at', 'ack_timeout_seconds')
   `);
   assert.equal(columns.rows.length, 3);
 
@@ -172,7 +168,7 @@ test("Phase 2: incidents has new columns", async () => {
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'incidents' AND column_name IN ('assigned_unit_id', 'required_capabilities', 'escalation_status', 'escalation_started_at', 'primary_unit_acked_at')
+    WHERE table_schema = current_schema() AND table_name = 'incidents' AND column_name IN ('assigned_unit_id', 'required_capabilities', 'escalation_status', 'escalation_started_at', 'primary_unit_acked_at')
   `);
   assert.equal(columns.rows.length, 5);
 
@@ -402,7 +398,7 @@ test("Phase 2: required_capabilities column is GIN indexable", async () => {
   // Check if GIN index exists
   const indexes = await client.query(`
     SELECT indexname FROM pg_indexes
-    WHERE tablename = 'incidents' AND indexname = 'idx_incidents_required_capabilities'
+    WHERE schemaname = current_schema() AND tablename = 'incidents' AND indexname = 'idx_incidents_required_capabilities'
   `);
   assert.equal(indexes.rows.length, 1);
 

@@ -9,6 +9,7 @@ function createRepository({
   table,
   jsonKey,
   columns,
+  appendOnly = false,
   serialize = (record) => record,
   deserialize = (row) => row.data
 }) {
@@ -26,10 +27,13 @@ function createRepository({
     const names = ["id", ...columns.map((column) => column.name), "data"];
     const placeholders = names.map((_, index) => `$${index + 1}`);
     const updates = names.slice(1).map((name) => `${name} = EXCLUDED.${name}`);
+    const conflictAction = appendOnly
+      ? "DO NOTHING"
+      : `DO UPDATE SET ${updates.join(", ")}`;
     await client.query(
       `INSERT INTO ${table} (${names.join(", ")})
        VALUES (${placeholders.join(", ")})
-       ON CONFLICT (id) DO UPDATE SET ${updates.join(", ")}`,
+       ON CONFLICT (id) ${conflictAction}`,
       [record.id, ...values, JSON.stringify(serialize(record))]
     );
   }
@@ -37,6 +41,7 @@ function createRepository({
   async function replaceAll(records, client) {
     const ids = records.map((record) => record.id);
     for (const record of records) await upsert(record, client);
+    if (appendOnly) return;
     if (ids.length) {
       await client.query(`DELETE FROM ${table} WHERE NOT (id = ANY($1::text[]))`, [ids]);
     } else {

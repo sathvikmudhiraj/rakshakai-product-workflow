@@ -60,6 +60,10 @@
             <p class="auth-assurance"><span></span> Encrypted session · Role-based access</p>
           </form>
           <form id="registerForm" class="login-form auth-form app-hidden" data-auth-panel="register">
+            <button class="auth-back" type="button" data-auth-mode="login" aria-label="Back to sign in">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              <span>Back to sign in</span>
+            </button>
             <div class="auth-heading">
               <span class="auth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
@@ -103,6 +107,7 @@
         <nav class="navigation">
           <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
           <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
+          <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
           <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
           <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
           <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
@@ -110,6 +115,7 @@
           <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
           <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
           <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
+          <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
           <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
           <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
         </nav>
@@ -209,6 +215,23 @@
           </div>
         </section>
 
+        <section class="view" data-panel="unit-assignment">
+          <div class="command-page-head">
+            <div><span class="eyebrow">Human-confirmed dispatch</span><h2>Unit Assignment</h2><p>Prioritize incidents awaiting a response unit and assign only from the current operational registry.</p></div>
+            <button id="refreshUnitAssignment" class="ghost" type="button">Refresh Assignment Data</button>
+          </div>
+          <div class="unit-assignment-filters" aria-label="Unit assignment filters">
+            <label><span>Search</span><input id="assignmentSearch" type="search" placeholder="Incident ID, unit, location" autocomplete="off" /></label>
+            <label><span>Incidents</span><select id="assignmentIncidentFilter"><option value="unassigned">Unassigned</option><option value="all">All dispatchable</option><option value="critical">Critical</option><option value="high">High</option><option value="warning">SLA warning</option><option value="breached">SLA breached</option><option value="escalated">Escalated</option></select></label>
+            <label><span>Units</span><select id="assignmentUnitFilter"><option value="available">Available</option><option value="all">All units</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option></select></label>
+          </div>
+          <div class="unit-assignment-workspace">
+            <section class="panel assignment-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Response queue</span><h2>Incidents Requiring Response</h2></div></div><div id="assignmentIncidentList" class="assignment-list"></div></section>
+            <section class="panel assignment-units-panel"><div class="panel-head"><div><span class="eyebrow">Operator decision</span><h2>Recommended / Available Units</h2></div><button id="assignmentOpenMap" class="ghost" type="button">Open in GIS</button></div><div id="assignmentSelectedIncident" class="assignment-selected"></div><div id="assignmentRecommendation" class="assignment-recommendation"></div><div id="assignmentUnitList" class="assignment-list"></div></section>
+            <section class="panel assignment-active-panel"><div class="panel-head"><div><span class="eyebrow">Current workload</span><h2>Active Assignments</h2></div></div><div id="assignmentActiveList" class="assignment-list"></div></section>
+          </div>
+        </section>
+
         <section class="view" data-panel="gis">
           <div class="gis-page-head">
             <div><span class="eyebrow">RakshakAI Operations</span><h2>GIS Monitoring</h2></div>
@@ -216,11 +239,16 @@
           <div class="gis-layout">
             <section class="panel gis-map-card">
               <div class="gis-toolbar" aria-label="GIS navigation controls">
-                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
+                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
                 <div class="gis-tool-group"><span>Points</span><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button></div>
                 <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Choose a point or calculate a route before clearing." disabled>Clear Route</button></div>
               </div>
               <p id="mapNavigationStatus" class="gis-status-bar" aria-live="polite">Select "Set Start," then click the map.</p>
+              <div id="unitGpsTelemetryStatus" class="unit-gps-status" aria-live="polite">
+                <strong id="unitGpsState">GPS tracking stopped</strong>
+                <span id="unitGpsLastUpdate">Last update: --</span>
+                <span id="unitGpsAccuracy">Accuracy: --</span>
+              </div>
               <div id="gisMap" class="event-map large" data-satellite-map data-map-layer="satellite" data-map-lat="17.5109" data-map-lng="78.3276" data-map-zoom="12"></div>
             </section>
             <aside class="navigation-panel">
@@ -274,6 +302,8 @@
               <label class="camera-field field-half">Location<input name="location" placeholder="Gate A / Sector 7" required /></label>
               <label class="camera-field field-half">Source type<select name="sourceType"><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option></select></label>
               <label class="camera-field field-half">Status<select name="status"><option value="unknown">Unknown</option><option value="online">Online</option><option value="offline">Offline</option></select></label>
+              <label class="camera-field field-half">Criticality<select name="criticality"><option value="NORMAL">Normal</option><option value="IMPORTANT">Important</option><option value="CRITICAL">Critical</option></select></label>
+              <label class="camera-field field-half">Expected FPS<input name="expectedFps" type="number" min="1" max="120" value="25" /></label>
               <label class="camera-field field-full">Stream URL<input name="streamUrl" placeholder="rtsp://<user>:<password>@<camera-host>/<path>" /></label>
               <label class="camera-field field-half">Username<input name="username" autocomplete="off" placeholder="Optional backend credential" /></label>
               <label class="camera-field field-half">Password<input name="password" type="password" autocomplete="new-password" placeholder="Optional backend credential" /></label>
@@ -393,6 +423,9 @@
             <div class="panel-head"><div><span class="eyebrow">Human Verification</span><h2>Observation Review</h2></div></div>
             <div id="videoReviewSplit" class="video-review-split"><div class="empty-state">Select evidence to review observations.</div></div>
           </section>
+        </section>
+        <section class="view" data-panel="multi-camera-tracking">
+          <div id="multiCameraTrackingPanel"></div>
         </section>
         <section class="view" data-panel="missing"><div class="dashboard-grid single"><section class="panel"><span class="eyebrow">Citizen Intake</span><h2>Submit Missing Person / Object Report</h2><form id="missingForm" class="form missing-report-form"><label>Report Type<select name="reportType"><option value="missing_person">Missing Person</option><option value="missing_object">Missing Object</option><option value="emergency_report">Emergency Report</option></select></label><label>Urgency Level<select name="urgency"><option value="medium">Normal Urgency</option><option value="high">High Urgency</option><option value="critical">Critical Emergency</option><option value="low">Low Urgency</option></select></label><label>Person/Object Name<input name="personName" value="Aarav Sharma" placeholder="Enter missing person or object name" required /></label><label>Age / Estimated Age<input name="age" value="8" type="number" min="0" placeholder="Enter age if person, or leave blank for object" /></label><label>Last Seen Location<input name="lastSeen" value="Gate A, Sector 7" placeholder="Enter last seen location" required /></label><div class="form-coordinate-row"><label>Latitude<input name="lat" type="number" step="any" placeholder="Latitude" /></label><label>Longitude<input name="lng" type="number" step="any" placeholder="Longitude" /></label></div><div class="form-actions"><button id="useReportLocation" class="ghost" type="button">Use My Current Location</button></div><label>Description / Identifying Details<input name="description" placeholder="Add clothing, color, object details, contact notes, or other useful information" /></label><label class="file-drop" for="personFile"><span>Upload Photo or Evidence</span><strong id="fileName">No file selected</strong><input id="personFile" name="personFile" type="file" accept="image/*,video/*" /></label><div id="filePreview" class="file-preview" hidden></div><div class="form-actions"><button id="registerReportBtn" class="primary" type="submit">Submit Report for Review</button></div><p id="missingFormStatus" class="form-status" aria-live="polite"></p></form></section><section id="caseQueuePanel" class="panel"><h2>My Submitted Reports</h2><div id="caseList" class="stack"></div></section></div></section>
         <section class="view" data-panel="alerts">
@@ -527,12 +560,14 @@
                 <label>Unit Name<input name="unitName" placeholder="Patancheru Patrol" required /></label>
                 <label>Unit Type<select name="unitType"><option value="police_patrol">Police Patrol</option><option value="police_station">Police Station</option><option value="traffic">Traffic</option><option value="medical">Medical</option><option value="fire">Fire</option><option value="backup">Backup</option></select></label>
                 <label>Source<select name="source"><option value="admin_registry">Admin Registry</option><option value="live_gps">Live GPS</option><option value="station_registry">Station Fallback</option><option value="demo_seed">Demo Seed</option></select></label>
-                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option></select></label>
+                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option><option value="decommissioned">Decommissioned</option></select></label>
                 <label>Officer / Team<input name="officerName" placeholder="Officer or team" /></label>
                 <label>Linked Station<select name="linkedStationId" id="unitStationSelect"><option value="">No station link</option></select></label>
                 <label>Station<input name="stationName" placeholder="Station name" /></label>
                 <label>Beat / Sector<input name="beat" placeholder="Beat / sector" /></label>
                 <label>Jurisdiction<input name="jurisdiction" placeholder="Jurisdiction" /></label>
+                <label>Duty Status<select name="dutyStatus"><option value="on_duty">On Duty</option><option value="off_duty">Off Duty</option><option value="leave">Leave</option></select></label>
+                <label>Availability<select name="availabilityStatus"><option value="available">Available</option><option value="busy">Busy</option><option value="unavailable">Unavailable</option></select></label>
                 <label>Latitude<input name="lat" type="number" step="any" placeholder="17.5285" /></label>
                 <label>Longitude<input name="lng" type="number" step="any" placeholder="78.2636" /></label>
                 <label>Address<input name="address" placeholder="Current/base address" /></label>

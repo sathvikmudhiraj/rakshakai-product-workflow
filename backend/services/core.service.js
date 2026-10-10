@@ -33,6 +33,20 @@ const unitCapabilitiesRepository = require("../repositories/unitCapabilities.rep
 const dispatchEscalationLogRepository = require("../repositories/dispatchEscalationLog.repository");
 const dispatchEscalationRulesRepository = require("../repositories/dispatchEscalationRules.repository");
 const evidenceCustodyRepository = require("../repositories/evidenceCustody.repository");
+const slaConfigRepository = require("../repositories/slaConfig.repository");
+const severityRecommendationRulesRepository = require("../repositories/severityRecommendationRules.repository");
+const investigationCategoriesRepository = require("../repositories/investigationCategories.repository");
+const incidentSeverityAuditRepository = require("../repositories/incidentSeverityAudit.repository");
+const escalationAlertsRepository = require("../repositories/escalationAlerts.repository");
+const incidentTimelineRepository = require("../repositories/incidentTimeline.repository");
+const cameraHealthEventsRepository = require("../repositories/cameraHealthEvents.repository");
+const cameraHealthAlertsRepository = require("../repositories/cameraHealthAlerts.repository");
+const trackingSessionsRepository = require("../repositories/trackingSessions.repository");
+const trackingObservationsRepository = require("../repositories/trackingObservations.repository");
+const trackingCandidatesRepository = require("../repositories/trackingCandidates.repository");
+const trackingVerificationsRepository = require("../repositories/trackingVerifications.repository");
+const cameraAdjacencyRepository = require("../repositories/cameraAdjacency.repository");
+const trackingScoreConfigRepository = require("../repositories/trackingScoreConfig.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -45,6 +59,23 @@ const {
   encryptCameraSecrets,
   decryptSecret
 } = require("./cameraSecrets.service");
+const {
+  authorizedTelemetryUnitIds,
+  isUserAuthorizedForUnit,
+  unitTelemetryDispatchQuality,
+  unitTelemetryFreshness,
+  validateUnitTelemetry
+} = require("./unitTelemetry.service");
+const {
+  comparePrimaryDispatchCandidates,
+  officerUnavailableReason,
+  recommendStationSupport,
+  responseRequirementsForIncident,
+  stationCapacitySnapshot
+} = require("./hybridDispatch.service");
+const slaService = require("./sla.service");
+const { runSlaSweep } = require("./slaSweep.service");
+const realtimeEvents = require("./realtimeEvents.service");
 
 const root = path.join(__dirname, "..");
 function loadLocalEnv() {
@@ -84,7 +115,21 @@ const repositories = [
   responseUnitMembersRepository,
   unitCapabilitiesRepository,
   dispatchEscalationLogRepository,
-  dispatchEscalationRulesRepository
+  dispatchEscalationRulesRepository,
+  slaConfigRepository,
+  severityRecommendationRulesRepository,
+  investigationCategoriesRepository,
+  incidentSeverityAuditRepository,
+  escalationAlertsRepository,
+  incidentTimelineRepository,
+  cameraHealthEventsRepository,
+  cameraHealthAlertsRepository,
+  trackingSessionsRepository,
+  trackingObservationsRepository,
+  trackingCandidatesRepository,
+  trackingVerificationsRepository,
+  cameraAdjacencyRepository,
+  trackingScoreConfigRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -141,6 +186,15 @@ function seedDb() {
     unitCapabilities: defaultUnitCapabilities(t),
     dispatchEscalationLogs: defaultDispatchEscalationLogs(t),
     dispatchEscalationRules: defaultDispatchEscalationRules(t),
+    slaConfig: defaultSlaConfig(t),
+    severityRecommendationRules: defaultSeverityRecommendationRules(t),
+    investigationCategories: defaultInvestigationCategories(t),
+    incidentSeverityAudit: [],
+    escalationAlerts: [],
+    incidentTimeline: [],
+    cameraHealthEvents: [],
+    cameraHealthAlerts: [],
+    cameraHealthThresholds: {},
     devices: [
       { id: "d1", name: "Camera C-19", type: "CCTV", status: "online", zone: "Red Zone", latencyMs: 210 },
       { id: "d2", name: "Drone D-03", type: "Drone", status: "warning", zone: "Transit Hub", latencyMs: 380 },
@@ -148,6 +202,50 @@ function seedDb() {
     ],
     auditLogs: []
   };
+}
+
+function defaultSlaConfig(timestamp = now()) {
+  return [
+    { id: "sla_critical", severity: "CRITICAL", assignmentSlaMinutes: 1, responseSlaMinutes: 5, warningBeforeAssignmentMinutes: 1, warningBeforeResponseMinutes: 1, escalationL1IntervalMinutes: 2, escalationL2IntervalMinutes: 3, escalationL3IntervalMinutes: 5, escalationL4IntervalMinutes: 10, investigationInactivityThresholdHours: 12, active: true },
+    { id: "sla_high", severity: "HIGH", assignmentSlaMinutes: 3, responseSlaMinutes: 10, warningBeforeAssignmentMinutes: 1, warningBeforeResponseMinutes: 2, escalationL1IntervalMinutes: 3, escalationL2IntervalMinutes: 5, escalationL3IntervalMinutes: 10, escalationL4IntervalMinutes: 15, investigationInactivityThresholdHours: 24, active: true },
+    { id: "sla_medium", severity: "MEDIUM", assignmentSlaMinutes: 10, responseSlaMinutes: 30, warningBeforeAssignmentMinutes: 3, warningBeforeResponseMinutes: 5, escalationL1IntervalMinutes: 5, escalationL2IntervalMinutes: 10, escalationL3IntervalMinutes: 15, escalationL4IntervalMinutes: 30, investigationInactivityThresholdHours: 48, active: true },
+    { id: "sla_low", severity: "LOW", assignmentSlaMinutes: 30, responseSlaMinutes: 120, warningBeforeAssignmentMinutes: 10, warningBeforeResponseMinutes: 15, escalationL1IntervalMinutes: 15, escalationL2IntervalMinutes: 30, escalationL3IntervalMinutes: 60, escalationL4IntervalMinutes: 120, investigationInactivityThresholdHours: 72, active: true }
+  ];
+}
+
+function defaultSeverityRecommendationRules(timestamp = now()) {
+  return [
+    { id: "sev_murder", incidentType: "murder", category: "violent_crime", recommendedSeverity: "CRITICAL", keywords: ["murder", "homicide", "killing"], priority: 100, active: true },
+    { id: "sev_possible_murder", incidentType: "possible_murder", category: "violent_crime", recommendedSeverity: "CRITICAL", keywords: ["possible murder", "suspected murder", "body found"], priority: 95, active: true },
+    { id: "sev_active_violence", incidentType: "active_violence", category: "violent_crime", recommendedSeverity: "CRITICAL", keywords: ["active violence", "active shooter", "stabbing in progress", "shooting in progress"], priority: 100, active: true },
+    { id: "sev_armed_attack", incidentType: "armed_attack", category: "violent_crime", recommendedSeverity: "CRITICAL", keywords: ["armed attack", "armed robbery in progress", "weapon"], priority: 90, active: true },
+    { id: "sev_fire", incidentType: "fire", category: "emergency", recommendedSeverity: "CRITICAL", keywords: ["fire", "building fire", "structure fire", "wildfire"], priority: 100, active: true },
+    { id: "sev_major_accident", incidentType: "major_accident", category: "emergency", recommendedSeverity: "CRITICAL", keywords: ["major accident", "multi-vehicle", "pileup", "fatal accident"], priority: 95, active: true },
+    { id: "sev_robbery_progress", incidentType: "robbery_in_progress", category: "violent_crime", recommendedSeverity: "CRITICAL", keywords: ["robbery in progress", "armed robbery", "bank robbery"], priority: 90, active: true },
+    { id: "sev_life_threatening", incidentType: "life_threatening", category: "emergency", recommendedSeverity: "CRITICAL", keywords: ["life threatening", "critical condition", "unconscious", "not breathing"], priority: 100, active: true },
+    { id: "sev_assault", incidentType: "assault", category: "violent_crime", recommendedSeverity: "HIGH", keywords: ["assault", "battery", "attack"], priority: 50, active: true },
+    { id: "sev_burglary", incidentType: "burglary", category: "property_crime", recommendedSeverity: "HIGH", keywords: ["burglary", "break-in", "breaking and entering"], priority: 50, active: true },
+    { id: "sev_serious_disturbance", incidentType: "serious_disturbance", category: "public_order", recommendedSeverity: "HIGH", keywords: ["serious disturbance", "riot", "large fight", "crowd violence"], priority: 50, active: true },
+    { id: "sev_dangerous_suspicious", incidentType: "dangerous_suspicious", category: "suspicious", recommendedSeverity: "HIGH", keywords: ["suspicious person with weapon", "armed suspicious", "hostage"], priority: 60, active: true },
+    { id: "sev_theft", incidentType: "theft", category: "property_crime", recommendedSeverity: "MEDIUM", keywords: ["theft", "shoplifting", "pickpocket", "stolen property"], priority: 30, active: true },
+    { id: "sev_suspicious_activity", incidentType: "suspicious_activity", category: "suspicious", recommendedSeverity: "MEDIUM", keywords: ["suspicious activity", "suspicious person", "loitering", "trespassing"], priority: 30, active: true },
+    { id: "sev_non_immediate_threat", incidentType: "non_immediate_threat", category: "security", recommendedSeverity: "MEDIUM", keywords: ["security threat", "potential threat"], priority: 25, active: true },
+    { id: "sev_minor_complaint", incidentType: "minor_complaint", category: "general", recommendedSeverity: "LOW", keywords: ["minor complaint", "noise complaint", "parking issue", "civil dispute"], priority: 10, active: true },
+    { id: "sev_low_risk", incidentType: "low_risk_observation", category: "general", recommendedSeverity: "LOW", keywords: ["observation", "low risk", "minor"], priority: 5, active: true }
+  ];
+}
+
+function defaultInvestigationCategories(timestamp = now()) {
+  return [
+    { id: "inv_murder", categoryName: "Homicide Investigation", incidentTypes: ["murder", "homicide", "possible_murder", "suspected_murder"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_suspicious_death", categoryName: "Suspicious Death", incidentTypes: ["suspicious_death", "unexplained_death", "body_found"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_major_fire", categoryName: "Major Fire Investigation", incidentTypes: ["major_fire", "structure_fire", "arson"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_major_accident", categoryName: "Major Accident Investigation", incidentTypes: ["major_accident", "fatal_accident", "multi_vehicle_pileup"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_serious_assault", categoryName: "Serious Assault", incidentTypes: ["aggravated_assault", "assault_with_weapon", "attempted_murder"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_robbery", categoryName: "Robbery Investigation", incidentTypes: ["robbery", "armed_robbery", "bank_robbery"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_sexual_assault", categoryName: "Sexual Assault", incidentTypes: ["sexual_assault", "rape"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true },
+    { id: "inv_kidnapping", categoryName: "Kidnapping/Abduction", incidentTypes: ["kidnapping", "abduction", "missing_person_high_risk"], requiresInvestigation: true, investigationDeadlineHours: 720, active: true }
+  ];
 }
 
 function ensureDb() {
@@ -195,8 +293,22 @@ async function readDatabase() {
     unitCapabilities,
     dispatchEscalationLogs,
     dispatchEscalationRules,
+    slaConfig,
+    severityRecommendationRules,
+    investigationCategories,
+    incidentSeverityAudit,
+    escalationAlerts,
+    incidentTimeline,
     stateResult,
-    evidenceCustodyEvents
+    evidenceCustodyEvents,
+    cameraHealthEvents,
+    cameraHealthAlerts,
+    trackingSessions,
+    trackingObservations,
+    trackingCandidates,
+    trackingVerifications,
+    cameraAdjacency,
+    trackingScoreConfig
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -214,8 +326,22 @@ async function readDatabase() {
     unitCapabilitiesRepository.list(defaults),
     dispatchEscalationLogRepository.list(defaults),
     dispatchEscalationRulesRepository.list(defaults),
+    slaConfigRepository.list(defaults),
+    severityRecommendationRulesRepository.list(defaults),
+    investigationCategoriesRepository.list(defaults),
+    incidentSeverityAuditRepository.list(defaults),
+    escalationAlertsRepository.list(defaults),
+    incidentTimelineRepository.list(defaults),
     query("SELECT data FROM app_state WHERE key = 'operational'"),
-    evidenceCustodyRepository.list()
+    evidenceCustodyRepository.list(),
+    cameraHealthEventsRepository.list(defaults),
+    cameraHealthAlertsRepository.list(defaults),
+    trackingSessionsRepository.list(defaults),
+    trackingObservationsRepository.list(defaults),
+    trackingCandidatesRepository.list(defaults),
+    trackingVerificationsRepository.list(defaults),
+    cameraAdjacencyRepository.list(defaults),
+    trackingScoreConfigRepository.list(defaults)
   ]);
   const state = stateResult.rows[0]?.data || {};
   const custodyByEvidence = new Map();
@@ -247,7 +373,21 @@ async function readDatabase() {
     unitCapabilities,
     dispatchEscalationLogs,
     dispatchEscalationRules,
-    videoEvidence
+    slaConfig,
+    severityRecommendationRules,
+    investigationCategories,
+    incidentSeverityAudit,
+    escalationAlerts,
+    incidentTimeline,
+    videoEvidence,
+    cameraHealthEvents,
+    cameraHealthAlerts,
+    trackingSessions,
+    trackingObservations,
+    trackingCandidates,
+    trackingVerifications,
+    cameraAdjacency,
+    trackingScoreConfig
   });
 }
 
@@ -281,7 +421,21 @@ async function writeDatabase(db) {
       [responseUnitMembersRepository, db.responseUnitMembers || []],
       [unitCapabilitiesRepository, db.unitCapabilities || []],
       [dispatchEscalationLogRepository, db.dispatchEscalationLogs || []],
-      [dispatchEscalationRulesRepository, db.dispatchEscalationRules || []]
+      [dispatchEscalationRulesRepository, db.dispatchEscalationRules || []],
+      [slaConfigRepository, db.slaConfig || []],
+      [severityRecommendationRulesRepository, db.severityRecommendationRules || []],
+      [investigationCategoriesRepository, db.investigationCategories || []],
+      [incidentSeverityAuditRepository, db.incidentSeverityAudit || []],
+      [incidentTimelineRepository, db.incidentTimeline || []],
+      [escalationAlertsRepository, db.escalationAlerts || []],
+      [cameraHealthEventsRepository, db.cameraHealthEvents || []],
+      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []],
+      [trackingSessionsRepository, db.trackingSessions || []],
+      [trackingObservationsRepository, db.trackingObservations || []],
+      [trackingCandidatesRepository, db.trackingCandidates || []],
+      [trackingVerificationsRepository, db.trackingVerifications || []],
+      [cameraAdjacencyRepository, db.cameraAdjacency || []],
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -302,7 +456,18 @@ async function writeDatabase(db) {
       [officerRanksRepository, db.officerRanks || []],
       [policeBeatsRepository, db.policeBeats || []],
       [policeStationsRepository, db.policeStations || []],
-      [usersRepository, db.users || []]
+      [usersRepository, db.users || []],
+      [slaConfigRepository, db.slaConfig || []],
+      [severityRecommendationRulesRepository, db.severityRecommendationRules || []],
+      [investigationCategoriesRepository, db.investigationCategories || []],
+      [escalationAlertsRepository, db.escalationAlerts || []],
+      [cameraHealthAlertsRepository, db.cameraHealthAlerts || []],
+      [trackingVerificationsRepository, db.trackingVerifications || []],
+      [trackingCandidatesRepository, db.trackingCandidates || []],
+      [trackingObservationsRepository, db.trackingObservations || []],
+      [trackingSessionsRepository, db.trackingSessions || []],
+      [cameraAdjacencyRepository, db.cameraAdjacency || []],
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
       const ids = records.map((record) => record.id);
@@ -329,7 +494,14 @@ async function writeDatabase(db) {
         responseUnitMembers: db.responseUnitMembers || [],
         unitCapabilities: db.unitCapabilities || [],
         dispatchEscalationLogs: db.dispatchEscalationLogs || [],
-        dispatchEscalationRules: db.dispatchEscalationRules || []
+        dispatchEscalationRules: db.dispatchEscalationRules || [],
+        slaConfig: db.slaConfig || [],
+        severityRecommendationRules: db.severityRecommendationRules || [],
+        investigationCategories: db.investigationCategories || [],
+        incidentSeverityAudit: db.incidentSeverityAudit || [],
+        escalationAlerts: db.escalationAlerts || [],
+        incidentTimeline: db.incidentTimeline || []
+        , cameraHealthThresholds: db.cameraHealthThresholds || []
       })]
     );
   });
@@ -438,7 +610,7 @@ function normalizeExpectedAssignedUnitId(body = {}) {
   return null;
 }
 
-const UNIT_HELD_INCIDENT_STATUSES = new Set(["Assigned", "En Route", "On Scene", "Resolved"]);
+const UNIT_HELD_INCIDENT_STATUSES = new Set(["Assigned", "En Route", "On Scene"]);
 
 function unitClaimedByAnotherIncident(db, unitOrId, incidentId) {
   const unitId = typeof unitOrId === "string" ? unitOrId : unitOrId?.id;
@@ -469,6 +641,200 @@ function routedErrorResponse(db, incident, routed, user) {
     },
     write: true
   };
+}
+
+async function buildHybridDispatchRecommendation(db, incident) {
+  const requirements = responseRequirementsForIncident(incident);
+  const primaryResult = await bestRoutedUnit(db, incident, { requireLiveGps: true });
+  const primary = primaryResult && !primaryResult.error ? primaryResult : null;
+  const stationSupport = await recommendStationSupport({
+    db,
+    incident,
+    primaryUnitId: primary?.unit?.id || null,
+    requirements,
+    routeForStation: (station) => routeBetween(routeUrl(strictPoint(station), strictPoint(incident)))
+  });
+  if (!primary && !stationSupport.allocations.length) {
+    return {
+      error: "No eligible live responder or deployable station support is available",
+      status: 409,
+      requirements,
+      primary: null,
+      primaryExcludedUnits: primaryResult?.excludedUnits || [],
+      stationSupport
+    };
+  }
+  return {
+    id: uid("dispatch_rec"),
+    createdAt: now(),
+    incidentId: incident.id,
+    requirements,
+    primary: primary ? {
+      unitId: primary.unit.id,
+      unit: unitForResponse(primary.unit),
+      officerIds: primary.officerIds || deployableUnitOfficerIds(primary.unit, db, incident.id),
+      officers: (primary.officerIds || deployableUnitOfficerIds(primary.unit, db, incident.id)).map((officerId) => {
+        const officer = (db.users || []).find((candidate) => candidate.id === officerId);
+        return { id: officerId, name: officer?.name || "Registered officer" };
+      }),
+      route: primary.route,
+      etaMinutes: Math.max(1, Math.round(primary.etaSeconds / 60)),
+      distanceKm: Number((primary.route.distanceMeters / 1000).toFixed(2)),
+      selectionReason: primary.selectionReason
+    } : null,
+    primaryCandidates: primary?.candidates || [],
+    primaryExcludedUnits: primary?.excludedUnits || primaryResult?.excludedUnits || [],
+    warnings: primary?.warnings || ["No eligible field responder has fresh, accurate live GPS; station support fallback is active."],
+    stationSupport,
+    confirmationRequired: true,
+    status: "recommended"
+  };
+}
+
+function recommendationResourceSignature(recommendation = {}) {
+  return JSON.stringify({
+    primaryUnitId: recommendation.primary?.unitId || null,
+    primaryOfficerIds: [...(recommendation.primary?.officerIds || [])].sort(),
+    support: (recommendation.stationSupport?.allocations || []).map((allocation) => ({
+      stationId: allocation.stationId,
+      officerIds: [...(allocation.officerIds || [])].sort(),
+      unitIds: [...(allocation.unitIds || [])].sort()
+    }))
+  });
+}
+
+async function confirmHybridDispatch(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const db = await readDatabase();
+    const incident = db.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (incident.assignedUnitId || incident.dispatchConfirmedAt) return assignmentConflictResponse();
+    const recommendation = incident.dispatchRecommendation;
+    if (!recommendation || recommendation.status !== "recommended") {
+      return { status: 409, payload: { error: "Create a dispatch recommendation before confirmation", code: "DISPATCH_RECOMMENDATION_REQUIRED" } };
+    }
+    if (body.recommendationId !== recommendation.id) return assignmentChangedResponse();
+    const current = await buildHybridDispatchRecommendation(db, incident);
+    if (current.error || recommendationResourceSignature(current) !== recommendationResourceSignature(recommendation)) {
+      return { status: 409, payload: { error: "Responder or station capacity changed. Recalculate dispatch.", code: "DISPATCH_RECALCULATION_REQUIRED" } };
+    }
+    const confirmedAt = now();
+    const primaryUnit = recommendation.primary
+      ? db.responseUnits.find((unit) => unit.id === recommendation.primary.unitId)
+      : null;
+    const supportUnitIds = [...new Set((recommendation.stationSupport.allocations || []).flatMap((allocation) => allocation.unitIds || []))];
+    const primaryOfficerIds = recommendation.primary?.officerIds || [];
+    const supportOfficerIds = [...new Set((recommendation.stationSupport.allocations || []).flatMap((allocation) => allocation.officerIds || []))];
+    const assignedOfficerIds = [...new Set([...primaryOfficerIds, ...supportOfficerIds])];
+    const supportUnits = supportUnitIds.map((id) => db.responseUnits.find((unit) => unit.id === id)).filter(Boolean);
+    const assignedOfficers = assignedOfficerIds.map((id) => (db.policeOfficers || []).find((officer) => (officer.userId || officer.user_id || officer.id) === id)).filter(Boolean);
+    incident.assignedUnitId = primaryUnit?.id || null;
+    incident.recommendedUnitId = primaryUnit?.id || null;
+    incident.responseRequirements = recommendation.requirements;
+    incident.supportAllocations = recommendation.stationSupport.allocations;
+    incident.dispatchConfirmedAt = confirmedAt;
+    incident.dispatchConfirmedBy = user.id;
+    incident.dispatchRecommendation = { ...recommendation, status: "confirmed", confirmedAt };
+    incident.status = "Assigned";
+    incident.updatedAt = confirmedAt;
+    if (primaryUnit) {
+      const route = recommendation.primary.route;
+      incident.distanceKm = recommendation.primary.distanceKm;
+      incident.etaMinutes = recommendation.primary.etaMinutes;
+      incident.routeLabel = route.routeLabel || route.label;
+      incident.routeProvider = route.provider;
+      incident.routeApproximate = Boolean(route.approximate);
+      incident.routeCalculatedAt = route.calculatedAt;
+      incident.routeSelectionReason = recommendation.primary.selectionReason;
+      incident.escalationStatus = incident.escalation_status = "pending";
+      incident.escalationStartedAt = incident.escalation_started_at = confirmedAt;
+      Object.assign(primaryUnit, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: confirmedAt });
+    }
+    supportUnits.forEach((unit) => Object.assign(unit, { status: "busy", assignedIncidentId: incident.id, currentIncidentId: incident.id, lastUpdated: confirmedAt }));
+    assignedOfficers.forEach((officer) => Object.assign(officer, { availabilityStatus: "busy", assignedIncidentId: incident.id, updatedAt: confirmedAt, lastUpdated: confirmedAt }));
+    const events = [addDispatchEvent(db, incident.id, "dispatch_confirmed", "Hybrid dispatch confirmed by authorised operator", user.name, confirmedAt)];
+    const audits = [addAuditLog(db, "DISPATCH_CONFIRMED", user, incident.id, `Recommendation ${recommendation.id}`, confirmedAt)];
+    if (primaryUnit) audits.push(addAuditLog(db, "PRIMARY_RESPONDER_SELECTED", user, incident.id, primaryUnit.unitCode || primaryUnit.id, confirmedAt));
+    recommendation.stationSupport.allocations.forEach((allocation, index) => {
+      audits.push(addAuditLog(db, index ? "ADDITIONAL_SUPPORT_SELECTED" : "STATION_SUPPORT_SELECTED", user, incident.id,
+        `${allocation.stationCode}: ${allocation.recommendedOfficers} officers, ${allocation.recommendedUnits} units`, confirmedAt));
+    });
+    const linkedReport = syncLinkedCitizenReportStatus(db, incident);
+    await writeIncidentWorkflowRecords(db, incident, {
+      units: [primaryUnit, ...supportUnits],
+      officers: assignedOfficers,
+      reports: [linkedReport],
+      events,
+      audits
+    });
+    return {
+      status: 200,
+      payload: {
+        incident: incidentForResponse(db, incident),
+        unit: primaryUnit ? unitForResponse(primaryUnit) : null,
+        route: recommendation.primary?.route || recommendation.stationSupport.allocations[0]?.route || null,
+        recommendation: incident.dispatchRecommendation,
+        message: "Hybrid dispatch confirmed"
+      }
+    };
+  });
+}
+
+async function rejectHybridDispatchRecommendation(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const db = await readDatabase();
+    const incident = db.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (incident.assignedUnitId || incident.dispatchConfirmedAt) {
+      return { status: 409, payload: { error: "Confirmed dispatch cannot be cancelled as a recommendation", code: "DISPATCH_ALREADY_CONFIRMED" } };
+    }
+    const recommendation = incident.dispatchRecommendation;
+    if (!recommendation || recommendation.status !== "recommended") {
+      return { status: 409, payload: { error: "No active dispatch recommendation", code: "DISPATCH_RECOMMENDATION_REQUIRED" } };
+    }
+    if (body.recommendationId !== recommendation.id) return assignmentChangedResponse();
+    const rejectedAt = now();
+    const reason = String(body.reason || "Cancelled by operator").trim().slice(0, 240) || "Cancelled by operator";
+    incident.dispatchRecommendation = { ...recommendation, status: "rejected", rejectedAt, rejectedBy: user.id, rejectionReason: reason };
+    incident.recommendedUnitId = null;
+    incident.distanceKm = null;
+    incident.etaMinutes = null;
+    incident.routeLabel = null;
+    incident.routeProvider = null;
+    incident.routeApproximate = false;
+    incident.routeCalculatedAt = null;
+    incident.routeSelectionReason = null;
+    incident.updatedAt = rejectedAt;
+    const event = addDispatchEvent(db, incident.id, "dispatch_recommendation_rejected", reason, user.name, rejectedAt);
+    const audit = addAuditLog(db, "DISPATCH_REJECTED", user, incident.id, `${recommendation.id}: ${reason}`, rejectedAt);
+    await writeIncidentWorkflowRecords(db, incident, { events: [event], audits: [audit] });
+    return {
+      status: 200,
+      payload: {
+        incident: incidentForResponse(db, incident),
+        recommendation: incident.dispatchRecommendation,
+        message: "Dispatch recommendation cancelled"
+      }
+    };
+  });
+}
+
+function releaseHybridDispatchResources(db, incident, releasedAt = now()) {
+  const unitIds = new Set([
+    incident.assignedUnitId,
+    ...(incident.supportAllocations || []).flatMap((allocation) => allocation.unitIds || [])
+  ].filter(Boolean));
+  const officerIds = new Set([
+    ...(incident.dispatchRecommendation?.primary?.officerIds || []),
+    ...(incident.supportAllocations || []).flatMap((allocation) => allocation.officerIds || [])
+  ]);
+  const units = (db.responseUnits || []).filter((unit) => unitIds.has(unit.id) && (!unit.assignedIncidentId || unit.assignedIncidentId === incident.id));
+  const officers = (db.policeOfficers || []).filter((officer) => officerIds.has(officer.userId || officer.user_id || officer.id)
+    && (!officer.assignedIncidentId || officer.assignedIncidentId === incident.id));
+  units.forEach((unit) => Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: releasedAt }));
+  officers.forEach((officer) => Object.assign(officer, { availabilityStatus: "available", assignedIncidentId: null, updatedAt: releasedAt, lastUpdated: releasedAt }));
+  incident.resourcesReleasedAt = releasedAt;
+  return { units, officers };
 }
 
 async function assignNearestIncident(incidentId, user) {
@@ -753,6 +1119,11 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
     if (incident.assignedUnitId === unit.id) return assignmentConflictResponse();
     const expectedAssignedUnitId = normalizeExpectedAssignedUnitId(body);
     if ((incident.assignedUnitId || null) !== expectedAssignedUnitId) return assignmentChangedResponse();
+    const isReassignment = Boolean(incident.assignedUnitId && incident.assignedUnitId !== unit.id);
+    const assignmentReason = String(body.reason || "").trim().slice(0, 240);
+    if (isReassignment && !assignmentReason) {
+      return { status: 400, payload: { error: "A reason is required when changing an assigned unit" } };
+    }
     if (unitClaimedByAnotherIncident(lockedDb, unit, incident.id)) return assignmentConflictResponse();
     if (!normalizeResponseUnitRecord(unit).operational) return { status: 409, payload: { error: `${unit.unitCode} is not operational` } };
     if (!isPoliceResponseUnit(unit)) return { status: 400, payload: { error: "Select an available police unit" } };
@@ -798,17 +1169,75 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
     });
     const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
     const statusEvent = addDispatchEvent(lockedDb, incident.id, "status_updated", "Incident status changed to Assigned", user.name);
-    const assignEvent = addDispatchEvent(lockedDb, incident.id, "unit_assigned", `${unit.unitCode} assigned to ${incident.title}`, user.name);
-    const audit = addAuditLog(lockedDb, "unit_assigned", user, incident.id, unit.unitCode);
+    const assignmentDescription = isReassignment
+      ? `${previousAssignedUnit?.unitCode || "Previous unit"} reassigned to ${unit.unitCode}: ${assignmentReason}`
+      : `${unit.unitCode} assigned to ${incident.title}`;
+    const assignEvent = addDispatchEvent(lockedDb, incident.id, isReassignment ? "unit_reassigned" : "unit_assigned", assignmentDescription, user.name);
+    lockedDb.incidentTimeline ||= [];
+    lockedDb.incidentTimeline.unshift({
+      id: uid("timeline"), incidentId: incident.id, eventType: isReassignment ? "UNIT_REASSIGNED" : "UNIT_ASSIGNED",
+      actorId: user?.id || null, actorName: user?.name || "System", actorRole: user?.role || "System",
+      description: assignmentDescription,
+      metadata: { unitId: unit.id, unitCode: unit.unitCode, previousUnitId: previousAssignedUnit?.id || null, previousUnitCode: previousAssignedUnit?.unitCode || null, reason: assignmentReason || null },
+      createdAt: incident.updatedAt
+    });
+    const audit = addAuditLog(lockedDb, isReassignment ? "unit_reassigned" : "unit_assigned", user, incident.id,
+      isReassignment ? `previousUnitId=${previousAssignedUnit?.id || ""}; unitId=${unit.id}; reason=${assignmentReason}` : unit.unitCode);
     const overrideAudit = body.unitId ? addAuditLog(lockedDb, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
     const escalationAudit = addAuditLog(lockedDb, "escalation_started", user, incident.id, `ACK timeout ${ackTimeout}s started for ${unit.unitCode}`, incident.updatedAt);
     await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit, escalationAudit] });
-    return { status: 200, payload: { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route, ackTimeoutSeconds: ackTimeout } };
+    const payload = { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit), route, ackTimeoutSeconds: ackTimeout };
+    realtimeEvents.emit(isReassignment ? "unit_reassigned" : "unit_assigned", { ...payload, previousUnit: previousAssignedUnit ? unitForResponse(previousAssignedUnit) : null });
+    realtimeEvents.emit("incident_assignment_changed", { ...payload, action: isReassignment ? "reassigned" : "assigned" });
+    return { status: 200, payload };
+  });
+}
+
+async function releaseAssignedIncidentUnit(incidentId, body, user) {
+  return withAssignmentLock(async () => {
+    const lockedDb = await readDatabase();
+    const incident = lockedDb.incidents.find((item) => item.id === incidentId);
+    if (!incident) return { status: 404, payload: { error: "Incident not found" } };
+    if (!incident.assignedUnitId) return { status: 409, payload: { error: "Incident has no assigned response unit" } };
+    if (!["Assigned", "En Route", "On Scene"].includes(canonicalIncidentStatus(incident.status))) {
+      return { status: 409, payload: { error: "This incident cannot release a response unit in its current state" } };
+    }
+    const reason = String(body.reason || "").trim().slice(0, 240);
+    if (!reason) return { status: 400, payload: { error: "A reason is required when releasing a unit" } };
+    const expectedAssignedUnitId = normalizeExpectedAssignedUnitId(body);
+    if ((incident.assignedUnitId || null) !== expectedAssignedUnitId) return assignmentChangedResponse();
+    const unit = lockedDb.responseUnits.find((item) => item.id === incident.assignedUnitId);
+    if (!unit) return { status: 409, payload: { error: "Assigned response unit is unavailable" } };
+    const releasedAt = now();
+    Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: releasedAt, lastAckAt: null, last_ack_at: null });
+    incident.assignedUnitId = null;
+    incident.recommendedUnitId = null;
+    incident.status = "Verified";
+    incident.escalationStatus = incident.escalation_status = "pending";
+    incident.escalationStartedAt = incident.escalation_started_at = null;
+    incident.primaryUnitAckedAt = incident.primary_unit_acked_at = null;
+    incident.updatedAt = releasedAt;
+    const event = addDispatchEvent(lockedDb, incident.id, "unit_released", `${unit.unitCode} released: ${reason}`, user.name, releasedAt);
+    lockedDb.incidentTimeline ||= [];
+    lockedDb.incidentTimeline.unshift({
+      id: uid("timeline"), incidentId: incident.id, eventType: "UNIT_RELEASED",
+      actorId: user?.id || null, actorName: user?.name || "System", actorRole: user?.role || "System",
+      description: `${unit.unitCode} released: ${reason}`,
+      metadata: { unitId: unit.id, unitCode: unit.unitCode, reason }, createdAt: releasedAt
+    });
+    const audit = addAuditLog(lockedDb, "unit_released", user, incident.id, `unitId=${unit.id}; reason=${reason}`, releasedAt);
+    const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
+    await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit], reports: [linkedReport], events: [event], audits: [audit] });
+    const payload = { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit) };
+    realtimeEvents.emit("unit_released", payload);
+    realtimeEvents.emit("incident_assignment_changed", { ...payload, action: "released" });
+    return { status: 200, payload };
   });
 }
 
 async function writeIncidentWorkflowRecords(db, incident, {
   units = [],
+  officers = [],
   alerts = [],
   reports = [],
   events = [],
@@ -818,14 +1247,17 @@ async function writeIncidentWorkflowRecords(db, incident, {
   const linkedReport = db.reports.find((report) => report.incidentId === incident.id || report.id === incident.sourceRecordId);
   const relatedEvents = db.dispatchEvents.filter((event) => event.incidentId === incident.id);
   const relatedAudits = db.auditLogs.filter((log) => log.incidentId === incident.id);
+  const relatedTimeline = (db.incidentTimeline || []).filter((event) => event.incidentId === incident.id);
   const uniqueById = (records) => [...new Map(records.filter(Boolean).map((record) => [record.id, record])).values()];
   await writeSelectedRecords(db, [
     [incidentsRepository, [incident]],
     [responseUnitsRepository, uniqueById(units)],
+    [policeOfficersRepository, uniqueById(officers)],
     [alertsRepository, uniqueById([...relatedAlerts, ...alerts])],
     [missingPersonsRepository, uniqueById([linkedReport, ...reports])],
     [dispatchEventsRepository, uniqueById([...relatedEvents, ...events])],
-    [auditLogsRepository, uniqueById([...relatedAudits, ...audits])]
+    [auditLogsRepository, uniqueById([...relatedAudits, ...audits])],
+    [incidentTimelineRepository, uniqueById(relatedTimeline)]
   ]);
 }
 
@@ -841,7 +1273,7 @@ const INCIDENT_TRANSITIONS = {
   Closed: new Set(),
   "Rejected / False Alarm": new Set()
 };
-const UNIT_STATUSES = ["available", "assigned", "busy", "offline", "stale"];
+const UNIT_STATUSES = ["available", "assigned", "busy", "offline", "stale", "maintenance", "decommissioned"];
 const UNIT_TYPES = ["police_patrol", "police_station", "traffic", "medical", "fire", "backup"];
 const UNIT_SOURCES = ["live_gps", "admin_registry", "station_registry", "demo_seed"];
 const DISPATCH_UNIT_SOURCE_PRIORITY = {
@@ -1434,6 +1866,13 @@ function normalizeResponseUnitRecord(unit = {}) {
     lastSeen: unit.lastSeen || lastLocationUpdatedAt,
     lastUpdated,
     lastLocationUpdatedAt,
+    locationAccuracy: finiteNumberOrNull(unit.locationAccuracy ?? unit.accuracy),
+    accuracy: finiteNumberOrNull(unit.locationAccuracy ?? unit.accuracy),
+    locationCapturedAt: unit.locationCapturedAt || null,
+    locationReceivedAt: unit.locationReceivedAt || null,
+    speed: finiteNumberOrNull(unit.speed),
+    heading: finiteNumberOrNull(unit.heading),
+    altitude: finiteNumberOrNull(unit.altitude),
     sourceNotes: source === "demo_seed"
       ? "Simulated unit for demo"
       : locationSource === "station_registry"
@@ -2053,6 +2492,8 @@ function aiIncidentKey(incident) {
   const sourceName = normalizedIncidentValue(incident?.sourceName || incident?.source);
   const threatType = normalizedIncidentValue(incident?.threatType || incident?.type);
   const zone = normalizedIncidentValue(incident?.zone);
+  const isAiSource = incident?.source === "AI" || sourceType.includes("ai") || sourceType.includes("camera");
+  if (!isAiSource) return "";
   if (!sourceType || !sourceName || !threatType || !zone || !isActiveIncident(incident)) return "";
   return [sourceType, sourceName, threatType, zone].join("|");
 }
@@ -2216,7 +2657,7 @@ function publicUser(user) {
   return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
-function policeUserForResponse(user) {
+function policeUserForResponse(user, officer = null) {
   if (!user || user.role !== "Police Officer") return null;
   return {
     id: user.id,
@@ -2229,7 +2670,10 @@ function policeUserForResponse(user) {
     beat: user.beat || "",
     jurisdiction: user.jurisdiction || "",
     status: user.status || "active",
-    active: user.status !== "inactive",
+    active: user.status !== "inactive" && officer?.active !== false,
+    dutyStatus: officer?.dutyStatus || officer?.duty_status || "on_duty",
+    availabilityStatus: officer?.availabilityStatus || officer?.availability_status || "available",
+    assignedIncidentId: officer?.assignedIncidentId || officer?.assigned_incident_id || null,
     createdBy: user.createdBy || null,
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null
@@ -2239,7 +2683,7 @@ function policeUserForResponse(user) {
 function policeUsersForResponse(db) {
   return db.users
     .filter((item) => item.role === "Police Officer")
-    .map(policeUserForResponse)
+    .map((user) => policeUserForResponse(user, (db.policeOfficers || []).find((officer) => (officer.userId || officer.user_id || officer.id) === user.id)))
     .filter(Boolean);
 }
 
@@ -2519,6 +2963,17 @@ function cameraSourceForResponse(db, source) {
     lastCheckedAt: source.lastCheckedAt || source.lastTestedAt || source.lastSeenAt || null,
     lastFrameStatus: source.lastFrameStatus || source.lastSnapshotStatus || (isDemo ? "simulated demo frame" : "snapshot unavailable"),
     healthReason: source.healthReason || (isDemo ? "Simulated feed for demonstration only" : hasStreamConfig ? "Connection test pending" : "No backend stream configuration"),
+    healthStatus: String(source.healthStatus || "UNKNOWN").toUpperCase(),
+    healthSeverity: String(source.healthSeverity || "NORMAL").toUpperCase(),
+    criticality: String(source.criticality || "NORMAL").toUpperCase(),
+    expectedFps: source.expectedFps ?? null,
+    healthIssueStartedAt: source.healthIssueStartedAt || null,
+    lastHeartbeatAt: source.lastHeartbeatAt || null,
+    lastStreamReceivedAt: source.lastStreamReceivedAt || null,
+    lastFrameReceivedAt: source.lastFrameReceivedAt || null,
+    lastHealthyAt: source.lastHealthyAt || null,
+    maintenanceMode: Boolean(source.maintenanceMode),
+    maintenanceReason: source.maintenanceReason || null,
     latestDetection,
     latestAlertTime: relatedAlerts[0]?.lastDetectedAt || relatedAlerts[0]?.createdAt || null,
     incidentCount,
@@ -2576,6 +3031,9 @@ function safeCameraConfigBody(body, existing = {}) {
     location: location || "Unassigned",
     zone: location || "Unassigned",
     status: CAMERA_STATUSES.has(String(body.status || "").toLowerCase()) ? String(body.status).toLowerCase() : (existing.status || "unknown"),
+    criticality: ["NORMAL", "IMPORTANT", "CRITICAL"].includes(String(body.criticality || existing.criticality || "NORMAL").toUpperCase())
+      ? String(body.criticality || existing.criticality || "NORMAL").toUpperCase() : "NORMAL",
+    expectedFps: body.expectedFps === undefined ? (existing.expectedFps ?? null) : Math.max(1, Math.min(120, Number(body.expectedFps) || 25)),
     aiEnabled: body.aiEnabled === undefined ? Boolean(existing.aiEnabled) : Boolean(body.aiEnabled),
     enabled: body.enabled === undefined ? existing.enabled !== false : Boolean(body.enabled),
     isDemo: false,
@@ -3334,13 +3792,7 @@ function routeUrl(from, to) {
 }
 
 function unitLocationFreshness(unit, at = Date.now()) {
-  const timestamp = unit.lastLocationUpdatedAt || unit.lastUpdated;
-  const updatedAt = new Date(timestamp || "").getTime();
-  if (!Number.isFinite(updatedAt)) return { label: "Unknown", ageMinutes: null, eligible: false };
-  const ageMinutes = Math.max(0, (at - updatedAt) / 60000);
-  if (ageMinutes <= 2) return { label: "Live", ageMinutes: Number(ageMinutes.toFixed(1)), eligible: true };
-  if (ageMinutes <= 10) return { label: "Recent", ageMinutes: Number(ageMinutes.toFixed(1)), eligible: true };
-  return { label: "Stale", ageMinutes: Number(ageMinutes.toFixed(1)), eligible: false };
+  return unitTelemetryFreshness(unit, at);
 }
 
 function unitForResponse(unit) {
@@ -3358,6 +3810,8 @@ function unitForResponse(unit) {
     unitTypeLabel: displayWords(normalized.unitType),
     currentAddress: normalized.currentAddress || normalized.address || normalized.zone || "Location address unavailable",
     locationFreshness: locationFreshness.label,
+    locationFreshnessState: locationFreshness.state,
+    locationAgeSeconds: locationFreshness.ageSeconds,
     locationAgeMinutes: locationFreshness.ageMinutes,
     lastLocationUpdatedAt: normalized.lastLocationUpdatedAt || normalized.lastUpdated || null,
     sourceBadge: normalized.isDemo ? "DEMO UNIT" : normalized.stationFallback ? "STATION FALLBACK" : displayWords(normalized.source),
@@ -3385,10 +3839,13 @@ function isDemoPatrolUnit(unit) {
 
 function dispatchEligibleFreshness(unit) {
   const freshness = unitLocationFreshness(unit);
+  const demoGrace = !freshness.eligible
+    && isDemoPatrolUnit(unit)
+    && normalizeResponseUnitRecord(unit).source === "demo_seed";
   return {
     ...freshness,
-    eligible: freshness.eligible || (isDemoPatrolUnit(unit) && Boolean(strictPoint(unit))),
-    demoGrace: !freshness.eligible && isDemoPatrolUnit(unit)
+    eligible: freshness.eligible || (demoGrace && Boolean(strictPoint(unit))),
+    demoGrace
   };
 }
 
@@ -3510,6 +3967,19 @@ function checkCrewReadiness(unit, db) {
   };
 }
 
+function deployableUnitOfficerIds(unit, db, incidentId = null) {
+  const unitId = unit.id || unit.unitId;
+  const memberIds = (db.responseUnitMembers || [])
+    .filter((member) => (member.unitId || member.unit_id) === unitId)
+    .map((member) => member.officerUserId || member.officer_user_id)
+    .filter(Boolean);
+  return [...new Set(memberIds)].filter((officerId) => {
+    const officer = (db.policeOfficers || []).find((candidate) => (candidate.userId || candidate.user_id || candidate.id) === officerId);
+    const user = (db.users || []).find((candidate) => candidate.id === officerId);
+    return officer && !officerUnavailableReason(officer, user, db, new Set(), incidentId);
+  });
+}
+
 function getStationEligibility(unit, incident, db) {
   const unitStationId = unit.stationId || unit.station_id;
   const unitBeatId = unit.beatId || unit.beat_id;
@@ -3553,7 +4023,10 @@ function rankedCandidateForResponse(candidate, rank = null) {
     isDemo: Boolean(candidate.unitResponse.isDemo),
     operational: Boolean(candidate.unitResponse.operational),
     locationFreshness: candidate.unitResponse.locationFreshness,
+    locationFreshnessState: candidate.unitResponse.locationFreshnessState,
     locationAgeMinutes: candidate.unitResponse.locationAgeMinutes,
+    locationAgeSeconds: candidate.unitResponse.locationAgeSeconds,
+    locationAccuracy: candidate.unitResponse.locationAccuracy,
     currentAddress: candidate.unitResponse.currentAddress,
     distanceKm: Number((candidate.route.distanceMeters / 1000).toFixed(2)),
     etaMinutes: Math.max(1, Math.round(candidate.etaSeconds / 60)),
@@ -3566,6 +4039,7 @@ function rankedCandidateForResponse(candidate, rank = null) {
     capabilityMatch: candidate.capabilityMatch,
     stationEligibility: candidate.stationEligibility,
     crewReady: candidate.crewReady,
+    officerIds: candidate.officerIds || [],
     escalationRule: candidate.escalationRule
   };
 }
@@ -3591,6 +4065,7 @@ function safeResponseUnitBody(body = {}, existing = null, stations = []) {
     linkedStationId: body.linkedStationId || body.stationId || current.linkedStationId,
     stationName: body.stationName || body.station || current.stationName
   }, stations);
+  const requestedStatus = normalizeUnitStatus(body.status || current.status || "available");
   const rawUnit = {
     ...current,
     id: existing?.id || uid("unit"),
@@ -3608,14 +4083,16 @@ function safeResponseUnitBody(body = {}, existing = null, stations = []) {
     sector: String(body.sector || body.beat || current.sector || "").trim().slice(0, 120),
     jurisdiction: String(body.jurisdiction || current.jurisdiction || "").trim().slice(0, 160),
     vehicleType: String(body.vehicleType || current.vehicleType || displayWords(body.unitType || current.unitType || "police_patrol")).trim().slice(0, 80),
-    status: normalizeUnitStatus(body.status || current.status || "available"),
+    status: requestedStatus,
     lat: point?.lat ?? current.lat ?? null,
     lng: point?.lng ?? current.lng ?? null,
     address: String(body.address || body.currentAddress || current.address || station?.address || "").trim().slice(0, 240) || "Location address unavailable",
     currentAddress: String(body.currentAddress || body.address || current.currentAddress || station?.address || "").trim().slice(0, 240) || "Location address unavailable",
     source,
     isDemo: body.isDemo === true || (source === "demo_seed" ? true : current.isDemo === true),
-    operational: body.operational !== undefined ? Boolean(body.operational) : current.operational !== undefined ? Boolean(current.operational) : source !== "demo_seed",
+    operational: requestedStatus === "decommissioned"
+      ? false
+      : body.operational !== undefined ? Boolean(body.operational) : current.operational !== undefined ? Boolean(current.operational) : source !== "demo_seed",
     lastSeen: body.lastSeen || current.lastSeen || now(),
     lastUpdated: now(),
     lastLocationUpdatedAt: point ? now() : current.lastLocationUpdatedAt || now(),
@@ -3675,7 +4152,7 @@ function availableUnitsByDistance(db, lat, lng) {
     .sort((a, b) => a.straightLineKm - b.straightLineKm);
 }
 
-async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
+async function bestRoutedUnit(db, incident, { allowApproximate = true, requireLiveGps = false } = {}) {
   const destination = strictPoint(incident);
   const locationError = dispatchLocationError(incident);
   if (locationError) return { error: locationError, status: 409 };
@@ -3689,7 +4166,16 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
 
   const capabilityExcluded = [];
   const capabilityMatched = [];
+  const primaryEligibilityExcluded = [];
   for (const unit of available) {
+    if (requireLiveGps) {
+      const quality = unitTelemetryDispatchQuality(unit);
+      const officerIds = deployableUnitOfficerIds(unit, db, incident.id);
+      if (!quality.eligible || !officerIds.length) {
+        primaryEligibilityExcluded.push({ unit, reason: quality.eligible ? "OFF DUTY OR NO AUTHORISED RESPONDER" : quality.reason });
+        continue;
+      }
+    }
     const capMatch = unitMatchesRequiredCapabilities(unit, db, requiredCapabilities);
     if (capMatch.matches) {
       capabilityMatched.push({ unit, capMatch });
@@ -3709,10 +4195,13 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
       exclusionReason: `Capability mismatch: ${capMatch.reason}`
     });
   }
+  for (const { unit, reason } of primaryEligibilityExcluded) {
+    excludedUnits.push({ ...unitForResponse(unit), exclusionReason: reason });
+  }
 
   const staleUnits = excludedUnits.filter((unit) => /stale/i.test(unit.exclusionReason));
   const warnings = staleUnits.length ? [`${staleUnits.length} available police unit(s) excluded because GPS is stale.`] : [];
-  const stationFallbackUnits = available.filter((unit) => normalizeResponseUnitRecord(unit).stationFallback);
+  const stationFallbackUnits = requireLiveGps ? [] : available.filter((unit) => normalizeResponseUnitRecord(unit).stationFallback);
   if (stationFallbackUnits.length) warnings.push(`Live GPS unavailable - using station/base location for ${stationFallbackUnits.length} unit(s).`);
   if (available.length && available.every((unit) => normalizeResponseUnitRecord(unit).isDemo)) warnings.push("Demo dispatch mode: using simulated response units.");
 
@@ -3734,7 +4223,7 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
 
   const candidates = withLocation
     .map((unit) => {
-      const freshness = dispatchEligibleFreshness(unit);
+      const freshness = requireLiveGps ? unitTelemetryDispatchQuality(unit) : dispatchEligibleFreshness(unit);
       const capMatch = unitMatchesRequiredCapabilities(unit, db, requiredCapabilities);
       const stationElig = getStationEligibility(unit, incident, db);
       const crewReady = checkCrewReadiness(unit, db);
@@ -3745,7 +4234,8 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
         capMatch,
         stationElig,
         crewReady,
-        escalationRule
+        escalationRule,
+        officerIds: deployableUnitOfficerIds(unit, db, incident.id)
       };
     })
     .filter((item) => item.freshness.eligible)
@@ -3767,6 +4257,7 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
       crewReady: item.crewReady,
       capabilityMatch: item.capMatch,
       escalationRule: item.escalationRule,
+      officerIds: item.officerIds,
       loadScore: unitLoadScore(item.unit),
       sourcePriority: unitSourcePriority(item.unit),
       straightLineKm: Number(Math.hypot((Number(item.unit.lat) - destination.lat) * 111, (Number(item.unit.lng) - destination.lng) * 100).toFixed(2))
@@ -3784,20 +4275,7 @@ async function bestRoutedUnit(db, incident, { allowApproximate = true } = {}) {
       ...item,
       etaSeconds: item.route.durationSeconds || approximateRouteDurationSeconds(item.route.distanceMeters)
     }))
-    .sort((a, b) => {
-      const aCap = a.capabilityMatch?.matches ? 0 : 1;
-      const bCap = b.capabilityMatch?.matches ? 0 : 1;
-      if (aCap !== bCap) return aCap - bCap;
-      const aStation = a.stationEligibility?.stationMatch ? 0 : (a.stationEligibility?.beatMatch ? 1 : (a.stationEligibility?.jurisdictionMatch ? 2 : 3));
-      const bStation = b.stationEligibility?.stationMatch ? 0 : (b.stationEligibility?.beatMatch ? 1 : (b.stationEligibility?.jurisdictionMatch ? 2 : 3));
-      if (aStation !== bStation) return aStation - bStation;
-      return a.etaSeconds - b.etaSeconds
-        || a.route.distanceMeters - b.route.distanceMeters
-        || Number(b.beatMatch) - Number(a.beatMatch)
-        || a.sourcePriority - b.sourcePriority
-        || a.loadScore - b.loadScore
-        || String(a.unit.unitCode || "").localeCompare(String(b.unit.unitCode || ""));
-    });
+    .sort(comparePrimaryDispatchCandidates);
   if (!usable.length) return { error: "Route service unavailable", status: 503, degraded: true, candidates: [], excludedUnits, warnings };
   const ranked = usable.map((candidate, index) => {
     const etaMinutes = Math.max(1, Math.round(candidate.etaSeconds / 60));
@@ -3914,12 +4392,16 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
   );
   const requestedStatus = input.status === "New" ? "New" : "Verified";
   const status = requestedStatus === "Verified" && !point ? "Verification Required" : requestedStatus;
+  const explicitSeverity = String(input.severity || "").toUpperCase();
+  const severity = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(explicitSeverity)
+    ? explicitSeverity
+    : getRecommendedSeverity(input, db.severityRecommendationRules || []);
   const incident = {
     id: uid("inc"),
     title: String(input.title || input.category || "Operational incident").trim().slice(0, 160),
     type: String(input.category || input.type || "operational_incident").trim().slice(0, 80),
     category: String(input.category || input.type || "Operational incident").trim().slice(0, 80),
-    severity: ["critical", "high", "medium", "low"].includes(input.severity) ? input.severity : "medium",
+    severity,
     status,
     source: input.source || "Manual",
     sourceType: input.sourceType || "manual",
@@ -3932,6 +4414,7 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
     locationSource,
     locationStatus,
     reportedBy: input.reportedBy || user?.id || "system",
+    responseRequirements: responseRequirementsForIncident(input),
     assignedUnitId: null,
     recommendedUnitId: null,
     etaMinutes: null,
@@ -3944,7 +4427,21 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
     lastDetectedAt: timestamp,
     createdBy: user?.id || "system"
   };
+  const deadlines = calculateSlaDeadlinesForIncident(incident, db.slaConfig || []);
+  incident.assignmentDeadline = deadlines.assignmentDeadline;
+  incident.responseDeadline = deadlines.responseDeadline;
+  incident.escalationLevel = "L0";
+  incident.assignmentBreached = false;
+  incident.responseBreached = false;
   db.incidents.unshift(incident);
+  db.incidentTimeline ||= [];
+  db.incidentTimeline.unshift({
+    id: uid("timeline"), incidentId: incident.id, eventType: "SLA_STARTED",
+    actorId: user?.id || null, actorName: user?.name || "System", actorRole: user?.role || "System",
+    description: `${incident.severity} SLA monitoring started`,
+    metadata: { assignmentDeadline: incident.assignmentDeadline, responseDeadline: incident.responseDeadline },
+    createdAt: timestamp
+  });
   addDispatchEvent(db, incident.id, "incident_created", `${incident.title} created from ${incident.source}`, user?.name || "system", timestamp);
   addAuditLog(db, "incident_created", user, incident.id, `${incident.source}: ${incident.title}`, timestamp);
   if (incident.status === "Verified") {
@@ -3955,6 +4452,12 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
     addAuditLog(db, "incident_location_verification_required", user, incident.id, incident.title, timestamp);
   }
   return incident;
+}
+
+function publishCriticalIncident(incident) {
+  if (String(incident?.severity || "").toUpperCase() === "CRITICAL") {
+    realtimeEvents.emit("critical_incident_created", incidentForResponse({ responseUnits: [], dispatchEvents: [] }, incident));
+  }
 }
 
 function summary(db) {
@@ -4005,8 +4508,8 @@ async function apiInternal(req, res, url) {
     const token = signSessionToken(found);
     return sendJson(res, 200, { user: publicUser(found) }, {
       "Set-Cookie": [
-        `rakshakai_session=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=43200${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
-        `rakshakai_session=; Path=/; HttpOnly; Max-Age=0; SameSite=Strict${process.env.NODE_ENV === "production" ? "; Secure" : ""}`
+        `rakshakai_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+        `rakshakai_session=; Path=/api; HttpOnly; Max-Age=0; SameSite=Strict${process.env.NODE_ENV === "production" ? "; Secure" : ""}`
       ]
     });
   }
@@ -4037,8 +4540,8 @@ async function apiInternal(req, res, url) {
     const token = signSessionToken(created);
     return sendJson(res, 201, { user: publicUser(created) }, {
       "Set-Cookie": [
-        `rakshakai_session=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=43200${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
-        `rakshakai_session=; Path=/; HttpOnly; Max-Age=0; SameSite=Strict${process.env.NODE_ENV === "production" ? "; Secure" : ""}`
+        `rakshakai_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+        `rakshakai_session=; Path=/api; HttpOnly; Max-Age=0; SameSite=Strict${process.env.NODE_ENV === "production" ? "; Secure" : ""}`
       ]
     });
   }
@@ -4451,11 +4954,22 @@ async function apiInternal(req, res, url) {
     const events = db.dispatchEvents
       .filter((event) => event.incidentId === timelineMatch[1])
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-    return sendJson(res, 200, { events });
+    const timeline = (db.incidentTimeline || [])
+      .filter((event) => event.incidentId === timelineMatch[1])
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    return sendJson(res, 200, { events, timeline });
   }
   if (req.method === "GET" && url.pathname === "/api/response-units") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
-    return sendJson(res, 200, { units: db.responseUnits.map(unitForResponse), summary: responseUnitSummary(db.responseUnits) });
+    const authorisedIds = authorizedTelemetryUnitIds(user, db);
+    const telemetryUnit = user.role === "Police Officer"
+      ? db.responseUnits.find((unit) => [unit.id, unit.unitId, unit.unitCode].some((id) => authorisedIds.includes(id)))
+      : null;
+    return sendJson(res, 200, {
+      units: db.responseUnits.map(unitForResponse),
+      summary: responseUnitSummary(db.responseUnits),
+      telemetryUnit: telemetryUnit ? unitForResponse(telemetryUnit) : null
+    });
   }
   if (req.method === "GET" && url.pathname === "/api/police-stations") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
@@ -4512,6 +5026,68 @@ async function apiInternal(req, res, url) {
       return sendJson(res, error.status || 400, { error: error.message });
     }
   }
+  const unitLocationMatch = url.pathname.match(/^\/api\/response-units\/([^/]+)\/location$/);
+  if (req.method === "POST" && unitLocationMatch) {
+    if (!user) return sendJson(res, 401, { error: "Authentication required" });
+    const requestedUnitId = unitLocationMatch[1];
+    const unit = db.responseUnits.find((item) => item.id === requestedUnitId || item.unitCode === requestedUnitId || item.unitId === requestedUnitId);
+    const rejectTelemetry = async (status, message, code = "UNIT_GPS_NOT_AUTHORIZED") => {
+      const audit = addAuditLog(db, "UNIT_GPS_UPDATE_REJECTED", user, null, `${String(requestedUnitId).slice(0, 80)}: ${code}`);
+      await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);
+      return sendJson(res, status, { error: message, code });
+    };
+    if (user.role !== "Police Officer") return rejectTelemetry(403, "Only an authorised Police Officer may submit response-unit GPS", "UNIT_GPS_ROLE_FORBIDDEN");
+    if (!unit || !isUserAuthorizedForUnit(user, unit, db)) {
+      return rejectTelemetry(403, "You are not authorised to update this response unit", "UNIT_GPS_UNIT_FORBIDDEN");
+    }
+    let observation;
+    try {
+      observation = validateUnitTelemetry(body, { previousCapturedAt: unit.locationCapturedAt });
+    } catch (error) {
+      return rejectTelemetry(error.status || 400, error.message, error.code || "INVALID_UNIT_TELEMETRY");
+    }
+    Object.assign(unit, {
+      lat: observation.latitude,
+      latitude: observation.latitude,
+      lng: observation.longitude,
+      longitude: observation.longitude,
+      accuracy: observation.accuracy,
+      locationAccuracy: observation.accuracy,
+      locationCapturedAt: observation.capturedAt,
+      locationReceivedAt: observation.receivedAt,
+      speed: observation.speed,
+      heading: observation.heading,
+      altitude: observation.altitude,
+      source: "live_gps",
+      locationSource: "live_gps",
+      stationFallback: false,
+      lastSeen: observation.capturedAt,
+      lastLocationUpdatedAt: observation.capturedAt,
+      lastUpdated: observation.receivedAt
+    });
+    await writeSelectedRecords(db, [[responseUnitsRepository, [unit]]]);
+    return sendJson(res, 200, { unit: unitForResponse(unit), receivedAt: observation.receivedAt });
+  }
+  const unitTrackingMatch = url.pathname.match(/^\/api\/response-units\/([^/]+)\/tracking$/);
+  if (req.method === "POST" && unitTrackingMatch) {
+    if (!user) return sendJson(res, 401, { error: "Authentication required" });
+    const requestedUnitId = unitTrackingMatch[1];
+    const unit = db.responseUnits.find((item) => item.id === requestedUnitId || item.unitCode === requestedUnitId || item.unitId === requestedUnitId);
+    if (user.role !== "Police Officer" || !unit || !isUserAuthorizedForUnit(user, unit, db)) {
+      const audit = addAuditLog(db, "UNIT_GPS_UPDATE_REJECTED", user, null, `${String(requestedUnitId).slice(0, 80)}: UNIT_GPS_TRACKING_FORBIDDEN`);
+      await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);
+      return sendJson(res, 403, { error: "You are not authorised to track this response unit", code: "UNIT_GPS_UNIT_FORBIDDEN" });
+    }
+    const action = String(body.action || "").trim().toLowerCase();
+    if (!["start", "stop"].includes(action)) return sendJson(res, 400, { error: "Tracking action must be start or stop" });
+    const changedAt = now();
+    unit.telemetryTrackingActive = action === "start";
+    unit.telemetryTrackingChangedAt = changedAt;
+    unit.lastUpdated = changedAt;
+    const audit = addAuditLog(db, action === "start" ? "UNIT_GPS_TRACKING_STARTED" : "UNIT_GPS_TRACKING_STOPPED", user, null, unit.unitCode || unit.id, changedAt);
+    await writeSelectedRecords(db, [[responseUnitsRepository, [unit]], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 200, { tracking: action === "start", unitId: unit.id, changedAt });
+  }
   const responseUnitMatch = url.pathname.match(/^\/api\/response-units\/([^/]+)$/);
   if (responseUnitMatch && ["PATCH", "DELETE"].includes(req.method)) {
     if (!hasRole(user, ["Admin"])) return forbidden(res);
@@ -4519,6 +5095,15 @@ async function apiInternal(req, res, url) {
     if (!unit) return sendJson(res, 404, { error: "Response unit not found" });
     const before = normalizeResponseUnitRecord(unit);
     try {
+      const archiveReason = String(body.archiveReason || "").trim().slice(0, 240);
+      if (req.method === "PATCH" && body.archive === true) {
+        if (unit.assignedIncidentId || unit.currentIncidentId) return sendJson(res, 409, { error: "Release the active incident assignment before archiving this unit" });
+        if (!archiveReason) return sendJson(res, 400, { error: "An archive reason is required" });
+        Object.assign(unit, normalizeResponseUnitRecord({ ...unit, operational: false, status: "decommissioned", archivedAt: now(), archivedBy: user.id, archiveReason, lastUpdated: now() }));
+        const audit = addAuditLog(db, "unit_archived", user, null, `${unit.unitCode}: ${archiveReason}`);
+        await writeSelectedRecords(db, [[responseUnitsRepository, [unit]], [auditLogsRepository, [audit]]]);
+        return sendJson(res, 200, { unit: unitForResponse(unit), audit: { id: audit.id, action: audit.action, timestamp: audit.timestamp } });
+      }
       const next = req.method === "DELETE"
         ? normalizeResponseUnitRecord({ ...unit, operational: false, status: "offline", lastUpdated: now() })
         : safeResponseUnitBody(body, unit, db.policeStations);
@@ -4631,9 +5216,32 @@ async function apiInternal(req, res, url) {
       createdAt
     };
     db.users.push(created);
+    const linkedStation = findLinkedStation({ stationId: created.station, stationName: created.station }, db.policeStations || []);
+    const defaultRank = (db.officerRanks || []).find((rank) => rank.active !== false);
+    const officer = linkedStation && defaultRank ? {
+      id: created.id,
+      userId: created.id,
+      badgeId: created.badgeId || null,
+      stationId: linkedStation.id,
+      rankId: defaultRank.id,
+      beat: created.beat,
+      jurisdiction: created.jurisdiction,
+      active: created.status !== "inactive",
+      dutyStatus: body.dutyStatus || "on_duty",
+      availabilityStatus: body.availabilityStatus || "available",
+      assignedIncidentId: null,
+      createdAt,
+      updatedAt: createdAt
+    } : null;
+    if (officer) db.policeOfficers.push(officer);
+    const linkedUnit = db.responseUnits.find((unit) => [unit.id, unit.unitId, unit.unitCode].includes(created.unitId));
+    const membership = officer && linkedUnit ? {
+      id: uid("member"), unitId: linkedUnit.id, officerUserId: created.id, role: "member", assignedAt: createdAt
+    } : null;
+    if (membership) db.responseUnitMembers.push(membership);
     const audit = addAuditLog(db, "police_account_created", user, null, `${created.name}: ${created.email}`, createdAt);
-    await writeSelectedRecords(db, [[usersRepository, [created]], [auditLogsRepository, [audit]]]);
-    return sendJson(res, 201, { user: policeUserForResponse(created) });
+    await writeSelectedRecords(db, [[usersRepository, [created]], [policeOfficersRepository, [officer].filter(Boolean)], [responseUnitMembersRepository, [membership].filter(Boolean)], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 201, { user: policeUserForResponse(created, officer) });
   }
 
   const policeUserMatch = url.pathname.match(/^\/api\/admin\/police-users\/([^/]+)$/);
@@ -4656,9 +5264,21 @@ async function apiInternal(req, res, url) {
     policeUser.beat = String(body.beat ?? policeUser.beat ?? "").trim();
     policeUser.jurisdiction = String(body.jurisdiction ?? policeUser.jurisdiction ?? "").trim();
     policeUser.updatedAt = now();
+    const officer = (db.policeOfficers || []).find((candidate) => (candidate.userId || candidate.user_id || candidate.id) === policeUser.id);
+    if (officer) {
+      const dutyStatus = normalizedIncidentValue(body.dutyStatus ?? officer.dutyStatus ?? officer.duty_status ?? "on_duty").replace(/\s+/g, "_");
+      const availabilityStatus = normalizedIncidentValue(body.availabilityStatus ?? officer.availabilityStatus ?? officer.availability_status ?? "available").replace(/\s+/g, "_");
+      if (!["on_duty", "off_duty", "leave", "suspended"].includes(dutyStatus)) return sendJson(res, 400, { error: "Invalid duty status" });
+      if (!["available", "busy", "unavailable"].includes(availabilityStatus)) return sendJson(res, 400, { error: "Invalid availability status" });
+      officer.dutyStatus = dutyStatus;
+      officer.availabilityStatus = availabilityStatus;
+      officer.beat = policeUser.beat;
+      officer.jurisdiction = policeUser.jurisdiction;
+      officer.updatedAt = policeUser.updatedAt;
+    }
     const audit = addAuditLog(db, "police_account_updated", user, null, `${policeUser.name}: ${policeUser.email}`, policeUser.updatedAt);
-    await writeSelectedRecords(db, [[usersRepository, [policeUser]], [auditLogsRepository, [audit]]]);
-    return sendJson(res, 200, { user: policeUserForResponse(policeUser) });
+    await writeSelectedRecords(db, [[usersRepository, [policeUser]], [policeOfficersRepository, [officer].filter(Boolean)], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 200, { user: policeUserForResponse(policeUser, officer) });
   }
 
   const policeStatusMatch = url.pathname.match(/^\/api\/admin\/police-users\/([^/]+)\/(activate|deactivate)$/);
@@ -4670,9 +5290,16 @@ async function apiInternal(req, res, url) {
     policeUser.status = active ? "active" : "inactive";
     policeUser.updatedAt = now();
     if (!active) policeUser.sessionVersion = crypto.randomUUID();
+    const officer = (db.policeOfficers || []).find((candidate) => (candidate.userId || candidate.user_id || candidate.id) === policeUser.id);
+    if (officer) {
+      officer.active = active;
+      officer.dutyStatus = active ? officer.dutyStatus || "on_duty" : "off_duty";
+      officer.availabilityStatus = active ? officer.availabilityStatus || "available" : "unavailable";
+      officer.updatedAt = policeUser.updatedAt;
+    }
     const audit = addAuditLog(db, active ? "police_account_activated" : "police_account_deactivated", user, null, policeUser.email, policeUser.updatedAt);
-    await writeSelectedRecords(db, [[usersRepository, [policeUser]], [auditLogsRepository, [audit]]]);
-    return sendJson(res, 200, { user: policeUserForResponse(policeUser) });
+    await writeSelectedRecords(db, [[usersRepository, [policeUser]], [policeOfficersRepository, [officer].filter(Boolean)], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 200, { user: policeUserForResponse(policeUser, officer) });
   }
 
   const policeResetMatch = url.pathname.match(/^\/api\/admin\/police-users\/([^/]+)\/reset-password$/);
@@ -4782,7 +5409,10 @@ async function apiInternal(req, res, url) {
       alert.reviewStatus = "false_alarm";
       alert.actionable = false;
     }
-    if (incident) await writeIncidentWorkflowRecords(db, incident, { alerts: [alert], audits: extraAudits });
+    if (incident) {
+      await writeIncidentWorkflowRecords(db, incident, { alerts: [alert], audits: extraAudits });
+      publishCriticalIncident(incident);
+    }
     else await writeSelectedRecords(db, [[alertsRepository, [alert]], [auditLogsRepository, extraAudits]]);
     return sendJson(res, 200, { alert: alertForResponse(db, alert), incident: incident ? incidentForResponse(db, incident) : null });
   }
@@ -4820,6 +5450,7 @@ async function apiInternal(req, res, url) {
     const verifiedAudit = addAuditLog(db, "citizen_report_verified", user, incident.id, report.id, createdAt);
     const convertedAudit = addAuditLog(db, "citizen_report_converted", user, incident.id, report.id, createdAt);
     await writeIncidentWorkflowRecords(db, incident, { reports: [report], audits: [verifiedAudit, convertedAudit] });
+    publishCriticalIncident(incident);
     const locationMessage = incident.locationStatus === "Verified"
       ? "Incident is ready for dispatch"
       : "Incident created. Confirm the incident location before dispatch.";
@@ -4933,6 +5564,7 @@ async function apiInternal(req, res, url) {
     const createdAt = now();
     const incident = createIncidentRecord(db, { ...body, source: "Manual", status: body.status || "Verified" }, user, createdAt);
     await writeIncidentWorkflowRecords(db, incident);
+    publishCriticalIncident(incident);
     return sendJson(res, 201, { incident: incidentForResponse(db, incident) });
   }
 
@@ -4995,40 +5627,43 @@ async function apiInternal(req, res, url) {
       await writeDatabase(db);
       return sendJson(res, 409, { error: locationError });
     }
-    const routed = await bestRoutedUnit(db, incident);
-    if (routed.error) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, routed.error);
-      await writeDatabase(db);
-      return sendJson(res, routed.status || 503, { error: routed.error, degraded: routed.degraded || false, candidates: routed.candidates || [], excludedUnits: routed.excludedUnits || [], warnings: routed.warnings || [] });
+    const recommendation = await buildHybridDispatchRecommendation(db, incident);
+    if (recommendation.error) {
+      const rejected = addAuditLog(db, "DISPATCH_REJECTED", user, incident.id, recommendation.error);
+      await writeIncidentWorkflowRecords(db, incident, { audits: [rejected] });
+      return sendJson(res, recommendation.status || 409, recommendation);
     }
-    if (!routed) {
-      addAuditLog(db, "dispatch_failed", user, incident.id, "Route service unavailable");
-      await writeDatabase(db);
-      return sendJson(res, 503, { error: "Route service unavailable", degraded: true });
+    incident.responseRequirements = recommendation.requirements;
+    incident.dispatchRecommendation = recommendation;
+    incident.recommendedUnitId = recommendation.primary?.unitId || null;
+    if (recommendation.primary) {
+      const route = recommendation.primary.route;
+      incident.distanceKm = recommendation.primary.distanceKm;
+      incident.etaMinutes = recommendation.primary.etaMinutes;
+      incident.routeLabel = route.routeLabel || route.label;
+      incident.routeProvider = route.provider;
+      incident.routeApproximate = Boolean(route.approximate);
+      incident.routeCalculatedAt = route.calculatedAt;
+      incident.routeSelectionReason = recommendation.primary.selectionReason;
     }
-    const { unit: nearest, route } = routed;
-    incident.recommendedUnitId = nearest.id;
-    incident.distanceKm = Number((route.distanceMeters / 1000).toFixed(2));
-    incident.etaMinutes = Math.max(1, Math.round(routed.etaSeconds / 60));
-    incident.routeLabel = route.routeLabel || route.label;
-    incident.routeProvider = route.provider;
-    incident.routeApproximate = Boolean(route.approximate);
-    incident.routeCalculatedAt = route.calculatedAt;
-    incident.routeSelectionReason = routed.selectionReason;
-    const recommendEvent = addDispatchEvent(db, incident.id, "unit_recommended", `${nearest.unitCode} recommended with ${incident.etaMinutes} minute ETA`, user.name);
-    const routeEvent = addDispatchEvent(db, incident.id, "route_calculated", `${incident.distanceKm} km route calculated via ${route.provider}`, user.name);
-    const routeAudit = addAuditLog(db, "route_calculated", user, incident.id, `${incident.distanceKm} km, ${incident.etaMinutes} min${route.approximate ? "; approximate" : ""}`);
-    const recommendAudit = addAuditLog(db, "unit_recommended", user, incident.id, nearest.unitCode);
-    const suggestedAudit = addAuditLog(db, "unit_suggested", user, incident.id, routed.selectionReason || nearest.unitCode);
-    await writeIncidentWorkflowRecords(db, incident, { units: [nearest], events: [recommendEvent, routeEvent], audits: [routeAudit, recommendAudit, suggestedAudit] });
+    incident.updatedAt = now();
+    const recommendEvent = addDispatchEvent(db, incident.id, "dispatch_recommendation_created", "Hybrid dispatch recommendation created; confirmation required", user.name);
+    const audits = [addAuditLog(db, "DISPATCH_RECOMMENDATION_CREATED", user, incident.id, recommendation.id)];
+    if (recommendation.primary) audits.push(addAuditLog(db, "PRIMARY_RESPONDER_SELECTED", user, incident.id, recommendation.primary.unit.unitCode || recommendation.primary.unitId));
+    recommendation.stationSupport.allocations.forEach((allocation, index) => {
+      audits.push(addAuditLog(db, index ? "ADDITIONAL_SUPPORT_SELECTED" : "STATION_SUPPORT_SELECTED", user, incident.id,
+        `${allocation.stationCode}: ${allocation.recommendedOfficers} officers, ${allocation.recommendedUnits} units`));
+    });
+    await writeIncidentWorkflowRecords(db, incident, { events: [recommendEvent], audits });
     return sendJson(res, 200, {
       incident: incidentForResponse(db, incident),
-      unit: unitForResponse(nearest),
-      route,
-      candidates: routed.candidates,
-      excludedUnits: routed.excludedUnits,
-      warnings: routed.warnings,
-      selectionReason: routed.selectionReason
+      unit: recommendation.primary?.unit || null,
+      route: recommendation.primary?.route || recommendation.stationSupport.allocations[0]?.route || null,
+      candidates: recommendation.primaryCandidates,
+      excludedUnits: recommendation.primaryExcludedUnits,
+      warnings: recommendation.warnings,
+      selectionReason: recommendation.primary?.selectionReason || recommendation.stationSupport.reason,
+      recommendation
     });
   }
 
@@ -5040,6 +5675,13 @@ async function apiInternal(req, res, url) {
     return sendJson(res, response.status, response.payload);
   }
 
+  const rejectDispatchMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/dispatch-recommendation\/reject$/);
+  if (req.method === "POST" && rejectDispatchMatch) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const result = await rejectHybridDispatchRecommendation(rejectDispatchMatch[1], body, user);
+    return sendJson(res, result.status, result.payload);
+  }
+
   const ackIncidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/acknowledge$/);
   if (req.method === "POST" && ackIncidentMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
@@ -5049,7 +5691,16 @@ async function apiInternal(req, res, url) {
 
   if (req.method === "POST" && productAssignMatch) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
-    const response = await assignSelectedIncidentUnit(productAssignMatch[1], body, user);
+    const response = body.recommendationId
+      ? await confirmHybridDispatch(productAssignMatch[1], body, user)
+      : await assignSelectedIncidentUnit(productAssignMatch[1], body, user);
+    return sendJson(res, response.status, response.payload);
+  }
+
+  const releaseUnitMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/release-unit$/);
+  if (req.method === "POST" && releaseUnitMatch) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const response = await releaseAssignedIncidentUnit(releaseUnitMatch[1], body, user);
     return sendJson(res, response.status, response.payload);
   }
 
@@ -5066,11 +5717,11 @@ async function apiInternal(req, res, url) {
     incident.closedAt = closedAt;
     incident.updatedAt = closedAt;
     const unit = db.responseUnits.find((item) => item.id === incident.assignedUnitId);
-    if (unit) Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: closedAt });
+    const released = releaseHybridDispatchResources(db, incident, closedAt);
     db.alerts.filter((alert) => alert.incidentId === incident.id).forEach((alert) => { alert.status = "Closed"; });
     syncLinkedCitizenReportStatus(db, incident);
-    addDispatchEvent(db, incident.id, "incident_closed", `${incident.title} closed${unit ? `; ${unit.unitCode} released` : ""}`, user.name, closedAt);
-    addAuditLog(db, "incident_closed", user, incident.id, unit ? `${unit.unitCode} released` : "", closedAt);
+    addDispatchEvent(db, incident.id, "incident_closed", `${incident.title} closed; ${released.units.length} unit(s) and ${released.officers.length} officer(s) released`, user.name, closedAt);
+    addAuditLog(db, "incident_closed", user, incident.id, `${released.units.length} unit(s), ${released.officers.length} officer(s) released`, closedAt);
     await writeDatabase(db);
     return sendJson(res, 200, { incident: incidentForResponse(db, incident), releasedUnit: unit || null });
   }
@@ -5422,14 +6073,17 @@ async function apiInternal(req, res, url) {
       const locationError = dispatchLocationError(incident);
       if (locationError) return sendJson(res, 409, { error: locationError });
     }
-    if (["Assigned", "En Route", "On Scene"].includes(nextStatus) && !incident.assignedUnitId) {
-      return sendJson(res, 409, { error: "Assign a response unit before this status" });
+    const hasConfirmedResources = Boolean(incident.assignedUnitId
+      || (incident.supportAllocations || []).some((allocation) => (allocation.unitIds || []).length || (allocation.officerIds || []).length));
+    if (["Assigned", "En Route", "On Scene"].includes(nextStatus) && !hasConfirmedResources) {
+      return sendJson(res, 409, { error: "Confirm response resources before this status" });
     }
     const changedAt = now();
     const changedEvents = [];
     const changedAudits = [];
     const changedAlerts = [];
     const changedUnits = [];
+    const changedOfficers = [];
     incident.status = nextStatus;
     incident.updatedAt = changedAt;
     const linkedReport = syncLinkedCitizenReportStatus(db, incident);
@@ -5451,14 +6105,14 @@ async function apiInternal(req, res, url) {
       incident.rejectionReason = reason;
       changedAudits.push(addAuditLog(db, "false_alarm_rejected", user, incident.id, reason, changedAt));
     }
+    if (["Resolved", "Closed", "Rejected / False Alarm"].includes(nextStatus)) {
+      const released = releaseHybridDispatchResources(db, incident, changedAt);
+      changedUnits.push(...released.units);
+      changedOfficers.push(...released.officers);
+    }
     if (["Closed", "Rejected / False Alarm"].includes(nextStatus)) {
       const closedAt = changedAt;
       incident.closedAt = closedAt;
-      const unit = assignedUnit;
-      if (unit) {
-        Object.assign(unit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: closedAt });
-        changedUnits.push(unit);
-      }
       db.alerts
         .filter((alert) => alert.incidentId === incident.id)
         .forEach((alert) => {
@@ -5475,6 +6129,7 @@ async function apiInternal(req, res, url) {
     if (nextStatus === "Closed") changedAudits.push(addAuditLog(db, "incident_closed", user, incident.id, incident.title, changedAt));
     await writeIncidentWorkflowRecords(db, incident, {
       units: changedUnits,
+      officers: changedOfficers,
       alerts: changedAlerts,
       reports: [linkedReport],
       events: changedEvents,
@@ -5486,8 +6141,507 @@ async function apiInternal(req, res, url) {
     });
   }
 
+  // SLA Configuration endpoints
+  if (req.method === "GET" && url.pathname === "/api/sla/config") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    return sendJson(res, 200, { config: db.slaConfig || [] });
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/sla/config") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const updates = body.updates || [];
+    const updatedAt = now();
+    let updated = 0;
+    for (const update of updates) {
+      const config = db.slaConfig?.find((c) => c.id === update.id || c.severity === update.severity);
+      if (config) {
+        Object.assign(config, update, { updatedAt });
+        updated++;
+      }
+    }
+    await writeDatabase(db);
+    return sendJson(res, 200, { updated, config: db.slaConfig });
+  }
+
+  // Severity Override endpoint
+  if (req.method === "POST" && url.pathname.match(/^\/api\/incidents\/([^/]+)\/severity$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const incidentId = url.pathname.match(/^\/api\/incidents\/([^/]+)\/severity$/)[1];
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
+    const newSeverity = body.severity;
+    if (!["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(newSeverity)) {
+      return sendJson(res, 400, { error: "Invalid severity" });
+    }
+    const reason = String(body.reason || "").trim();
+    if (!reason) return sendJson(res, 400, { error: "Reason is required for severity override" });
+
+    const previousSeverity = incident.severity;
+    if (previousSeverity === newSeverity) {
+      return sendJson(res, 409, { error: "Severity unchanged" });
+    }
+
+    incident.severity = newSeverity;
+    incident.severityOverride = true;
+    incident.severityOverrideReason = reason;
+    incident.severityOverrideBy = user.id;
+    incident.severityOverrideAt = now();
+    incident.updatedAt = now();
+
+    // Recalculate SLA deadlines based on new severity
+    const slaConfig = db.slaConfig || [];
+    const deadlines = calculateSlaDeadlinesForIncident(incident, slaConfig);
+    incident.assignmentDeadline = deadlines.assignmentDeadline;
+    incident.responseDeadline = deadlines.responseDeadline;
+
+    // Create audit record
+    const audit = {
+      id: uid("sev_audit"),
+      incidentId: incident.id,
+      previousSeverity,
+      newSeverity,
+      overriddenBy: user.id,
+      reason,
+      createdAt: now()
+    };
+    db.incidentSeverityAudit = db.incidentSeverityAudit || [];
+    db.incidentSeverityAudit.unshift(audit);
+
+    // Add timeline event
+    db.incidentTimeline = db.incidentTimeline || [];
+    db.incidentTimeline.unshift({
+      id: uid("timeline"),
+      incidentId: incident.id,
+      eventType: "SEVERITY_OVERRIDE",
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      description: `Severity changed from ${previousSeverity} to ${newSeverity}: ${reason}`,
+      metadata: { previousSeverity, newSeverity, reason },
+      createdAt: now()
+    });
+
+    addAuditLog(db, "severity_override", user, incident.id, `${previousSeverity} -> ${newSeverity}: ${reason}`);
+    await writeDatabase(db);
+    return sendJson(res, 200, { incident: incidentForResponse(db, incident), audit });
+  }
+
+  // Escalation Alerts endpoints
+  if (req.method === "GET" && url.pathname === "/api/escalation/alerts") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const { incidentId, active, acknowledged, limit = "100" } = Object.fromEntries(url.searchParams);
+    let alerts = db.escalationAlerts || [];
+    if (incidentId) alerts = alerts.filter((a) => a.incidentId === incidentId);
+    if (active !== undefined) alerts = alerts.filter((a) => a.active === (active === "true"));
+    if (acknowledged !== undefined) alerts = alerts.filter((a) => a.acknowledged === (acknowledged === "true"));
+    alerts = alerts.slice(0, parseInt(limit, 10));
+    return sendJson(res, 200, { alerts });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/escalation\/alerts\/([^/]+)\/acknowledge$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const alertId = url.pathname.match(/^\/api\/escalation\/alerts\/([^/]+)\/acknowledge$/)[1];
+    const alert = db.escalationAlerts?.find((a) => a.id === alertId);
+    if (!alert) return sendJson(res, 404, { error: "Alert not found" });
+    if (alert.acknowledged) return sendJson(res, 409, { error: "Already acknowledged" });
+    alert.acknowledged = true;
+    alert.acknowledgedBy = user.id;
+    alert.acknowledgedAt = now();
+    alert.updatedAt = now();
+    const audit = addAuditLog(db, "escalation_acknowledged", user, alert.incidentId, alert.title);
+    db.incidentTimeline ||= [];
+    const timeline = {
+      id: uid("timeline"), incidentId: alert.incidentId, eventType: "ESCALATION_ACKNOWLEDGED",
+      actorId: user.id, actorName: user.name, actorRole: user.role,
+      description: `Escalation acknowledged: ${alert.title}`,
+      metadata: { alertId: alert.id }, createdAt: alert.acknowledgedAt
+    };
+    db.incidentTimeline.unshift(timeline);
+    await writeSelectedRecords(db, [[escalationAlertsRepository, [alert]], [incidentTimelineRepository, [timeline]], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 200, { alert });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/escalation\/alerts\/([^/]+)\/resolve$/)) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const alertId = url.pathname.match(/^\/api\/escalation\/alerts\/([^/]+)\/resolve$/)[1];
+    const alert = db.escalationAlerts?.find((a) => a.id === alertId);
+    if (!alert) return sendJson(res, 404, { error: "Alert not found" });
+    if (alert.resolved) return sendJson(res, 409, { error: "Already resolved" });
+    alert.resolved = true;
+    alert.resolvedBy = user.id;
+    alert.resolvedAt = now();
+    alert.active = false;
+    alert.updatedAt = now();
+    const audit = addAuditLog(db, "escalation_resolved", user, alert.incidentId, alert.title);
+    await writeSelectedRecords(db, [[escalationAlertsRepository, [alert]], [auditLogsRepository, [audit]]]);
+    return sendJson(res, 200, { alert });
+  }
+
+  // Investigation endpoints
+  if (req.method === "POST" && url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/assign-officer$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const incidentId = url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/assign-officer$/)[1];
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
+    const officerId = body.officerId;
+    const officer = db.users.find((u) => u.id === officerId && u.role === "Police Officer");
+    if (!officer) return sendJson(res, 400, { error: "Invalid investigating officer" });
+
+    incident.investigatingOfficerId = officerId;
+    incident.investigationStatus = "ASSIGNED";
+    incident.investigationStartedAt = incident.investigationStartedAt || now();
+    incident.lastInvestigationUpdateAt = now();
+    incident.supervisorReviewRequired = false;
+    incident.updatedAt = now();
+
+    addAuditLog(db, "investigation_officer_assigned", user, incident.id, `Investigating Officer: ${officer.name} (${officer.id})`);
+    db.incidentTimeline = db.incidentTimeline || [];
+    db.incidentTimeline.unshift({
+      id: uid("timeline"),
+      incidentId: incident.id,
+      eventType: "INVESTIGATION_OFFICER_ASSIGNED",
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      description: `Investigating Officer assigned: ${officer.name}`,
+      metadata: { officerId, officerName: officer.name },
+      createdAt: now()
+    });
+
+    await writeDatabase(db);
+    return sendJson(res, 200, { incident: incidentForResponse(db, incident) });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/update$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const incidentId = url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/update$/)[1];
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
+    const notes = String(body.notes || "").trim();
+    if (!notes) return sendJson(res, 400, { error: "Update notes required" });
+
+    incident.lastInvestigationUpdateAt = now();
+    incident.investigationStatus = "ACTIVE";
+    incident.supervisorReviewRequired = false;
+    incident.updatedAt = now();
+
+    addAuditLog(db, "investigation_update", user, incident.id, notes);
+    db.incidentTimeline = db.incidentTimeline || [];
+    db.incidentTimeline.unshift({
+      id: uid("timeline"),
+      incidentId: incident.id,
+      eventType: "INVESTIGATION_UPDATE",
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      description: `Investigation update: ${notes}`,
+      metadata: { notes },
+      createdAt: now()
+    });
+
+    await writeDatabase(db);
+    return sendJson(res, 200, { incident: incidentForResponse(db, incident) });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/complete$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const incidentId = url.pathname.match(/^\/api\/incidents\/([^/]+)\/investigation\/complete$/)[1];
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
+    incident.investigationStatus = "COMPLETED";
+    incident.updatedAt = now();
+
+    addAuditLog(db, "investigation_completed", user, incident.id, "Investigation marked complete");
+    db.incidentTimeline = db.incidentTimeline || [];
+    db.incidentTimeline.unshift({
+      id: uid("timeline"),
+      incidentId: incident.id,
+      eventType: "INVESTIGATION_COMPLETE",
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: user.role,
+      description: "Investigation completed",
+      metadata: {},
+      createdAt: now()
+    });
+
+    await writeDatabase(db);
+    return sendJson(res, 200, { incident: incidentForResponse(db, incident) });
+  }
+
+  // SLA Status for incident
+  if (req.method === "GET" && url.pathname.match(/^\/api\/incidents\/([^/]+)\/sla-status$/)) {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const incidentId = url.pathname.match(/^\/api\/incidents\/([^/]+)\/sla-status$/)[1];
+    const incident = db.incidents.find((i) => i.id === incidentId);
+    if (!incident) return sendJson(res, 404, { error: "Incident not found" });
+    const slaConfig = db.slaConfig || [];
+    const assignmentStatus = getAssignmentSlaStatus(incident, slaConfig);
+    const responseStatus = getResponseSlaStatus(incident, slaConfig);
+    const escalationLevel = getEscalationLevelForIncident(incident, slaConfig);
+    return sendJson(res, 200, {
+      incidentId: incident.id,
+      severity: incident.severity,
+      escalationLevel,
+      assignmentDeadline: incident.assignmentDeadline,
+      responseDeadline: incident.responseDeadline,
+      assignmentStatus,
+      responseStatus,
+      assignmentBreached: incident.assignmentBreached,
+      responseBreached: incident.responseBreached
+    });
+  }
+
+  // Escalation sweep trigger
+  if (req.method === "POST" && url.pathname === "/api/sla/escalation-sweep") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const result = await runSlaEscalationSweep();
+    return sendJson(res, 200, result);
+  }
+
+  // Severity recommendation rules
+  if (req.method === "GET" && url.pathname === "/api/severity/rules") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    return sendJson(res, 200, { rules: db.severityRecommendationRules || [] });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/severity/rules") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const rule = {
+      id: uid("sev_rule"),
+      incidentType: body.incidentType,
+      category: body.category,
+      recommendedSeverity: body.recommendedSeverity,
+      keywords: body.keywords || [],
+      priority: Number(body.priority || 0),
+      active: true,
+      createdAt: now()
+    };
+    db.severityRecommendationRules = db.severityRecommendationRules || [];
+    db.severityRecommendationRules.unshift(rule);
+    await writeDatabase(db);
+    return sendJson(res, 201, { rule });
+  }
+
+  if (req.method === "PATCH" && url.pathname.match(/^\/api\/severity\/rules\/([^/]+)$/)) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const ruleId = url.pathname.match(/^\/api\/severity\/rules\/([^/]+)$/)[1];
+    const rule = db.severityRecommendationRules?.find((r) => r.id === ruleId);
+    if (!rule) return sendJson(res, 404, { error: "Rule not found" });
+    Object.assign(rule, body, { updatedAt: now() });
+    await writeDatabase(db);
+    return sendJson(res, 200, { rule });
+  }
+
+  // Investigation categories
+  if (req.method === "GET" && url.pathname === "/api/investigation/categories") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    return sendJson(res, 200, { categories: db.investigationCategories || [] });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/investigation/categories") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const category = {
+      id: uid("inv_cat"),
+      categoryName: body.categoryName,
+      incidentTypes: body.incidentTypes || [],
+      requiresInvestigation: body.requiresInvestigation !== false,
+      investigationDeadlineHours: body.investigationDeadlineHours,
+      active: true,
+      createdAt: now()
+    };
+    db.investigationCategories = db.investigationCategories || [];
+    db.investigationCategories.unshift(category);
+    await writeDatabase(db);
+    return sendJson(res, 201, { category });
+  }
+
   return sendJson(res, 404, { error: "Not found" });
 }
+
+function calculateSlaDeadlinesForIncident(incident, slaConfig) {
+  const config = slaConfig?.find((c) => c.severity === incident.severity) || slaConfig?.find((c) => c.severity === "MEDIUM");
+  if (!config) return { assignmentDeadline: null, responseDeadline: null };
+
+  const createdAt = new Date(incident.createdAt || incident.updatedAt || now()).getTime();
+  return {
+    assignmentDeadline: new Date(createdAt + config.assignmentSlaMinutes * 60 * 1000).toISOString(),
+    responseDeadline: new Date(createdAt + config.responseSlaMinutes * 60 * 1000).toISOString()
+  };
+}
+
+function getRecommendedSeverity(incident, severityRules) {
+  if (!severityRules || !severityRules.length) return "MEDIUM";
+
+  const searchText = [
+    incident.title,
+    incident.type,
+    incident.category,
+    incident.description,
+    incident.threatType
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const incidentType = normalized(incident.type || incident.category || "general");
+
+  const matchingRules = severityRules
+    .filter((rule) => rule.active)
+    .filter((rule) => {
+      if (rule.incidentType && normalized(rule.incidentType) === incidentType) return true;
+      if (rule.keywords && rule.keywords.length) {
+        return rule.keywords.some((keyword) => searchText.includes(String(keyword).toLowerCase()));
+      }
+      return false;
+    })
+    .sort((a, b) => b.priority - a.priority);
+
+  return matchingRules.length ? matchingRules[0].recommendedSeverity : "MEDIUM";
+}
+
+function getEscalationLevelForIncident(incident, slaConfig, currentTime = Date.now()) {
+  return slaService.getEscalationLevel(incident, slaConfig, currentTime);
+}
+
+function getAssignmentSlaStatus(incident, slaConfig, currentTime = Date.now()) {
+  if (!incident.assignmentDeadline) return { status: "NO_DEADLINE", overdue: false };
+
+  const deadline = new Date(incident.assignmentDeadline).getTime();
+  const config = slaConfig?.find((c) => c.severity === incident.severity) || slaConfig?.find((c) => c.severity === "MEDIUM");
+  const warningTime = deadline - (config?.warningBeforeAssignmentMinutes || 1) * 60 * 1000;
+
+  const hasAssignedUnit = Boolean(incident.assignedUnitId);
+
+  if (hasAssignedUnit) {
+    return { status: "ASSIGNED", overdue: false, remainingMs: 0 };
+  }
+
+  if (currentTime >= deadline) {
+    const overdueMs = currentTime - deadline;
+    return { status: "BREACHED", overdue: true, overdueMs, overdueMinutes: Math.ceil(overdueMs / 60000) };
+  }
+
+  if (currentTime >= warningTime) {
+    const remainingMs = deadline - currentTime;
+    return { status: "WARNING", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+  }
+
+  const remainingMs = deadline - currentTime;
+  return { status: "WITHIN_SLA", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+}
+
+function getResponseSlaStatus(incident, slaConfig, currentTime = Date.now()) {
+  if (!incident.responseDeadline) return { status: "NO_DEADLINE", overdue: false };
+
+  const deadline = new Date(incident.responseDeadline).getTime();
+  const config = slaConfig?.find((c) => c.severity === incident.severity) || slaConfig?.find((c) => c.severity === "MEDIUM");
+  const warningTime = deadline - (config?.warningBeforeResponseMinutes || 5) * 60 * 1000;
+
+  const isEnRoute = incident.status === "En Route";
+  const isOnScene = incident.status === "On Scene";
+
+  if (isOnScene) {
+    return { status: "ON_SCENE", overdue: false, remainingMs: 0 };
+  }
+
+  if (isEnRoute) {
+    if (currentTime >= deadline) {
+      const overdueMs = currentTime - deadline;
+      return { status: "BREACHED", overdue: true, overdueMs, overdueMinutes: Math.ceil(overdueMs / 60000) };
+    }
+    if (currentTime >= warningTime) {
+      const remainingMs = deadline - currentTime;
+      return { status: "WARNING", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+    }
+    const remainingMs = deadline - currentTime;
+    return { status: "EN_ROUTE", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+  }
+
+  const hasAssignedUnit = Boolean(incident.assignedUnitId);
+  if (!hasAssignedUnit) {
+    return { status: "NO_TEAM", overdue: false };
+  }
+
+  if (currentTime >= deadline) {
+    const overdueMs = currentTime - deadline;
+    return { status: "BREACHED", overdue: true, overdueMs, overdueMinutes: Math.ceil(overdueMs / 60000) };
+  }
+
+  if (currentTime >= warningTime) {
+    const remainingMs = deadline - currentTime;
+    return { status: "WARNING", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+  }
+
+  const remainingMs = deadline - currentTime;
+  return { status: "WITHIN_SLA", overdue: false, remainingMs, remainingMinutes: Math.ceil(remainingMs / 60000) };
+}
+
+function requiresInvestigation(incident, investigationCategories) {
+  if (!investigationCategories || !investigationCategories.length) return false;
+
+  const incidentType = normalizedIncidentValue(incident.type || incident.category || "").replace(/\s+/g, "_");
+  const incidentTitle = (incident.title || "").toLowerCase();
+
+  return investigationCategories.some((cat) =>
+    cat.active &&
+    cat.requiresInvestigation &&
+    cat.incidentTypes.some((type) =>
+      normalizedIncidentValue(type).replace(/\s+/g, "_") === incidentType ||
+      incidentTitle.includes(normalizedIncidentValue(type).replace(/\s+/g, "_"))
+    )
+  );
+}
+
+function isInvestigationInactive(incident, slaConfig, currentTime = Date.now()) {
+  if (!incident.investigationRequired || incident.investigationStatus === "NOT_REQUIRED" || incident.investigationStatus === "COMPLETED") {
+    return false;
+  }
+
+  if (!incident.lastInvestigationUpdateAt && !incident.investigationStartedAt) {
+    return false;
+  }
+
+  const lastUpdate = incident.lastInvestigationUpdateAt
+    ? new Date(incident.lastInvestigationUpdateAt).getTime()
+    : new Date(incident.investigationStartedAt || incident.createdAt).getTime();
+
+  const config = slaConfig?.find((c) => c.severity === incident.severity) || slaConfig?.find((c) => c.severity === "MEDIUM");
+  const thresholdHours = config?.investigationInactivityThresholdHours || 24;
+  const thresholdMs = thresholdHours * 60 * 60 * 1000;
+
+  return (currentTime - lastUpdate) >= thresholdMs;
+}
+
+function isInvestigationOfficerMissing(incident) {
+  if (!incident.investigationRequired) return false;
+  if (incident.investigationStatus === "NOT_REQUIRED" || incident.investigationStatus === "COMPLETED") return false;
+  return !incident.investigatingOfficerId;
+}
+
+async function runSlaEscalationSweep(options = {}) {
+  const db = options.db || await readDatabase();
+  const result = await runSlaSweep({
+    db,
+    currentTime: options.currentTime ?? Date.now(),
+    uid,
+    normalizedIncidentValue,
+    getAssignmentSlaStatus,
+    getResponseSlaStatus,
+    getEscalationLevel: getEscalationLevelForIncident,
+    requiresInvestigation,
+    isInvestigationOfficerMissing,
+    isInvestigationInactive
+  });
+  if ((options.persist ?? !options.db) && result.changed) {
+    const incidentIds = new Set(result.results.map((entry) => entry.incidentId));
+    await writeSelectedRecords(db, [
+      [incidentsRepository, db.incidents.filter((incident) => incidentIds.has(incident.id))],
+      [escalationAlertsRepository, [...result.createdAlerts, ...result.resolvedAlerts]],
+      [incidentTimelineRepository, db.incidentTimeline.filter((event) => incidentIds.has(event.incidentId))]
+    ]);
+  }
+  return result;
+}
+
+const ESCALATION_LEVELS = ["L0", "L1", "L2", "L3", "L4"];
 
 function api(req, res, url) {
   const mutatesData = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
@@ -5506,6 +6660,8 @@ module.exports = {
   writeDb,
   readDatabase,
   writeDatabase,
+  writeSelectedRecords,
+  addAuditLog,
   repairLegacyPersistedData,
   seedDb,
   ensureProductShape,
@@ -5523,6 +6679,15 @@ module.exports = {
   checkAndTriggerEscalation,
   checkAllPendingEscalations,
   runEscalationSweep,
+  runSlaEscalationSweep,
+  calculateSlaDeadlinesForIncident,
+  getRecommendedSeverity,
+  getEscalationLevelForIncident,
+  getAssignmentSlaStatus,
+  getResponseSlaStatus,
+  requiresInvestigation,
+  isInvestigationInactive,
+  isInvestigationOfficerMissing,
   __testables: {
     revokeAuthenticatedSession,
     userHasRevokedSession,

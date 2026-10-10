@@ -1,7 +1,9 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
-const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000);
-localStorage.removeItem("rakshakai_session_token");
-sessionStorage.removeItem("rakshakai_session_token");
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || "/api";
+const API_TIMEOUT_MS = Number(import.meta.env?.VITE_API_TIMEOUT_MS || 15000);
+// Browsers no longer use these tokens, but remove legacy values when storage
+// is present.  Guarding this also keeps API modules usable in Node test runs.
+globalThis.localStorage?.removeItem("rakshakai_session_token");
+globalThis.sessionStorage?.removeItem("rakshakai_session_token");
 
 const ROUTES = {
   "/api/health": "/health",
@@ -28,7 +30,10 @@ const ROUTES = {
   "/api/ai/health": "/ai/health",
   "/api/rakshak/analyze-frame": "/ai/analyze-frame",
   "/api/route": "/route",
-  "/api/maps/route": "/maps/route"
+  "/api/maps/route": "/maps/route",
+  "/api/tracking/sessions": "/tracking/sessions",
+  "/api/tracking/camera-adjacency": "/tracking/camera-adjacency",
+  "/api/tracking/score-config": "/tracking/score-config"
 };
 
 function normalizeApiPath(path) {
@@ -115,3 +120,27 @@ export async function api(path, options = {}) {
   }
   return data;
 }
+
+export const trackingApi = {
+  createSession: (data) => api("/api/tracking/sessions", { method: "POST", body: data }),
+  listSessions: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return api(`/api/tracking/sessions${query ? `?${query}` : ""}`);
+  },
+  getSession: (sessionId) => api(`/api/tracking/sessions/${sessionId}`),
+  searchCandidates: (sessionId, timeWindowMinutes = 30) =>
+    api(`/api/tracking/sessions/${sessionId}/search?timeWindowMinutes=${timeWindowMinutes}`, { method: "POST" }),
+  getTimeline: (sessionId) => api(`/api/tracking/sessions/${sessionId}/timeline`),
+  getMapData: (sessionId) => api(`/api/tracking/sessions/${sessionId}/map`),
+  verifyCandidate: (sessionId, candidateId, decision, reason) =>
+    api(`/api/tracking/sessions/${sessionId}/candidates/${candidateId}/verify`, {
+      method: "POST",
+      body: { decision, reason }
+    }),
+  getCandidateDetails: (sessionId, candidateId) => api(`/api/tracking/sessions/${sessionId}/candidates/${candidateId}`),
+  closeSession: (sessionId) => api(`/api/tracking/sessions/${sessionId}/close`, { method: "POST" }),
+  getCameraAdjacency: () => api("/api/tracking/camera-adjacency"),
+  createCameraAdjacency: (data) => api("/api/tracking/camera-adjacency", { method: "POST", body: data }),
+  getScoreConfig: (trackType) => api(`/api/tracking/score-config${trackType ? `?trackType=${trackType}` : ""}`),
+  updateScoreConfig: (data) => api("/api/tracking/score-config", { method: "POST", body: data })
+};

@@ -63,8 +63,12 @@ function getPool() {
 }
 
 function query(sql, params = []) {
-  const activeClient = transactionStorage.getStore()?.client;
-  if (activeClient) return activeClient.query(sql, params);
+  const context = transactionStorage.getStore();
+  if (context?.client) {
+    const pending = context.queryTail.then(() => context.client.query(sql, params));
+    context.queryTail = pending;
+    return pending;
+  }
   return getPool().query(sql, params);
 }
 
@@ -79,12 +83,13 @@ async function withTransaction(callback, transactionPool) {
   const activeClient = transactionStorage.getStore()?.client;
   if (activeClient) return callback(activeClient);
   const client = await (transactionPool || getPool()).connect();
-  const context = { client, onFailure: [] };
+  const context = { client, onFailure: [], queryTail: Promise.resolve() };
   let commitAttempted = false;
   let discardClient = false;
   try {
     await client.query("BEGIN");
     const result = await transactionStorage.run(context, () => callback(client));
+    await context.queryTail;
     commitAttempted = true;
     const committed = await client.query("COMMIT");
     if (committed.command === "ROLLBACK") {
@@ -94,6 +99,7 @@ async function withTransaction(callback, transactionPool) {
   } catch (error) {
     // A lost COMMIT acknowledgement is ambiguous. Never delete evidence that may be committed.
     const outcome = !commitAttempted || /^(23|40)/.test(error.code || "") ? "rolled_back" : "unknown";
+    await context.queryTail.catch(() => {});
     try {
       await client.query("ROLLBACK");
     } catch {
