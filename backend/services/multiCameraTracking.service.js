@@ -82,8 +82,8 @@ function angleDifference(a, b) {
   return diff > 180 ? 360 - diff : diff;
 }
 
-async function getScoreWeights(trackType) {
-  const configs = await trackingScoreConfigRepository.list({ track_type: trackType, is_active: true });
+async function getScoreWeights(trackType, db = {}) {
+  const configs = await trackingScoreConfigRepository.list(db);
   const weights = trackType === TRACK_TYPES.PERSON ? { ...DEFAULT_PERSON_WEIGHTS } : { ...DEFAULT_VEHICLE_WEIGHTS };
   for (const config of configs) {
     if (weights.hasOwnProperty(config.weightKey)) {
@@ -331,7 +331,7 @@ async function searchCandidatesForPerson(db, session, referenceObs, timeWindowMi
     candidateObs.push(...observations);
   }
 
-  const weights = await getScoreWeights(TRACK_TYPES.PERSON);
+  const weights = await getScoreWeights(TRACK_TYPES.PERSON, db);
   const candidates = [];
 
   for (const obs of candidateObs) {
@@ -418,7 +418,7 @@ async function searchCandidatesForVehicle(db, session, referenceObs, timeWindowM
     candidateObs.push(...observations);
   }
 
-  const weights = await getScoreWeights(TRACK_TYPES.VEHICLE);
+  const weights = await getScoreWeights(TRACK_TYPES.VEHICLE, db);
   const candidates = [];
 
   for (const obs of candidateObs) {
