@@ -846,7 +846,7 @@ async function testEvidenceReferencesPreserved() {
 
 async function runAllTests() {
   console.log("\n=== Running Multi-Camera Tracking Backend Tests ===\n");
-  await seedTestDatabase();
+  if (process.env.DATABASE_URL) await seedTestDatabase();
 
   const tests = [
     testPersonTrackingSessionCreation,
