@@ -3737,7 +3737,7 @@ test("frontend login errors are specific and keep submit state recoverable", () 
   const registerStart = appSource.indexOf("$(\"#registerForm\").addEventListener(\"submit\"", loginStart);
   const loginBlock = appSource.slice(loginStart, registerStart);
 
-  assert.match(apiSource, /const API_TIMEOUT_MS = Number\(import\.meta\.env\.VITE_API_TIMEOUT_MS \|\| 15000\)/);
+  assert.match(apiSource, /const API_TIMEOUT_MS = Number\(import\.meta\.env\?\.VITE_API_TIMEOUT_MS \|\| 15000\)/);
   assert.match(apiSource, /function safeApiMessage\(path, status, data = \{\}, code = ""\)/);
   assert.match(apiSource, /Network request timed out\. Check that RakshakAI services are reachable and try again\./);
   assert.match(apiSource, /Backend unavailable\. Start the RakshakAI backend service and try again\./);
@@ -3893,7 +3893,7 @@ test("frontend CSP allowlist covers maps, Browser AI Vision, previews, and API c
   assert.equal(csp["connect-src"].includes("https://router.project-osrm.org"), false);
   assert.equal(csp["connect-src"].includes("https://nominatim.openstreetmap.org"), false);
 
-  assert.match(apiSource, /const API_BASE_URL = import\.meta\.env\.VITE_API_BASE_URL \|\| "\/api"/);
+  assert.match(apiSource, /const API_BASE_URL = import\.meta\.env\?\.VITE_API_BASE_URL \|\| "\/api"/);
   assert.match(apiSource, /credentials:\s*"include"/);
   assert.ok(csp["connect-src"].includes("'self'"));
   assert.ok(csp["connect-src"].includes("http://127.0.0.1:5000"));
