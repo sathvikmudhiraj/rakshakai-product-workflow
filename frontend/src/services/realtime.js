@@ -82,6 +82,17 @@ function setupEventListeners() {
     "tracking_candidate_verified",
     "tracking_session_closed",
     "tracking_last_seen_updated"
+    , "camera_health_changed"
+    , "camera_offline"
+    , "camera_online"
+    , "camera_no_signal"
+    , "camera_no_video_frames"
+    , "camera_low_fps"
+    , "camera_tamper_suspected"
+    , "camera_obstructed"
+    , "camera_storage_error"
+    , "camera_health_alert_created"
+    , "camera_health_alert_resolved"
   ];
 
   events.forEach((event) => {

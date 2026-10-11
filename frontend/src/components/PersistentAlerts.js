@@ -1,3 +1,10 @@
+let criticalBannerResizeObserver = null;
+
+function syncCriticalBannerOffset(banner) {
+  const height = banner && !banner.hidden ? Math.ceil(banner.getBoundingClientRect().height) : 0;
+  document.documentElement.style.setProperty("--critical-banner-height", `${height}px`);
+}
+
 export function createCriticalModal(alert, onView, onAcknowledge) {
   document.querySelectorAll(".persistent-modal-overlay").forEach((existing) => existing.remove());
   const modal = document.createElement("div");
@@ -59,6 +66,13 @@ export function createGlobalBanner(activeCriticalCount, onClick) {
     banner.querySelector(".banner-action").addEventListener("click", onClick);
   } else {
     banner.hidden = true;
+  }
+
+  syncCriticalBannerOffset(banner);
+  if (typeof ResizeObserver !== "undefined") {
+    criticalBannerResizeObserver?.disconnect();
+    criticalBannerResizeObserver = new ResizeObserver(() => syncCriticalBannerOffset(banner));
+    criticalBannerResizeObserver.observe(banner);
   }
 
   return banner;
@@ -154,6 +168,9 @@ export function updateCriticalModal(alert) {
 export function removeGlobalBanner() {
   const banner = document.getElementById("global-critical-banner");
   if (banner) banner.hidden = true;
+  criticalBannerResizeObserver?.disconnect();
+  criticalBannerResizeObserver = null;
+  syncCriticalBannerOffset(null);
 }
 
 export function removeRequiresAttentionPanel() {

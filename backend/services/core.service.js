@@ -195,6 +195,8 @@ function seedDb() {
     cameraHealthEvents: [],
     cameraHealthAlerts: [],
     cameraHealthThresholds: {},
+    notifications: [],
+    notificationReceipts: [],
     devices: [
       { id: "d1", name: "Camera C-19", type: "CCTV", status: "online", zone: "Red Zone", latencyMs: 210 },
       { id: "d2", name: "Drone D-03", type: "Drone", status: "warning", zone: "Transit Hub", latencyMs: 380 },
@@ -206,11 +208,48 @@ function seedDb() {
 
 function defaultSlaConfig(timestamp = now()) {
   return [
-    { id: "sla_critical", severity: "CRITICAL", assignmentSlaMinutes: 1, responseSlaMinutes: 5, warningBeforeAssignmentMinutes: 1, warningBeforeResponseMinutes: 1, escalationL1IntervalMinutes: 2, escalationL2IntervalMinutes: 3, escalationL3IntervalMinutes: 5, escalationL4IntervalMinutes: 10, investigationInactivityThresholdHours: 12, active: true },
+    { id: "sla_critical", severity: "CRITICAL", assignmentSlaMinutes: 1, responseSlaMinutes: 5, warningBeforeAssignmentMinutes: 0, warningBeforeResponseMinutes: 1, escalationL1IntervalMinutes: 2, escalationL2IntervalMinutes: 3, escalationL3IntervalMinutes: 5, escalationL4IntervalMinutes: 10, investigationInactivityThresholdHours: 12, active: true },
     { id: "sla_high", severity: "HIGH", assignmentSlaMinutes: 3, responseSlaMinutes: 10, warningBeforeAssignmentMinutes: 1, warningBeforeResponseMinutes: 2, escalationL1IntervalMinutes: 3, escalationL2IntervalMinutes: 5, escalationL3IntervalMinutes: 10, escalationL4IntervalMinutes: 15, investigationInactivityThresholdHours: 24, active: true },
     { id: "sla_medium", severity: "MEDIUM", assignmentSlaMinutes: 10, responseSlaMinutes: 30, warningBeforeAssignmentMinutes: 3, warningBeforeResponseMinutes: 5, escalationL1IntervalMinutes: 5, escalationL2IntervalMinutes: 10, escalationL3IntervalMinutes: 15, escalationL4IntervalMinutes: 30, investigationInactivityThresholdHours: 48, active: true },
     { id: "sla_low", severity: "LOW", assignmentSlaMinutes: 30, responseSlaMinutes: 120, warningBeforeAssignmentMinutes: 10, warningBeforeResponseMinutes: 15, escalationL1IntervalMinutes: 15, escalationL2IntervalMinutes: 30, escalationL3IntervalMinutes: 60, escalationL4IntervalMinutes: 120, investigationInactivityThresholdHours: 72, active: true }
   ];
+}
+
+const SLA_NUMERIC_FIELDS = [
+  "assignmentSlaMinutes",
+  "responseSlaMinutes",
+  "warningBeforeAssignmentMinutes",
+  "warningBeforeResponseMinutes",
+  "escalationL1IntervalMinutes",
+  "escalationL2IntervalMinutes",
+  "escalationL3IntervalMinutes",
+  "escalationL4IntervalMinutes",
+  "investigationInactivityThresholdHours"
+];
+
+function normalizeAndValidateSlaPolicy(update = {}, existing = {}) {
+  const policy = { ...existing };
+  for (const field of SLA_NUMERIC_FIELDS) {
+    const value = Number(update[field] ?? existing[field]);
+    if (!Number.isFinite(value)) return { error: `${field} must be a number` };
+    policy[field] = value;
+  }
+  policy.active = update.active === undefined ? existing.active !== false : Boolean(update.active);
+  if (policy.assignmentSlaMinutes <= 0) return { error: "Assignment SLA must be greater than 0" };
+  if (policy.responseSlaMinutes <= 0) return { error: "Response SLA must be greater than 0" };
+  if (policy.warningBeforeAssignmentMinutes < 0 || policy.warningBeforeAssignmentMinutes >= policy.assignmentSlaMinutes) {
+    return { error: "Assignment warning must be at least 0 and less than the assignment SLA" };
+  }
+  if (policy.warningBeforeResponseMinutes < 0 || policy.warningBeforeResponseMinutes >= policy.responseSlaMinutes) {
+    return { error: "Response warning must be at least 0 and less than the response SLA" };
+  }
+  const escalation = [policy.escalationL1IntervalMinutes, policy.escalationL2IntervalMinutes, policy.escalationL3IntervalMinutes, policy.escalationL4IntervalMinutes];
+  if (escalation.some((value) => value <= 0)) return { error: "All escalation intervals must be greater than 0" };
+  if (!(escalation[0] < escalation[1] && escalation[1] < escalation[2] && escalation[2] < escalation[3])) {
+    return { error: "Escalation intervals must increase from L1 through L4" };
+  }
+  if (policy.investigationInactivityThresholdHours <= 0) return { error: "Investigation inactivity must be greater than 0" };
+  return { policy };
 }
 
 function defaultSeverityRecommendationRules(timestamp = now()) {
@@ -502,6 +541,8 @@ async function writeDatabase(db) {
         escalationAlerts: db.escalationAlerts || [],
         incidentTimeline: db.incidentTimeline || []
         , cameraHealthThresholds: db.cameraHealthThresholds || []
+        , notifications: db.notifications || []
+        , notificationReceipts: db.notificationReceipts || []
       })]
     );
   });
@@ -2231,10 +2272,13 @@ function alertForResponse(db, alert) {
 }
 
 function ensureProductShape(db) {
+  db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
+  db.notificationReceipts = Array.isArray(db.notificationReceipts) ? db.notificationReceipts : [];
   db.cameraSources = Array.isArray(db.cameraSources) ? db.cameraSources : [];
   db.detections = Array.isArray(db.detections) ? db.detections : [];
   db.videoEvidence = Array.isArray(db.videoEvidence) ? db.videoEvidence : [];
   db.dispatchEvents = Array.isArray(db.dispatchEvents) ? db.dispatchEvents : [];
+  db.slaConfig = Array.isArray(db.slaConfig) && db.slaConfig.length ? db.slaConfig : defaultSlaConfig();
   const stationDefaults = defaultPoliceStations();
   const stationById = new Map(stationDefaults.map((station) => [station.id, normalizePoliceStationRecord(station)]));
   (Array.isArray(db.policeStations) ? db.policeStations : []).forEach((station) => {
@@ -6149,18 +6193,29 @@ async function apiInternal(req, res, url) {
 
   if (req.method === "PATCH" && url.pathname === "/api/sla/config") {
     if (!hasRole(user, ["Admin"])) return forbidden(res);
-    const updates = body.updates || [];
+    const updates = body.restoreDefaults ? defaultSlaConfig() : body.updates;
+    if (!Array.isArray(updates) || !updates.length) return sendJson(res, 400, { error: "At least one SLA policy update is required" });
     const updatedAt = now();
-    let updated = 0;
+    const planned = [];
     for (const update of updates) {
       const config = db.slaConfig?.find((c) => c.id === update.id || c.severity === update.severity);
-      if (config) {
-        Object.assign(config, update, { updatedAt });
-        updated++;
-      }
+      if (!config) return sendJson(res, 400, { error: `Unknown SLA policy: ${update.id || update.severity || "unspecified"}` });
+      const validation = normalizeAndValidateSlaPolicy(update, config);
+      if (validation.error) return sendJson(res, 400, { error: `${config.severity}: ${validation.error}` });
+      const next = { ...validation.policy, id: config.id, severity: config.severity, updatedAt };
+      const changedFields = [...SLA_NUMERIC_FIELDS, "active"].filter((field) => config[field] !== next[field]);
+      planned.push({ config, next, changedFields });
+    }
+    for (const { config, next, changedFields } of planned) {
+      if (!changedFields.length) continue;
+      const oldValues = Object.fromEntries(changedFields.map((field) => [field, config[field]]));
+      const newValues = Object.fromEntries(changedFields.map((field) => [field, next[field]]));
+      Object.assign(config, next);
+      const audit = addAuditLog(db, body.restoreDefaults ? "sla_defaults_restored" : "sla_policy_updated", user, null, `${config.severity} SLA policy updated`, updatedAt);
+      Object.assign(audit, { severity: config.severity, changedFields, oldValues, newValues, module: "SLA / Configuration", status: "Success" });
     }
     await writeDatabase(db);
-    return sendJson(res, 200, { updated, config: db.slaConfig });
+    return sendJson(res, 200, { updated: planned.filter((item) => item.changedFields.length).length, config: db.slaConfig, message: body.restoreDefaults ? "SLA defaults restored successfully" : "SLA settings updated successfully" });
   }
 
   // Severity Override endpoint
@@ -6688,6 +6743,7 @@ module.exports = {
   requiresInvestigation,
   isInvestigationInactive,
   isInvestigationOfficerMissing,
+  normalizeAndValidateSlaPolicy,
   __testables: {
     revokeAuthenticatedSession,
     userHasRevokedSession,

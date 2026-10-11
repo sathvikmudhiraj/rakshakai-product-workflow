@@ -34,7 +34,8 @@ import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderF
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
 import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 import { configureTracking, renderTrackingPage, cleanupTracking } from "./components/MultiCameraTracking.js";
-import { configureCopilot, mountCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
+import { configureCopilot, mountCopilot, openCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
+import { mountNotificationCenter, unmountNotificationCenter } from "./components/NotificationCenter.js";
 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
@@ -52,20 +53,37 @@ const VIEW_TITLES = {
   "multi-camera-tracking": "Multi-Camera Tracking"
 };
 
+const SETTINGS_SECTIONS = new Set([
+  "security",
+  "device-health",
+  "police-units",
+  "police-stations",
+  "camera-ai",
+  "sla-escalation",
+  "system"
+]);
+
 const state = {
   incidents: [],
   selectedIncidentId: null,
   user: null,
   pendingReportFile: null,
   alertFilter: "all",
+  alertQueueFilters: { source: "all", status: "all", type: "all", time: "all" },
   auditFilter: "all",
   alerts: [],
   escalationAlerts: [],
+  slaConfig: [],
+  slaDraft: [],
+  slaDirty: false,
+  settingsSection: "security",
   reports: [],
   responseUnits: [],
+  unitRegistryFilters: { search: "", status: "all", station: "all", availability: "all" },
   responseUnitSummary: {},
   telemetryUnit: null,
   policeStations: [],
+  stationRegistryFilters: { search: "", jurisdiction: "all", operational: "all" },
   mapDefaultCenter: { lat: 17.5109, lng: 78.3276 },
   selectedUnitId: null,
   dispatchCandidates: [],
@@ -104,7 +122,17 @@ const state = {
 };
 
 configureTracking({ cameraSources: () => state.cameraSources || [] });
-configureCopilot({ context: () => ({ page: document.body.dataset.view || "dashboard", entityId: state.selectedIncidentId || state.selectedUnitId || null }) });
+configureCopilot({ context: () => {
+  const page = document.body.dataset.view || "dashboard";
+  const entityId = page === "incident-command" || page === "investigations" || page === "escalations"
+    ? state.selectedIncidentId
+    : page === "unit-assignment"
+      ? state.selectedIncidentId || state.selectedUnitId
+      : page === "response-units" || page === "gis"
+        ? state.selectedUnitId
+      : page === "video-evidence" ? state.activeEvidenceId : null;
+  return { page, entityId: entityId || null };
+} });
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
 let realtimeUnsubscribers = [];
@@ -117,6 +145,7 @@ let unitTelemetryInFlight = false;
 let backendUnitTrackingActive = false;
 let unitTelemetryPollTimer = null;
 let unitGpsStatusTimer = null;
+let topbarResizeObserver = null;
 let lastUnitTelemetryRenderFingerprint = "";
 let unitGpsUi = { mode: "stopped", message: "GPS tracking stopped", point: null, updatedAt: null };
 const TILE_SIZE = 256;
@@ -271,11 +300,19 @@ function dispatchErrorMessage(error) {
 
 function setView(view, options = {}) {
   const previousView = document.body.dataset.view;
+  if (previousView === "settings" && view !== "settings" && state.slaDirty && !window.confirm("You have unsaved SLA changes. Discard them and leave Settings?")) return;
+  if (previousView === "settings" && view !== "settings" && state.slaDirty) discardSlaDraft();
   if (document.body.dataset.view === "live-vision" && view !== "live-vision") stopLiveVision();
   if (document.body.dataset.view === "multi-camera-tracking" && view !== "multi-camera-tracking") cleanupTracking();
   const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
   if (nav?.hidden) landingForRole(state.user?.role);
   view = resolveViewAccess({ view, role: state.user?.role, document, viewTitles: VIEW_TITLES });
+  if (view === "missing" && state.user?.role === "Citizen") setText("#viewTitle", "My Reports & Public Safety Help");
+  if (view === "settings") {
+    setSettingsSection(settingsSectionFromLocation(), { updateUrl: true, focus: false });
+  } else if (previousView === "settings" && location.hash.startsWith("#settings/")) {
+    history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+  }
   if (previousView === "gis" && view !== "gis" && activeRouteWorkflow()) {
     resetGisNavigationState("GIS route markers cleared after leaving route workflow.");
   }
@@ -303,6 +340,43 @@ function setView(view, options = {}) {
   if (view === "unit-assignment") renderUnitAssignment();
   if (view === "multi-camera-tracking") renderTrackingPage();
   requestAnimationFrame(renderSatelliteMaps);
+}
+
+function settingsSectionFromLocation() {
+  const match = location.hash.match(/^#settings\/([^/?#]+)/);
+  const section = match ? decodeURIComponent(match[1]) : state.settingsSection;
+  return SETTINGS_SECTIONS.has(section) ? section : "security";
+}
+
+function canLeaveSlaSection(nextSection) {
+  if (state.settingsSection !== "sla-escalation" || nextSection === "sla-escalation" || !state.slaDirty) return true;
+  if (!window.confirm("You have unsaved SLA changes. Discard them and leave this page?")) return false;
+  discardSlaDraft();
+  return true;
+}
+
+function setSettingsSection(section, { updateUrl = true, focus = false } = {}) {
+  const nextSection = SETTINGS_SECTIONS.has(section) ? section : "security";
+  if (!canLeaveSlaSection(nextSection)) return;
+  state.settingsSection = nextSection;
+  $$('[data-settings-section]').forEach((button) => {
+    const selected = button.dataset.settingsSection === nextSection;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-current", selected ? "page" : "false");
+  });
+  $$('[data-settings-panel]').forEach((panel) => {
+    panel.hidden = panel.dataset.settingsPanel !== nextSection;
+  });
+  const select = $("#settingsSectionSelect");
+  if (select) select.value = nextSection;
+  if (updateUrl) {
+    history.replaceState(history.state, "", `${location.pathname}${location.search}#settings/${nextSection}`);
+  }
+  if (focus) {
+    const heading = $(`[data-settings-panel="${nextSection}"] h2`);
+    heading?.setAttribute("tabindex", "-1");
+    heading?.focus({ preventScroll: true });
+  }
 }
 
 function rolesFor(button) {
@@ -353,6 +427,16 @@ function applyRoleAccess() {
     emergencyMode.checked = role === "Citizen" || emergencyMode.checked;
     emergencyMode.disabled = role === "Citizen";
   }
+  const citizen = role === "Citizen";
+  setText("#reportCenterEyebrow", citizen ? "Citizen Reporting" : "Report Intake & Review");
+  setText("#reportCenterHeading", citizen ? "Report a missing person or property" : "Missing and found report intake");
+  setText("#reportCenterCopy", citizen
+    ? "Provide clear details for police review. You can return here to track every report you submit."
+    : "Review citizen-submitted reports separately from verified incidents and AI-assisted possible matches.");
+  setText("#reportQueueTitle", citizen ? "My Submitted Reports" : "Citizen Reports for Review");
+  setText("#reportQueueCopy", citizen
+    ? "Police review and linked-incident updates appear here."
+    : "Human review is required before a report becomes an operational incident.");
   document.body.dataset.role = role || "guest";
 }
 
@@ -368,6 +452,7 @@ function setAuthMode(mode = "login", message = "") {
 }
 
 function showPortal(message = "", mode = "login") {
+  unmountNotificationCenter();
   unmountCopilot();
   stopUnitTelemetryPolling();
   disconnectSocket();
@@ -397,7 +482,7 @@ function renderPersistentEscalations(modalAlert = null) {
   const criticalCount = active.filter((alert) => String(alert.severity).toUpperCase() === "CRITICAL").length;
   createGlobalBanner(criticalCount, () => setView("incident-command"));
   const panel = createRequiresAttentionPanel(active, openEscalationIncident, acknowledgeEscalation);
-  const host = document.querySelector("[data-panel='dashboard'] .dashboard-grid") || document.querySelector("[data-panel='incident-command'] .incident-command-rail");
+  const host = document.querySelector("[data-panel='dashboard'] .dashboard-lower-left") || document.querySelector("[data-panel='incident-command'] .incident-command-rail");
   if (host && !panel.isConnected) host.prepend(panel);
   if (modalAlert && String(modalAlert.severity).toUpperCase() === "CRITICAL" && modalAlert.active) {
     createCriticalModal(modalAlert, openEscalationIncident, acknowledgeEscalation);
@@ -430,10 +515,33 @@ function initializeRealtimeAlerts() {
   }));
 }
 
+function syncTopbarOffset() {
+  const topbar = $(".topbar");
+  const height = Math.ceil(topbar?.getBoundingClientRect().height || 0);
+  if (height) document.documentElement.style.setProperty("--topbar-height", `${height}px`);
+}
+
 function showApp() {
   $("#portalLogin").classList.add("app-hidden");
   $("#appShell").classList.remove("app-hidden");
-  if (["Admin", "Police Officer"].includes(state.user?.role)) mountCopilot();
+  const topbar = $(".topbar");
+  requestAnimationFrame(syncTopbarOffset);
+  if (topbar && typeof ResizeObserver !== "undefined" && !topbarResizeObserver) {
+    topbarResizeObserver = new ResizeObserver(syncTopbarOffset);
+    topbarResizeObserver.observe(topbar);
+  }
+  const operator = ["Admin", "Police Officer"].includes(state.user?.role);
+  if (operator) mountCopilot();
+  mountNotificationCenter({
+    showCopilot: operator,
+    openCopilot,
+    navigate: ({ view, entityType, entityId }) => {
+      if (entityType === "incident") state.selectedIncidentId = entityId;
+      if (entityType === "tracking_session") document.body.dataset.trackingSessionId = entityId;
+      if (entityType === "tracking_candidate") document.body.dataset.trackingCandidateId = entityId;
+      setView(view);
+    }
+  });
 }
 
 function setLayer(layer) {
@@ -3212,6 +3320,164 @@ function renderCameras(cameras = []) {
   }
 }
 
+function renderCameraAiSettings(cameras = [], aiHealth = {}) {
+  const container = $("#cameraAiStatus");
+  if (!container) return;
+  const realCameras = cameras.filter((camera) => !camera.isDemo);
+  const configured = realCameras.filter((camera) => camera.hasStreamConfig).length;
+  const connected = realCameras.filter((camera) => camera.status === "online").length;
+  const unavailable = realCameras.filter((camera) => !["online", "available", "ready"].includes(camera.status)).length;
+  const disabled = realCameras.filter((camera) => camera.enabled === false || !camera.aiEnabled).length;
+  const aiState = aiHealth.status === "connected"
+    ? "Connected"
+    : aiHealth.configured || aiHealth.status === "unreachable"
+      ? "Unavailable"
+      : "Disabled";
+  const aiDetail = aiState === "Connected"
+    ? "Real AI detection service is reachable."
+    : aiState === "Unavailable"
+      ? "AI is configured, but the service cannot be reached."
+      : "AI service is not configured.";
+  const cards = [
+    { label: "AI service", value: aiState, detail: aiDetail, state: aiState.toLowerCase() },
+    { label: "Configured", value: configured, detail: "Production cameras with backend stream configuration.", state: "configured" },
+    { label: "Connected", value: connected, detail: "Production cameras reporting online.", state: "connected" },
+    { label: "Unavailable", value: unavailable, detail: "Production cameras offline or in an unknown state.", state: "unavailable" },
+    { label: "Disabled", value: disabled, detail: "Production cameras disabled or with camera AI turned off.", state: "disabled" }
+  ];
+  container.textContent = "";
+  cards.forEach((item) => {
+    const card = node("article", `settings-status-card status-${item.state}`);
+    card.append(node("span", "settings-status-label", item.label), node("strong", "", String(item.value)), node("small", "", item.detail));
+    container.append(card);
+  });
+  const summary = $("#cameraSummary");
+  if (summary) {
+    const demoFeeds = cameras.filter((camera) => camera.isDemo).length;
+    const healthy = cameras.filter((camera) => camera.status === "online").length;
+    const offline = cameras.filter((camera) => camera.status === "offline").length;
+    const needsAttention = cameras.length - healthy - offline;
+    summary.textContent = "";
+    [["Total Cameras", cameras.length], ["Healthy", healthy], ["Needs Attention", needsAttention], ["Offline", offline], ["Real Configured", configured], ["Demo Feeds", demoFeeds]].forEach(([label, value]) => {
+      const card = node("article", "cctv-summary-card");
+      card.append(node("span", "", label), node("strong", "", String(value)));
+      summary.append(card);
+    });
+  }
+}
+
+function renderSlaSettingsLegacy(config = [], escalationAlerts = []) {
+  const list = $("#slaConfigList");
+  if (!list) return;
+  list.textContent = "";
+  if (!config.length) {
+    list.append(node("div", "unit-registry-empty", "No SLA configuration is available."));
+  } else {
+    config.forEach((policy) => {
+      const card = node("article", "sla-config-card");
+      const head = node("div", "sla-config-head");
+      head.append(node("strong", "", policy.severity), node("span", `chip ${policy.active === false ? "status-disabled" : ""}`, policy.active === false ? "Disabled" : "Active"));
+      const values = node("div", "sla-config-values");
+      [
+        ["Assignment", `${policy.assignmentSlaMinutes} min`],
+        ["Response", `${policy.responseSlaMinutes} min`],
+        ["Assignment warning", `${policy.warningBeforeAssignmentMinutes} min`],
+        ["Response warning", `${policy.warningBeforeResponseMinutes} min`],
+        ["Escalation L1–L4", [policy.escalationL1IntervalMinutes, policy.escalationL2IntervalMinutes, policy.escalationL3IntervalMinutes, policy.escalationL4IntervalMinutes].join(" / ") + " min"],
+        ["Investigation inactivity", `${policy.investigationInactivityThresholdHours} hr`]
+      ].forEach(([label, value]) => {
+        const item = node("div", "");
+        item.append(node("span", "", label), node("strong", "", value));
+        values.append(item);
+      });
+      card.append(head, values);
+      list.append(card);
+    });
+  }
+  const activePolicies = config.filter((policy) => policy.active !== false).length;
+  setText("#slaPolicyStatus", `${activePolicies} active policies`);
+  const activeEscalations = escalationAlerts.filter((alert) => alert.active !== false).length;
+  setText("#activeEscalationCount", `${activeEscalations} active escalation${activeEscalations === 1 ? "" : "s"}`);
+}
+
+function cloneSlaConfig(config = []) {
+  return config.map((policy) => ({ ...policy }));
+}
+
+function validateSlaPolicy(policy) {
+  if (!(policy.assignmentSlaMinutes > 0)) return "Assignment SLA must be greater than 0.";
+  if (!(policy.responseSlaMinutes > 0)) return "Response SLA must be greater than 0.";
+  if (policy.warningBeforeAssignmentMinutes < 0 || policy.warningBeforeAssignmentMinutes >= policy.assignmentSlaMinutes) return "Assignment warning must be at least 0 and less than the assignment SLA.";
+  if (policy.warningBeforeResponseMinutes < 0 || policy.warningBeforeResponseMinutes >= policy.responseSlaMinutes) return "Response warning must be at least 0 and less than the response SLA.";
+  const levels = [policy.escalationL1IntervalMinutes, policy.escalationL2IntervalMinutes, policy.escalationL3IntervalMinutes, policy.escalationL4IntervalMinutes];
+  if (levels.some((value) => !(value > 0))) return "All escalation intervals must be greater than 0.";
+  if (!(levels[0] < levels[1] && levels[1] < levels[2] && levels[2] < levels[3])) return "Escalation intervals must increase from L1 through L4.";
+  if (!(policy.investigationInactivityThresholdHours > 0)) return "Investigation inactivity must be greater than 0.";
+  return "";
+}
+
+function discardSlaDraft() {
+  state.slaDraft = cloneSlaConfig(state.slaConfig);
+  state.slaDirty = false;
+}
+
+function slaNumberField(policy, index, field, label, unit) {
+  const wrapper = node("label", "sla-field");
+  wrapper.append(node("span", "", label));
+  const control = node("span", "sla-number-control");
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = field.toLowerCase().includes("warning") ? "0" : "0.01";
+  input.step = "1";
+  input.value = policy[field];
+  input.dataset.slaIndex = String(index);
+  input.dataset.slaField = field;
+  input.required = true;
+  control.append(input, node("small", "", unit));
+  wrapper.append(control);
+  return wrapper;
+}
+
+function renderSlaSettings(config = [], escalationAlerts = []) {
+  const list = $("#slaConfigList");
+  if (!list) return;
+  if (!state.slaDirty) state.slaDraft = cloneSlaConfig(config);
+  const draft = state.slaDraft;
+  list.textContent = "";
+  if (!draft.length) list.append(node("div", "unit-registry-empty", "No SLA configuration is available."));
+  draft.forEach((policy, index) => {
+    const card = node("article", "sla-config-card");
+    const head = node("div", "sla-config-head");
+    const toggle = node("label", "sla-active-toggle");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = policy.active !== false;
+    checkbox.dataset.slaIndex = String(index);
+    checkbox.dataset.slaField = "active";
+    toggle.append(checkbox, node("span", "", policy.active === false ? "Inactive" : "Active"));
+    head.append(node("strong", "", policy.severity), toggle);
+    const values = node("div", "sla-config-values");
+    const assignment = node("fieldset", "sla-field-group");
+    assignment.append(node("legend", "", "Assignment"), slaNumberField(policy, index, "assignmentSlaMinutes", "Assignment SLA", "min"), slaNumberField(policy, index, "warningBeforeAssignmentMinutes", "Warning", "min"));
+    const response = node("fieldset", "sla-field-group");
+    response.append(node("legend", "", "Response"), slaNumberField(policy, index, "responseSlaMinutes", "Response SLA", "min"), slaNumberField(policy, index, "warningBeforeResponseMinutes", "Warning", "min"));
+    const escalation = node("fieldset", "sla-field-group sla-escalation-fields");
+    escalation.append(node("legend", "", "Escalation"));
+    [["escalationL1IntervalMinutes", "L1"], ["escalationL2IntervalMinutes", "L2"], ["escalationL3IntervalMinutes", "L3"], ["escalationL4IntervalMinutes", "L4"]].forEach(([field, label]) => escalation.append(slaNumberField(policy, index, field, label, "min")));
+    const inactivity = node("fieldset", "sla-field-group");
+    inactivity.append(node("legend", "", "Investigation"), slaNumberField(policy, index, "investigationInactivityThresholdHours", "Inactivity", "hr"));
+    const error = node("p", "sla-policy-error", validateSlaPolicy(policy));
+    error.dataset.slaError = String(index);
+    values.append(assignment, response, escalation, inactivity);
+    card.append(head, values, error);
+    list.append(card);
+  });
+  const activePolicies = draft.filter((policy) => policy.active !== false).length;
+  setText("#slaPolicyStatus", `${activePolicies} active policies${state.slaDirty ? " · Unsaved" : ""}`);
+  const activeEscalations = escalationAlerts.filter((alert) => alert.active !== false).length;
+  setText("#activeEscalationCount", `${activeEscalations} active escalation${activeEscalations === 1 ? "" : "s"}`);
+}
+
 function sourceModeMeta(type) {
   if (["demo", "rtsp", "hls", "onvif", "nvr", "dvr", "webcam"].includes(type)) {
     return { title: "CCTV Registry", description: "Camera metadata and health", action: "View CCTV", view: "cctv" };
@@ -3667,6 +3933,26 @@ function reportCard(report) {
   return card;
 }
 
+function renderReports(reports = []) {
+  const list = $("#caseList");
+  if (!list) return;
+  list.textContent = "";
+  setText("#reportQueueCount", `${reports.length} ${reports.length === 1 ? "report" : "reports"}`);
+  if (!reports.length) {
+    const empty = node("article", "purposeful-empty report-empty");
+    empty.append(
+      node("span", "purposeful-empty-icon", "RP"),
+      node("strong", "", state.user?.role === "Citizen" ? "No reports submitted yet" : "No citizen reports awaiting review"),
+      node("p", "", state.user?.role === "Citizen"
+        ? "When you submit a report, its police-review status and linked incident updates will appear here."
+        : "New citizen submissions will appear here with their verification state.")
+    );
+    list.append(empty);
+    return;
+  }
+  reports.forEach((report) => list.append(reportCard(report)));
+}
+
 function reportField(label, value, className = "") {
   const row = node("div", `case-row ${className}`.trim());
   row.append(node("span", "case-row-label", `${label}:`), node("span", "case-row-value", value));
@@ -3755,6 +4041,20 @@ function renderAlertFilters(alerts) {
     button.dataset.alertFilter = key;
     filters.append(button);
   });
+  const selectors = [
+    ["source", "Source", [["all", "All sources"], ...[...new Set(alerts.map((alert) => alert.source).filter(Boolean))].map((value) => [value, alertSourceLabel({ source: value })])]],
+    ["status", "Status", [["all", "All statuses"], ["active", "Needs action"], ["acknowledged", "Acknowledged"], ["closed", "Closed"]]],
+    ["type", "Type", [["all", "All types"], ...[...new Set(alerts.map((alert) => alert.type).filter(Boolean))].map((value) => [value, displayValue(value)])]],
+    ["time", "Time", [["all", "Any time"], ["hour", "Last hour"], ["day", "Last 24 hours"], ["week", "Last 7 days"]]]
+  ];
+  const advanced = node("div", "alert-advanced-filters");
+  selectors.forEach(([key, label, options]) => {
+    const field = node("label", ""); field.append(document.createTextNode(label));
+    const select = document.createElement("select"); select.dataset.alertQueueFilter = key;
+    options.forEach(([value, text]) => select.append(new Option(text, value)));
+    select.value = state.alertQueueFilters[key] || "all"; field.append(select); advanced.append(field);
+  });
+  filters.append(advanced);
 }
 
 function alertCard(alert) {
@@ -3822,13 +4122,24 @@ function renderAlerts(alerts = []) {
   renderAlertFilters(alerts);
   const grid = $("#alertGrid");
   if (!grid) return;
-  const openAlerts = alerts.filter((alert) => alert.status !== "closed");
-  const filtered = state.alertFilter === "all" ? openAlerts : openAlerts.filter((alert) => alert.severity === state.alertFilter);
+  const queue = state.alertQueueFilters;
+  const now = Date.now();
+  const filtered = alerts.filter((alert) => {
+    const status = String(alert.status || "active").toLowerCase();
+    const created = Date.parse(alert.createdAt || alert.timestamp || "");
+    const withinTime = queue.time === "all"
+      || (Number.isFinite(created) && now - created <= ({ hour: 3_600_000, day: 86_400_000, week: 604_800_000 }[queue.time] || Infinity));
+    return (state.alertFilter === "all" || String(alert.severity).toLowerCase() === state.alertFilter)
+      && (queue.source === "all" || alert.source === queue.source)
+      && (queue.type === "all" || alert.type === queue.type)
+      && (queue.status === "all" || status === queue.status || (queue.status === "active" && status !== "closed" && !alert.acknowledged))
+      && withinTime;
+  });
   grid.textContent = "";
   if (!filtered.length) {
     const empty = node("article", "alert-empty");
     empty.append(node("strong", "", "No alerts in this filter"));
-    empty.append(node("small", "", "New incident, AI scan, or test alert notifications will appear here."));
+    empty.append(node("small", "", "Adjust the filters or wait for a new operational alert."));
     grid.append(empty);
     return;
   }
@@ -3945,6 +4256,7 @@ function renderDeviceHealth(devices = []) {
     meta.append(node("span", "", `Zone: ${displayValue(device.zone, "Unknown")}`));
     if (device.type) meta.append(node("span", "", `Type: ${device.type}`));
     if (device.latencyMs !== null && device.latencyMs !== undefined) meta.append(node("span", "", `Latency: ${device.latencyMs} ms`));
+    meta.append(node("span", "", `Last update: ${device.lastUpdated || device.updatedAt || device.lastSeen ? alertTime(device.lastUpdated || device.updatedAt || device.lastSeen) : "Unknown"}`));
     body.append(head, meta);
     card.append(icon, body);
     list.append(card);
@@ -3958,6 +4270,23 @@ function resetUnitRegistryForm() {
   form.elements.namedItem("id").value = "";
   form.elements.namedItem("operational").checked = true;
   form.elements.namedItem("linkedStationId").value = "";
+}
+
+function closeUnitRegistryForm() {
+  resetUnitRegistryForm();
+  const dialog = $("#unitRegistryDialog");
+  if (dialog) dialog.hidden = true;
+  document.body.classList.remove("settings-dialog-open");
+}
+
+function openUnitRegistryForm(unit = null) {
+  resetUnitRegistryForm();
+  if (unit) fillUnitRegistryForm(unit);
+  setText("#unitRegistryDialogTitle", unit ? "Edit Police Unit" : "Add Police Unit");
+  const dialog = $("#unitRegistryDialog");
+  if (dialog) dialog.hidden = false;
+  document.body.classList.add("settings-dialog-open");
+  $("#unitRegistryForm input[name='unitId']")?.focus();
 }
 
 function fillUnitRegistryForm(unit) {
@@ -3980,7 +4309,6 @@ function fillUnitRegistryForm(unit) {
   form.elements.namedItem("operational").checked = unit.operational !== false;
   form.elements.namedItem("dutyStatus").value = unit.dutyStatus || "on_duty";
   form.elements.namedItem("availabilityStatus").value = unit.availabilityStatus || "available";
-  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function assignmentSlaLabel(incident) {
@@ -4149,11 +4477,24 @@ function renderUnitRegistry(units = state.responseUnits) {
   const list = $("#unitRegistryList");
   if (!list) return;
   list.textContent = "";
-  if (!units.length) {
+  const filters = state.unitRegistryFilters;
+  const query = filters.search.toLowerCase();
+  const filtered = units.filter((unit) => {
+    const searchable = `${unitLabel(unit)} ${unit.unitName || unit.name || ""} ${unit.officerName || unit.teamName || ""} ${unit.stationName || unit.station || ""} ${unit.beat || unit.sector || ""}`.toLowerCase();
+    const station = unit.linkedStationId || unit.stationId || unit.stationName || unit.station || "";
+    return (!query || searchable.includes(query))
+      && (filters.status === "all" || unitDispatchStatus(unit) === filters.status)
+      && (filters.station === "all" || station === filters.station)
+      && (filters.availability === "all" || (unit.availabilityStatus || unitDispatchStatus(unit)) === filters.availability);
+  });
+  setText("#unitRegistryCount", filtered.length === units.length
+    ? `${units.length} ${units.length === 1 ? "unit" : "units"}`
+    : `${filtered.length} of ${units.length} units`);
+  if (!filtered.length) {
     list.append(node("article", "unit-registry-empty", "No response units configured."));
     return;
   }
-  units.forEach((unit) => {
+  filtered.forEach((unit) => {
     const card = node("article", `unit-registry-card ${unit.isDemo ? "demo" : "real"} status-${unitDispatchStatus(unit)}`);
     const head = node("div", "unit-registry-head");
     head.append(
@@ -4179,7 +4520,7 @@ function renderUnitRegistry(units = state.responseUnits) {
     const actions = node("div", "unit-registry-row-actions");
     const edit = node("button", "ghost", "Edit");
     edit.type = "button";
-    edit.addEventListener("click", () => fillUnitRegistryForm(unit));
+    edit.addEventListener("click", () => openUnitRegistryForm(unit));
     const deactivate = node("button", "ghost", unit.operational ? "Deactivate" : "Activate");
     deactivate.type = "button";
     deactivate.addEventListener("click", async () => {
@@ -4189,10 +4530,10 @@ function renderUnitRegistry(units = state.responseUnits) {
         } else {
           await api(`/api/response-units/${unit.id}`, { method: "PATCH", body: { operational: true, status: "available" } });
         }
-        setText("#unitRegistryStatus", unit.operational ? "Unit deactivated." : "Unit activated.");
+        setText("#unitRegistryPageStatus", unit.operational ? "Unit deactivated." : "Unit activated.");
         await refresh();
       } catch (error) {
-        setText("#unitRegistryStatus", error.message);
+        setText("#unitRegistryPageStatus", error.message);
       }
     });
     const archive = node("button", "ghost", unit.archivedAt ? "Archived" : "Archive");
@@ -4204,10 +4545,10 @@ function renderUnitRegistry(units = state.responseUnits) {
       if (!window.confirm(`Archive ${unitLabel(unit)}? Archived units cannot be dispatched.`)) return;
       try {
         await api(`/api/response-units/${unit.id}`, { method: "PATCH", body: { archive: true, archiveReason: String(reason).trim() } });
-        setText("#unitRegistryStatus", "Unit archived.");
+        setText("#unitRegistryPageStatus", "Unit archived.");
         await refresh();
       } catch (error) {
-        setText("#unitRegistryStatus", error.message);
+        setText("#unitRegistryPageStatus", error.message);
       }
     });
     actions.append(edit, deactivate, archive);
@@ -4226,6 +4567,14 @@ function renderStationSelect(stations = state.policeStations) {
     select.append(new Option(`${station.stationName || station.name} (${station.stationId || station.id})`, station.stationId || station.id));
   });
   select.value = stations.some((station) => [station.stationId, station.id].includes(selected)) ? selected : "";
+  const filter = $("#unitRegistryStationFilter");
+  if (filter) {
+    const filterValue = filter.value;
+    filter.textContent = "";
+    filter.append(new Option("All stations", "all"));
+    stations.forEach((station) => filter.append(new Option(station.stationName || station.name, station.stationId || station.id)));
+    filter.value = [...filter.options].some((option) => option.value === filterValue) ? filterValue : "all";
+  }
 }
 
 function resetStationRegistryForm() {
@@ -4235,6 +4584,23 @@ function resetStationRegistryForm() {
   form.elements.namedItem("id").value = "";
   form.elements.namedItem("source").value = "admin_registry";
   form.elements.namedItem("operational").value = "true";
+}
+
+function closeStationRegistryForm() {
+  resetStationRegistryForm();
+  const dialog = $("#stationRegistryDialog");
+  if (dialog) dialog.hidden = true;
+  document.body.classList.remove("settings-dialog-open");
+}
+
+function openStationRegistryForm(station = null) {
+  resetStationRegistryForm();
+  if (station) fillStationRegistryForm(station);
+  setText("#stationRegistryDialogTitle", station ? "Edit Police Station" : "Add Police Station");
+  const dialog = $("#stationRegistryDialog");
+  if (dialog) dialog.hidden = false;
+  document.body.classList.add("settings-dialog-open");
+  $("#stationRegistryForm input[name='stationId']")?.focus();
 }
 
 function fillStationRegistryForm(station) {
@@ -4250,7 +4616,6 @@ function fillStationRegistryForm(station) {
   form.elements.namedItem("lat").value = station.latitude ?? station.lat ?? "";
   form.elements.namedItem("lng").value = station.longitude ?? station.lng ?? "";
   form.elements.namedItem("address").value = station.address || "";
-  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function renderStationRegistry(stations = state.policeStations) {
@@ -4258,11 +4623,31 @@ function renderStationRegistry(stations = state.policeStations) {
   if (!list) return;
   list.textContent = "";
   renderStationSelect(stations);
-  if (!stations.length) {
+  const jurisdictions = [...new Set(stations.map((station) => station.jurisdiction).filter(Boolean))].sort();
+  const jurisdictionFilter = $("#stationRegistryJurisdictionFilter");
+  if (jurisdictionFilter) {
+    const selected = jurisdictionFilter.value;
+    jurisdictionFilter.textContent = "";
+    jurisdictionFilter.append(new Option("All jurisdictions", "all"));
+    jurisdictions.forEach((value) => jurisdictionFilter.append(new Option(value, value)));
+    jurisdictionFilter.value = jurisdictions.includes(selected) ? selected : "all";
+  }
+  const filters = state.stationRegistryFilters;
+  const query = filters.search.toLowerCase();
+  const filtered = stations.filter((station) => {
+    const searchable = `${station.stationId || station.id} ${station.stationName || station.name || ""} ${station.jurisdiction || ""} ${station.beat || ""}`.toLowerCase();
+    return (!query || searchable.includes(query))
+      && (filters.jurisdiction === "all" || station.jurisdiction === filters.jurisdiction)
+      && (filters.operational === "all" || String(station.operational !== false) === filters.operational);
+  });
+  setText("#stationRegistryCount", filtered.length === stations.length
+    ? `${stations.length} ${stations.length === 1 ? "station" : "stations"}`
+    : `${filtered.length} of ${stations.length} stations`);
+  if (!filtered.length) {
     list.append(node("article", "unit-registry-empty", "No police stations configured."));
     return;
   }
-  stations.forEach((station) => {
+  filtered.forEach((station) => {
     const card = node("article", `unit-registry-card station ${station.isDemo ? "demo" : "real"} ${station.operational ? "status-available" : "status-offline"}`);
     const head = node("div", "unit-registry-head");
     head.append(
@@ -4283,7 +4668,7 @@ function renderStationRegistry(stations = state.policeStations) {
     const actions = node("div", "unit-registry-row-actions");
     const edit = node("button", "ghost", "Edit");
     edit.type = "button";
-    edit.addEventListener("click", () => fillStationRegistryForm(station));
+    edit.addEventListener("click", () => openStationRegistryForm(station));
     const deactivate = node("button", "ghost", station.operational ? "Deactivate" : "Activate");
     deactivate.type = "button";
     deactivate.addEventListener("click", async () => {
@@ -4293,10 +4678,10 @@ function renderStationRegistry(stations = state.policeStations) {
         } else {
           await api(`/api/police-stations/${station.id}`, { method: "PATCH", body: { operational: true } });
         }
-        setText("#stationRegistryStatus", station.operational ? "Station deactivated." : "Station activated.");
+        setText("#stationRegistryPageStatus", station.operational ? "Station deactivated." : "Station activated.");
         await refresh();
       } catch (error) {
-        setText("#stationRegistryStatus", error.message);
+        setText("#stationRegistryPageStatus", error.message);
       }
     });
     actions.append(edit, deactivate);
@@ -4323,8 +4708,23 @@ function policeUserCard(user) {
     ["Created", user.createdAt ? alertTime(user.createdAt) : ""],
     ["Updated", user.updatedAt ? alertTime(user.updatedAt) : ""]
   ].forEach(([label, value]) => meta.append(node("span", "", `${label}: ${displayValue(value, "--")}`)));
+  const managementActions = node("div", "police-user-row-actions police-user-summary-actions");
+  const edit = node("button", "ghost", "Edit Officer");
+  edit.type = "button";
+  edit.setAttribute("aria-expanded", "false");
+  const toggle = node("button", user.status === "inactive" ? "ghost" : "danger", user.status === "inactive" ? "Activate" : "Deactivate");
+  toggle.type = "button";
+  toggle.dataset.policeAction = user.status === "inactive" ? "activate" : "deactivate";
+  toggle.dataset.policeUserId = user.id;
+  const reset = node("button", "ghost", "Reset Password");
+  reset.type = "button";
+  reset.dataset.policeAction = "reset-password";
+  reset.dataset.policeUserId = user.id;
+  managementActions.append(edit, reset, toggle);
   const form = node("form", "police-user-edit");
   form.dataset.policeUserId = user.id;
+  form.hidden = true;
+  form.setAttribute("aria-label", `Edit ${user.name}`);
   [
     ["name", "Name", user.name],
     ["email", "Email", user.email],
@@ -4362,22 +4762,20 @@ function policeUserCard(user) {
     field.append(select);
     form.append(field);
   });
-  const actions = node("div", "police-user-row-actions");
+  const actions = node("div", "police-user-row-actions police-user-edit-actions");
   const save = node("button", "ghost", "Save");
   save.type = "submit";
-  actions.append(save);
-  const toggle = node("button", "ghost", user.status === "inactive" ? "Activate" : "Deactivate");
-  toggle.type = "button";
-  toggle.dataset.policeAction = user.status === "inactive" ? "activate" : "deactivate";
-  toggle.dataset.policeUserId = user.id;
-  actions.append(toggle);
-  const reset = node("button", "ghost", "Reset Password");
-  reset.type = "button";
-  reset.dataset.policeAction = "reset-password";
-  reset.dataset.policeUserId = user.id;
-  actions.append(reset);
+  const cancel = node("button", "ghost", "Cancel");
+  cancel.type = "button";
+  cancel.addEventListener("click", () => { form.hidden = true; edit.setAttribute("aria-expanded", "false"); edit.focus(); });
+  actions.append(save, cancel);
   form.append(actions);
-  card.append(head, meta, form);
+  edit.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    edit.setAttribute("aria-expanded", String(!form.hidden));
+    if (!form.hidden) form.querySelector("input")?.focus();
+  });
+  card.append(head, meta, managementActions, form);
   return card;
 }
 
@@ -4455,7 +4853,10 @@ const AUDIT_ACTION_LABELS = {
   police_password_reset: "Police Password Reset",
   route_suggested: "Route Suggested",
   unit_recommended: "Unit Recommended",
-  alert_created: "Alert Created"
+  alert_created: "Alert Created",
+  copilot_query: "Copilot Query",
+  sla_policy_updated: "SLA Policy Updated",
+  sla_defaults_restored: "SLA Defaults Restored"
 };
 
 function auditActionLabel(action = "") {
@@ -4469,6 +4870,8 @@ function auditActionLabel(action = "") {
 
 function auditCategory(action = "") {
   const key = String(action);
+  if (key.includes("copilot")) return "copilot";
+  if (key.includes("sla_") || key.includes("config")) return "configuration";
   if (key.includes("alert") || key.includes("ai_")) return "alerts";
   if (key.includes("incident") || key.includes("unit") || key.includes("route")) return "incidents";
   if (key.includes("report") || key.includes("missing")) return "reports";
@@ -4476,7 +4879,7 @@ function auditCategory(action = "") {
 }
 
 function auditEntityLabel(category) {
-  return { alerts: "Alert", incidents: "Incident", reports: "Report", system: "Auth/System" }[category] || "System";
+  return { alerts: "Alert", incidents: "Incident", reports: "Report", system: "Auth/System", copilot: "Copilot", configuration: "SLA / Configuration" }[category] || "System";
 }
 
 function auditStatus(action = "") {
@@ -4502,8 +4905,20 @@ function auditCard(log) {
     node("span", "", alertTime(log.timestamp))
   );
   body.append(title, meta);
-  if (log.details || log.incidentId) {
-    body.append(node("small", "audit-details", log.details ? String(log.details) : `Incident: ${log.incidentId}`));
+  if (log.severity) body.append(node("small", "audit-details", `Severity: ${log.severity}`));
+  if (log.changedFields?.length) {
+    const details = document.createElement("details");
+    details.className = "audit-technical-details";
+    details.append(node("summary", "", "View Details"));
+    const changes = node("div", "audit-change-list");
+    log.changedFields.forEach((field) => changes.append(node("span", "", `${auditActionLabel(field)}: ${displayValue(log.oldValues?.[field], "--")} → ${displayValue(log.newValues?.[field], "--")}`)));
+    details.append(changes);
+    body.append(details);
+  } else if (log.details || log.incidentId) {
+    const details = document.createElement("details");
+    details.className = "audit-technical-details";
+    details.append(node("summary", "", "View Details"), node("small", "audit-details", log.details ? String(log.details) : `Incident: ${log.incidentId}`));
+    body.append(details);
   }
   card.append(icon, body);
   return card;
@@ -4516,8 +4931,8 @@ function renderAuditFilters(logs = []) {
     acc[auditCategory(log.action)] = (acc[auditCategory(log.action)] || 0) + 1;
     acc.all += 1;
     return acc;
-  }, { all: 0, alerts: 0, incidents: 0, reports: 0, system: 0 });
-  const items = [["all", "All"], ["alerts", "Alerts"], ["incidents", "Incidents"], ["reports", "Reports"], ["system", "Auth/System"]];
+  }, { all: 0, alerts: 0, incidents: 0, reports: 0, system: 0, copilot: 0, configuration: 0 });
+  const items = [["all", "All"], ["alerts", "Alerts"], ["incidents", "Incidents"], ["reports", "Reports"], ["system", "Auth/System"], ["copilot", "Copilot"], ["configuration", "SLA / Configuration"]];
   filters.textContent = "";
   items.forEach(([key, label]) => {
     const button = node("button", state.auditFilter === key ? "active" : "", `${label} (${counts[key] || 0})`);
@@ -5216,6 +5631,7 @@ async function captureLiveVisionFrame() {
 }
 
 async function refresh() {
+  document.body.classList.add("ui-loading");
   const me = await api("/api/me");
   const previousRole = state.user?.role || null;
   state.user = me.user;
@@ -5226,7 +5642,7 @@ async function refresh() {
   const operator = isOperatorRole();
   const admin = isAdminRole();
   const aiVision = loadAiVisionData({ role: state.user?.role, api });
-  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
+  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, sla, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
     operator ? api("/api/dashboard") : Promise.resolve({ summary: {} }),
     api("/api/reports"),
     operator ? api("/api/zones") : Promise.resolve({ zones: [] }),
@@ -5240,8 +5656,10 @@ async function refresh() {
     admin ? api("/api/admin/police-users") : Promise.resolve({ users: [] }),
     operator ? api("/api/incidents/history") : Promise.resolve({ incidents: [] }),
     operator ? api("/api/escalation/alerts?active=true&limit=100") : Promise.resolve({ alerts: [] }),
+    admin ? api("/api/sla/config") : Promise.resolve({ config: [] }),
     aiVision
   ]);
+  document.body.classList.remove("ui-loading");
   const aiConnected = aiHealth.status === "connected";
   setText("#liveSourceHealth", aiConnected ? "AI Connected" : "AI Service Offline");
   setText("#liveAiHealthDetail", aiConnected
@@ -5249,7 +5667,7 @@ async function refresh() {
     : aiHealth.status === "not_configured"
       ? "AI service not connected. Configure AI_SERVICE_URL to enable real detection."
       : "The configured AI service is unreachable.");
-  setText("#currentUser", me.user ? `${me.user.role}: ${me.user.name}` : "Not signed in");
+  setText("#currentUser", me.user ? me.user.name : "Not signed in");
   const localMissingPersons = reports.reports.filter((report) => report.reportType === "missing_person" && isActiveReport(report)).length;
   setText("#missingMetric", localMissingPersons);
   state.dashboardSummary = dashboard.summary || {};
@@ -5273,6 +5691,7 @@ async function refresh() {
   state.incidents = incidents.incidents;
   state.alerts = alerts.alerts;
   state.escalationAlerts = escalations.alerts || [];
+  state.slaConfig = sla.config || [];
   state.responseUnits = units.units;
   state.responseUnitSummary = units.summary || unitSummary(units.units || []);
   state.telemetryUnit = units.telemetryUnit || null;
@@ -5285,6 +5704,8 @@ async function refresh() {
   renderStationRegistry(stations.stations);
   renderSatelliteMaps();
   renderCameras(cameras.cameras);
+  renderCameraAiSettings(cameras.cameras, aiHealth);
+  renderSlaSettings(state.slaConfig, state.escalationAlerts);
   renderVideoEvidence(videoEvidence);
   renderSources(sources.sources);
   const zoneTable = $("#zoneTable");
@@ -5292,8 +5713,7 @@ async function refresh() {
     zoneTable.textContent = "";
     zones.zones.forEach((z) => zoneTable.append(node("div", "", `${z.name}: ${z.currentDensity}% (${z.severity})`)));
   }
-  $("#caseList").textContent = "";
-  reports.reports.forEach((r) => $("#caseList").append(reportCard(r)));
+  renderReports(reports.reports);
   renderAlerts(alerts.alerts);
   renderIncidentCommand();
   renderUnitAssignment();
@@ -5380,6 +5800,17 @@ function setupKpiCards() {
 
 setupKpiCards();
 $$(".nav-item").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
+$$('[data-settings-section]').forEach((button) => button.addEventListener("click", () => {
+  setSettingsSection(button.dataset.settingsSection, { focus: true });
+}));
+$("#settingsSectionSelect")?.addEventListener("change", (event) => {
+  setSettingsSection(event.currentTarget.value, { focus: true });
+});
+window.addEventListener("hashchange", () => {
+  if (!location.hash.startsWith("#settings/")) return;
+  if (isAdminRole() && document.body.dataset.view !== "settings") setView("settings");
+  else if (document.body.dataset.view === "settings") setSettingsSection(settingsSectionFromLocation(), { updateUrl: false });
+});
 $$("[data-layer]").forEach((button) => button.addEventListener("click", () => setLayer(button.dataset.layer)));
 $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewJump)));
 $("#refreshCommand")?.addEventListener("click", () => refresh().catch((error) => alert(error.message)));
@@ -5425,6 +5856,8 @@ $("#cameraRegistryFilters")?.addEventListener("change", (event) => {
 
 function openCameraConfig(camera = null) {
   if (!isAdminRole()) return;
+  if (document.body.dataset.view !== "settings") setView("settings");
+  setSettingsSection("camera-ai", { focus: false });
   const panel = $("#cameraConfigPanel");
   const form = $("#cameraConfigForm");
   if (!panel || !form) return;
@@ -5762,6 +6195,12 @@ $("#alertFilters").addEventListener("click", (event) => {
   state.alertFilter = button.dataset.alertFilter;
   renderAlerts(state.alerts);
 });
+$("#alertFilters").addEventListener("change", (event) => {
+  const select = event.target.closest("[data-alert-queue-filter]");
+  if (!select) return;
+  state.alertQueueFilters[select.dataset.alertQueueFilter] = select.value;
+  renderAlerts(state.alerts);
+});
 $("#auditFilters")?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-audit-filter]");
   if (!button) return;
@@ -5899,9 +6338,6 @@ $("#missingForm").addEventListener("submit", async (event) => {
     state.pendingReportFile = null;
     form.reset();
     form.dataset.locationSource = "";
-    form.personName.value = "Aarav Sharma";
-    form.age.value = "8";
-    form.lastSeen.value = "Gate A, Sector 7";
     updateReportFilePreview(null);
     status.classList.add("success");
     status.textContent = created.message || `Report submitted for review: ${displayValue(created.report?.name || personName)}.`;
@@ -5939,7 +6375,9 @@ $("#loginForm").addEventListener("submit", async (event) => {
     state.user = login.user;
     applyRoleAccess();
     showApp();
-    setView(location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+    setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
+      ? "settings"
+      : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
     await refresh();
   } catch (error) {
     showPortal(error.message);
@@ -5979,7 +6417,9 @@ $("#registerForm").addEventListener("submit", async (event) => {
     state.user = created.user;
     showApp();
     await refresh();
-    setView(location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+    setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
+      ? "settings"
+      : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
   } catch (error) {
     showPortal(error.message, "register");
   } finally {
@@ -6059,9 +6499,8 @@ $("#unitRegistryForm")?.addEventListener("submit", async (event) => {
   try {
     if (id) await api(`/api/response-units/${id}`, { method: "PATCH", body });
     else await api("/api/response-units", { method: "POST", body });
-    resetUnitRegistryForm();
-    status.classList.add("success");
-    status.textContent = id ? "Unit updated." : "Unit created.";
+    closeUnitRegistryForm();
+    setText("#unitRegistryPageStatus", id ? "Unit updated." : "Unit created.");
     await refresh();
   } catch (error) {
     status.classList.add("error");
@@ -6072,7 +6511,13 @@ $("#unitRegistryForm")?.addEventListener("submit", async (event) => {
   }
 });
 
-$("#resetUnitRegistryForm")?.addEventListener("click", resetUnitRegistryForm);
+$("#addUnitRegistry")?.addEventListener("click", () => openUnitRegistryForm());
+$$('[data-close-unit-form]').forEach((button) => button.addEventListener("click", closeUnitRegistryForm));
+$("#resetUnitRegistryForm")?.addEventListener("click", closeUnitRegistryForm);
+$("#unitRegistrySearch")?.addEventListener("input", (event) => { state.unitRegistryFilters.search = event.currentTarget.value; renderUnitRegistry(); });
+$("#unitRegistryStatusFilter")?.addEventListener("change", (event) => { state.unitRegistryFilters.status = event.currentTarget.value; renderUnitRegistry(); });
+$("#unitRegistryStationFilter")?.addEventListener("change", (event) => { state.unitRegistryFilters.station = event.currentTarget.value; renderUnitRegistry(); });
+$("#unitRegistryAvailabilityFilter")?.addEventListener("change", (event) => { state.unitRegistryFilters.availability = event.currentTarget.value; renderUnitRegistry(); });
 
 $("#unitStationSelect")?.addEventListener("change", (event) => {
   const station = state.policeStations.find((item) => [item.stationId, item.id].includes(event.currentTarget.value));
@@ -6109,9 +6554,8 @@ $("#stationRegistryForm")?.addEventListener("submit", async (event) => {
   try {
     if (id) await api(`/api/police-stations/${id}`, { method: "PATCH", body });
     else await api("/api/police-stations", { method: "POST", body });
-    resetStationRegistryForm();
-    status.classList.add("success");
-    status.textContent = id ? "Station updated." : "Station created.";
+    closeStationRegistryForm();
+    setText("#stationRegistryPageStatus", id ? "Station updated." : "Station created.");
     await refresh();
   } catch (error) {
     status.classList.add("error");
@@ -6122,7 +6566,109 @@ $("#stationRegistryForm")?.addEventListener("submit", async (event) => {
   }
 });
 
-$("#resetStationRegistryForm")?.addEventListener("click", resetStationRegistryForm);
+$("#addStationRegistry")?.addEventListener("click", () => openStationRegistryForm());
+$$('[data-close-station-form]').forEach((button) => button.addEventListener("click", closeStationRegistryForm));
+$("#resetStationRegistryForm")?.addEventListener("click", closeStationRegistryForm);
+$("#stationRegistrySearch")?.addEventListener("input", (event) => { state.stationRegistryFilters.search = event.currentTarget.value; renderStationRegistry(); });
+$("#stationRegistryJurisdictionFilter")?.addEventListener("change", (event) => { state.stationRegistryFilters.jurisdiction = event.currentTarget.value; renderStationRegistry(); });
+$("#stationRegistryOperationalFilter")?.addEventListener("change", (event) => { state.stationRegistryFilters.operational = event.currentTarget.value; renderStationRegistry(); });
+
+$("#slaConfigList")?.addEventListener("input", (event) => {
+  const input = event.target.closest("[data-sla-field]");
+  if (!input) return;
+  const policy = state.slaDraft[Number(input.dataset.slaIndex)];
+  if (!policy) return;
+  policy[input.dataset.slaField] = input.type === "checkbox" ? input.checked : Number(input.value);
+  state.slaDirty = true;
+  const error = validateSlaPolicy(policy);
+  setText(`[data-sla-error="${input.dataset.slaIndex}"]`, error);
+  input.closest(".sla-config-card")?.classList.toggle("invalid", Boolean(error));
+  const toggleLabel = input.type === "checkbox" ? input.closest(".sla-active-toggle")?.querySelector("span") : null;
+  if (toggleLabel) toggleLabel.textContent = input.checked ? "Active" : "Inactive";
+  setText("#slaPolicyStatus", `${state.slaDraft.filter((item) => item.active !== false).length} active policies · Unsaved`);
+  setText("#slaSaveStatus", "Unsaved changes");
+});
+
+$("#slaConfigForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const errors = state.slaDraft.map(validateSlaPolicy).filter(Boolean);
+  if (errors.length) {
+    setText("#slaSaveStatus", errors[0]);
+    return;
+  }
+  const button = event.currentTarget.querySelector("button[type='submit']");
+  await withButtonBusy(button, "Saving...", async () => {
+    try {
+      const result = await api("/api/sla/config", { method: "PATCH", body: { updates: state.slaDraft } });
+      state.slaConfig = result.config || [];
+      discardSlaDraft();
+      renderSlaSettings(state.slaConfig, state.escalationAlerts);
+      setText("#slaSaveStatus", result.message || "SLA settings updated successfully");
+    } catch (error) {
+      setText("#slaSaveStatus", error.message);
+    }
+  });
+});
+
+$("#resetSlaChanges")?.addEventListener("click", () => {
+  discardSlaDraft();
+  renderSlaSettings(state.slaConfig, state.escalationAlerts);
+  setText("#slaSaveStatus", "Unsaved changes reset.");
+});
+
+$("#restoreSlaDefaults")?.addEventListener("click", async (event) => {
+  if (!window.confirm("Restore all SLA policies to system defaults?")) return;
+  await withButtonBusy(event.currentTarget, "Restoring...", async () => {
+    try {
+      const result = await api("/api/sla/config", { method: "PATCH", body: { restoreDefaults: true } });
+      state.slaConfig = result.config || [];
+      discardSlaDraft();
+      renderSlaSettings(state.slaConfig, state.escalationAlerts);
+      setText("#slaSaveStatus", result.message || "SLA defaults restored successfully");
+    } catch (error) {
+      setText("#slaSaveStatus", error.message);
+    }
+  });
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (!state.slaDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+let policeDialogPreviousFocus = null;
+function closePoliceCreateDialog() {
+  const dialog = $("#policeCreateDialog");
+  if (!dialog || dialog.hidden) return;
+  dialog.hidden = true;
+  document.body.classList.remove("modal-open");
+  policeDialogPreviousFocus?.focus?.();
+}
+
+function handlePoliceDialogKeydown(event) {
+  const dialog = $("#policeCreateDialog");
+  if (!dialog || dialog.hidden) return;
+  if (event.key === "Escape") { event.preventDefault(); closePoliceCreateDialog(); return; }
+  if (event.key !== "Tab") return;
+  const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
+$("#addPoliceUserBtn")?.addEventListener("click", () => {
+  const dialog = $("#policeCreateDialog");
+  if (!dialog) return;
+  policeDialogPreviousFocus = document.activeElement;
+  dialog.hidden = false;
+  document.body.classList.add("modal-open");
+  dialog.querySelector("input")?.focus();
+});
+$("#closePoliceUserDialog")?.addEventListener("click", closePoliceCreateDialog);
+document.addEventListener("keydown", handlePoliceDialogKeydown);
 
 $("#policeUserForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -6154,6 +6700,7 @@ $("#policeUserForm")?.addEventListener("submit", async (event) => {
     status.classList.add("success");
     status.textContent = "Police account created.";
     await refresh();
+    closePoliceCreateDialog();
   } catch (error) {
     status.classList.add("error");
     status.textContent = error.message;
@@ -6302,7 +6849,9 @@ checkSession()
   .then(async (hasSession) => {
     if (hasSession) {
       await refresh();
-      setView(location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+      setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
+        ? "settings"
+        : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
     }
   })
   .catch((error) => {

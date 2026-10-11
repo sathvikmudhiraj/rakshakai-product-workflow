@@ -16,6 +16,7 @@ const deviceHealthRoutes = require("./routes/deviceHealth.routes");
 const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
 const copilotRoutes = require("./routes/copilot.routes");
+const notificationRoutes = require("./routes/notifications.routes");
 const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
@@ -631,6 +632,7 @@ app.get("/api/maps/health", async (req, res, next) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/copilot", copilotRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.get("/api/me", legacyHandler("/api/me"));
 app.post("/api/login", authLimiter, legacyHandler("/api/login"));
 app.post("/api/register", legacyHandler("/api/register"));
@@ -770,6 +772,8 @@ async function start(listenPort = port) {
       "audit_logs",
       "missing_persons",
       "app_state"
+      , "notifications"
+      , "notification_receipts"
     ];
     const result = await query(
       "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = ANY($1::text[])",

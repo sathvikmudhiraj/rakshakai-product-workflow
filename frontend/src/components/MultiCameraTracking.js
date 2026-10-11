@@ -30,13 +30,18 @@ export function configureTracking({ cameraSources } = {}) {
 
 let trackingState = {
   sessions: [],
+  allSessions: [],
   selectedSessionId: null,
   selectedCandidateId: null,
   view: "list",
   filters: { trackType: "all", status: "all", camera: "all" },
   unsubscribers: [],
   comparisonData: null,
-  sidebarOpen: true
+  sidebarOpen: true,
+  loading: false,
+  error: "",
+  search: "",
+  detailTab: "timeline"
 };
 
 const STATUS_LABELS = {
@@ -82,7 +87,8 @@ function confidenceColor(confidence) {
 }
 
 function createStatBar(label, value, max = 1, colorClass = "") {
-  const pct = Math.round((value / max) * 100);
+  const numeric = Number(value);
+  const pct = Number.isFinite(numeric) && max > 0 ? Math.max(0, Math.min(100, Math.round((numeric / max) * 100))) : 0;
   const wrapper = node("div", "stat-bar");
   wrapper.append(node("div", "stat-bar-label", label));
   const barContainer = node("div", "stat-bar-container");
@@ -136,69 +142,52 @@ function createScoreBreakdown(explanation) {
 }
 
 function renderSessionCard(session) {
-  const card = node("div", `session-card ${session.status.toLowerCase().replace("_", "-")}`);
+  const sessionStatus = String(session.status || "UNKNOWN");
+  const card = node("button", `session-card ${statusClass(sessionStatus)} ${trackingState.selectedSessionId === session.id ? "selected" : ""}`);
+  card.type = "button";
   card.dataset.sessionId = session.id;
+  card.setAttribute("aria-pressed", String(trackingState.selectedSessionId === session.id));
 
-  const statusEl = node("span", `session-status ${statusClass(session.status)}`, STATUS_LABELS[session.status] || session.status);
+  const statusEl = node("span", `session-status ${statusClass(sessionStatus)}`, STATUS_LABELS[sessionStatus] || titleCase(sessionStatus));
   const typeEl = node("span", "session-type", TRACK_TYPE_LABELS[session.trackType] || session.trackType);
   const timeEl = node("span", "session-time", formatTimestamp(session.createdAt));
-  const confEl = node("span", `session-confidence ${confidenceColor(session.confidence)}`, `${Math.round((session.confidence || 0) * 100)}%`);
-
   const header = node("div", "session-header");
-  header.append(node("div", "session-id", `Track: ${session.id.slice(0, 16)}...`), statusEl, typeEl, timeEl, confEl);
+  header.append(node("div", "session-id", session.id), statusEl, typeEl);
 
   const meta = node("div", "session-meta");
   if (session.referenceCameraId) {
-    meta.append(node("span", "meta-item", `Ref Cam: ${session.referenceCameraId}`));
+    meta.append(node("span", "meta-item", `Reference: ${session.referenceCameraId}`));
   }
   if (session.lastSeenCameraId) {
-    meta.append(node("span", "meta-item", `Last Seen: ${session.lastSeenCameraId} (${formatTimestamp(session.lastSeenAt)})`));
+    meta.append(node("span", "meta-item", `Last confirmed: ${session.lastSeenCameraId} · ${formatTimestamp(session.lastSeenAt)}`));
   }
   if (session.incidentId) {
     meta.append(node("span", "meta-item", `Incident: ${session.incidentId.slice(0, 12)}...`));
   }
 
-  const actions = node("div", "session-actions");
-  const searchBtn = node("button", "btn btn-primary btn-sm", "Search Cameras");
-  searchBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    handleSearchSession(session.id);
-  });
-  const viewBtn = node("button", "btn btn-secondary btn-sm", "View Details");
-  viewBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    handleSelectSession(session.id);
-  });
-  const closeBtn = node("button", "btn btn-danger btn-sm", "Close Track");
-  closeBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (confirm("Close this tracking session?")) {
-      try {
-        await trackingApi.closeSession(session.id);
-        await loadSessions();
-      } catch (error) {
-        alert(`Failed to close session: ${error.message}`);
-      }
-    }
-  });
-  actions.append(searchBtn, viewBtn, closeBtn);
-
-  card.append(header, meta, actions);
+  meta.append(node("span", "meta-item", `Updated: ${formatTimestamp(session.updatedAt || session.createdAt)}`));
+  const pending = Number(session.pendingCandidateCount ?? session.pendingCandidates ?? 0);
+  meta.append(node("span", `meta-item ${pending ? "pending" : ""}`, `${pending} pending candidate${pending === 1 ? "" : "s"}`));
+  card.append(header, meta, node("span", "session-open-label", "Open session →"));
   card.addEventListener("click", () => handleSelectSession(session.id));
   return card;
 }
 
 function renderCandidateCard(candidate, session, observation) {
-  const card = node("div", `candidate-card ${candidate.status.toLowerCase().replace("_", "-")}`);
+  const candidateStatus = String(candidate.status || "PENDING_REVIEW");
+  const confidence = Number(candidate.overallConfidence || 0);
+  const card = node("div", `candidate-card ${statusClass(candidateStatus)}`);
   card.dataset.candidateId = candidate.id;
 
-  const statusEl = node("span", `candidate-status ${statusClass(candidate.status)}`, CANDIDATE_STATUS_LABELS[candidate.status] || candidate.status);
-  const confEl = node("span", `candidate-confidence ${confidenceColor(candidate.overallConfidence)}`, `${Math.round(candidate.overallConfidence * 100)}%`);
+  const statusEl = node("span", `candidate-status ${statusClass(candidateStatus)}`, CANDIDATE_STATUS_LABELS[candidateStatus] || titleCase(candidateStatus));
+  const confEl = node("span", `candidate-confidence ${confidenceColor(confidence)}`, `${Math.round(confidence * 100)}%`);
   const timeEl = node("span", "candidate-time", formatTimestamp(candidate.detectedAt));
   const cameraEl = node("span", "candidate-camera", `Camera: ${candidate.cameraId}`);
 
   const header = node("div", "candidate-header");
-  header.append(statusEl, confEl, timeEl, cameraEl);
+  const identity = node("div", "candidate-identity");
+  identity.append(node("span", "eyebrow", "Possible match"), node("strong", "", candidate.cameraId || observation?.cameraId || "Candidate camera unavailable"), timeEl);
+  header.append(identity, statusEl, confEl, cameraEl);
 
   const breakdown = node("div", "candidate-breakdown");
   if (session.trackType === "PERSON") {
@@ -221,7 +210,10 @@ function renderCandidateCard(candidate, session, observation) {
   }
 
   const actions = node("div", "candidate-actions");
+  let advisory = null;
   if (candidate.status === "PENDING_REVIEW") {
+    advisory = node("div", "human-review-advisory");
+    advisory.append(node("strong", "", "Human verification required"), node("small", "", "AI confidence is advisory and does not establish identity."));
     const confirmBtn = node("button", "btn btn-success btn-sm", "Confirm Match");
     confirmBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -249,7 +241,9 @@ function renderCandidateCard(candidate, session, observation) {
   });
   actions.append(compareBtn);
 
-  card.append(header, breakdown, actions);
+  card.append(header, breakdown);
+  if (advisory) card.append(advisory);
+  card.append(actions);
   return card;
 }
 
@@ -300,24 +294,38 @@ function createDetailRow(label, value) {
 }
 
 async function handleSearchSession(sessionId) {
+  const container = $("#trackingContent");
+  if (container) container.innerHTML = '<div class="tracking-loading tracking-workspace-loading"><span class="tracking-spinner"></span><strong>Searching authorized cameras</strong><small>Candidate scores remain advisory until human review.</small></div>';
   try {
     const result = await trackingApi.searchCandidates(sessionId);
     trackingState.selectedSessionId = sessionId;
     trackingState.view = "candidates";
     renderCandidatesView(result.session, result.candidates, result.referenceObservation);
   } catch (error) {
-    alert(`Search failed: ${error.message}`);
+    if (container) {
+      const state = node("div", "tracking-error tracking-workspace-error");
+      const retry = node("button", "primary", "Retry Candidate Search"); retry.type = "button"; retry.addEventListener("click", () => handleSearchSession(sessionId));
+      state.append(node("strong", "", "Candidate search failed"), node("small", "", error.message || "Please try again."), retry); container.replaceChildren(state);
+    }
   }
 }
 
 async function handleSelectSession(sessionId) {
+  const container = $("#trackingContent");
+  trackingState.selectedSessionId = sessionId;
+  renderSessionsList();
+  if (container) container.innerHTML = '<div class="tracking-loading tracking-workspace-loading"><span class="tracking-spinner"></span><strong>Loading tracking session</strong><small>Fetching reference, candidates, timeline, and verification state…</small></div>';
   try {
     const result = await trackingApi.getSession(sessionId);
     trackingState.selectedSessionId = sessionId;
     trackingState.view = "detail";
     renderSessionDetail(result.session, result.observations, result.candidates, result.verifications);
   } catch (error) {
-    alert(`Failed to load session: ${error.message}`);
+    if (container) {
+      const state = node("div", "tracking-error tracking-workspace-error");
+      const retry = node("button", "primary", "Retry"); retry.type = "button"; retry.addEventListener("click", () => handleSelectSession(sessionId));
+      state.append(node("strong", "", "Tracking details are temporarily unavailable"), node("small", "", error.message || "Please try again."), retry); container.replaceChildren(state);
+    }
   }
 }
 
@@ -338,12 +346,24 @@ function handleSideBySide(session, candidate, observation) {
 }
 
 async function loadSessions() {
+  trackingState.loading = true;
+  trackingState.error = "";
+  renderSessionsList();
+  renderTrackingWorkspaceState();
   try {
-    const result = await trackingApi.listSessions(trackingState.filters);
+    const filters = Object.fromEntries(Object.entries(trackingState.filters).filter(([, value]) => value && value !== "all"));
+    const [result, allResult] = await Promise.all([trackingApi.listSessions(filters), trackingApi.listSessions()]);
     trackingState.sessions = result.sessions || [];
+    trackingState.allSessions = allResult.sessions || [];
+    trackingState.loading = false;
     renderSessionsList();
+    renderTrackingKpis();
+    renderTrackingWorkspaceState();
   } catch (error) {
-    console.error("Failed to load sessions:", error);
+    trackingState.loading = false;
+    trackingState.error = "Could not load tracking sessions.";
+    renderSessionsList();
+    renderTrackingWorkspaceState();
   }
 }
 
@@ -351,11 +371,26 @@ function renderSessionsList() {
   const container = $("#trackingSessionsList");
   if (!container) return;
   container.innerHTML = "";
-  if (trackingState.sessions.length === 0) {
-    container.append(node("div", "empty-state", "No tracking sessions found. Create a new session to start."));
+  if (trackingState.loading) {
+    const loading = node("div", "tracking-loading");
+    loading.append(node("span", "tracking-spinner"), node("strong", "", "Loading sessions"), node("small", "", "Checking current authorized tracking records…"));
+    container.append(loading);
     return;
   }
-  for (const session of trackingState.sessions) {
+  if (trackingState.error) {
+    const error = node("div", "tracking-error");
+    const retry = node("button", "ghost", "Retry"); retry.type = "button"; retry.addEventListener("click", loadSessions);
+    error.append(node("strong", "", trackingState.error), node("small", "", "Tracking details are temporarily unavailable."), retry); container.append(error); return;
+  }
+  const query = trackingState.search.trim().toLowerCase();
+  const visible = trackingState.sessions.filter((session) => !query || `${session.id} ${session.trackType} ${session.referenceCameraId || ""} ${session.lastSeenCameraId || ""}`.toLowerCase().includes(query));
+  if (visible.length === 0) {
+    const empty = node("div", "tracking-list-empty");
+    empty.append(node("strong", "", query ? "No matching tracks" : "No active tracks"), node("small", "", query ? "Adjust search or filters." : "Create a session to begin human-reviewed tracking."));
+    container.append(empty);
+    return;
+  }
+  for (const session of visible) {
     container.append(renderSessionCard(session));
   }
 }
@@ -387,18 +422,47 @@ function renderCandidatesView(session, candidates, referenceObs) {
   container.append(header, refCard, node("h3", "", `Candidates (${candidates.length})`), candidatesContainer);
 }
 
-function renderSessionDetail(session, observations, candidates, verifications) {
+function renderSessionDetail(session, observations = [], candidates = [], verifications = []) {
   const container = $("#trackingContent");
   if (!container) return;
+  session.observations = observations;
+  const header = node("section", "tracking-session-overview");
+  const identity = node("div", "tracking-session-identity");
+  identity.append(node("span", "eyebrow", "Tracking Session"), node("h2", "", session.id));
+  const badges = node("div", "tracking-session-badges");
+  badges.append(node("span", "session-type", TRACK_TYPE_LABELS[session.trackType] || session.trackType), node("span", `session-status ${statusClass(session.status)}`, STATUS_LABELS[session.status] || session.status));
+  identity.append(badges);
+  const overviewActions = node("div", "tracking-session-actions");
+  const search = node("button", "primary", "Search Candidates"); search.type = "button"; search.addEventListener("click", () => handleSearchSession(session.id));
+  overviewActions.append(search);
+  if (session.status !== "CLOSED") {
+    const close = node("button", "ghost", "Close Session"); close.type = "button";
+    close.addEventListener("click", async () => {
+      if (!confirm("Close this tracking session?")) return;
+      try { await trackingApi.closeSession(session.id); trackingState.selectedSessionId = null; await loadSessions(); }
+      catch (error) { alert(`Failed to close session: ${error.message}`); }
+    });
+    overviewActions.append(close);
+  }
+  header.append(identity, overviewActions);
+  const pendingCandidates = (candidates || []).filter((candidate) => candidate.status === "PENDING_REVIEW");
+  const overview = node("div", "tracking-session-meta-grid");
+  [
+    ["Reference Camera", session.referenceCameraId || "Unavailable"],
+    ["Started", formatTimestamp(session.createdAt || session.referenceTimestamp)],
+    ["Last Confirmed Seen", session.lastSeenCameraId ? `${session.lastSeenCameraId} · ${formatTimestamp(session.lastSeenAt)}` : `${session.referenceCameraId || "Unavailable"} · ${formatTimestamp(session.referenceTimestamp)}`],
+    ["Candidates Pending", String(pendingCandidates.length)]
+  ].forEach(([label, value]) => { const item = node("article"); item.append(node("span", "", label), node("strong", "", value)); overview.append(item); });
+  header.append(overview);
 
-  const header = node("div", "view-header");
-  const backBtn = node("button", "btn btn-secondary btn-sm", "← Back to Sessions");
-  backBtn.addEventListener("click", () => {
-    trackingState.view = "list";
-    trackingState.selectedSessionId = null;
-    renderTrackingPage();
-  });
-  header.append(backBtn, node("h2", "", `${session.trackType} Track: ${session.id.slice(0, 16)}...`), node("span", `session-status ${statusClass(session.status)}`, STATUS_LABELS[session.status] || session.status));
+  const reference = observations.find((observation) => observation.detectionId === session.referenceDetectionId) || observations[0];
+  const referenceCard = node("section", "tracking-reference-card");
+  referenceCard.append(node("div", "tracking-section-heading", "Reference Observation"), renderObservationDetails(reference || { cameraId: session.referenceCameraId, detectedAt: session.referenceTimestamp, trackType: session.trackType }, "Reference", true));
+  const pendingNext = [...pendingCandidates].sort((a, b) => Number(b.overallConfidence || 0) - Number(a.overallConfidence || 0))[0];
+  const lastSeen = node("section", "tracking-last-seen-card");
+  lastSeen.append(node("span", "eyebrow", "Last Confirmed Seen"), node("strong", "", session.lastSeenCameraId || session.referenceCameraId || "Unavailable"), node("p", "", formatTimestamp(session.lastSeenAt || session.referenceTimestamp)));
+  if (pendingNext) lastSeen.append(node("div", "possible-next-sighting", `Possible next sighting: ${pendingNext.cameraId || "Candidate camera"} · ${Math.round(Number(pendingNext.overallConfidence || 0) * 100)}% · Pending human review`));
+  const contextGrid = node("div", "tracking-context-grid"); contextGrid.append(referenceCard, lastSeen);
 
   const tabs = node("div", "detail-tabs");
   const tabButtons = [
@@ -434,18 +498,24 @@ function renderSessionDetail(session, observations, candidates, verifications) {
   }
 
   container.innerHTML = "";
-  container.append(header, tabs, content);
+  container.append(header, contextGrid, tabs, content);
 }
 
-function renderTimelineTab(session, observations, candidates, verifications, container) {
+function renderTimelineTab(session, observations = [], candidates = [], verifications = [], container) {
   const timeline = [];
-  for (const obs of observations.sort((a, b) => new Date(a.detectedAt) - new Date(b.detectedAt))) {
+  for (const obs of [...observations].sort((a, b) => new Date(a.detectedAt) - new Date(b.detectedAt))) {
     const cand = candidates?.find((c) => c.observationId === obs.id);
     const verification = cand ? verifications?.find((v) => v.candidateId === cand.id) : null;
     timeline.push({ obs, cand, verification, isReference: obs.detectionId === session.referenceDetectionId });
   }
 
   const timelineContainer = node("div", "timeline-container");
+  if (!timeline.length) {
+    const empty = node("div", "tracking-compact-empty");
+    empty.append(node("strong", "", "No observations yet"), node("small", "", "Confirmed observations will appear here in chronological order."));
+    container.append(empty);
+    return;
+  }
   for (const item of timeline) {
     const row = node("div", `timeline-row ${item.isReference ? "reference" : ""}`);
     const time = node("div", "timeline-time", formatTimestamp(item.obs.detectedAt));
@@ -466,7 +536,7 @@ function renderTimelineTab(session, observations, candidates, verifications, con
 }
 
 function renderMapTab(session, observations, candidates, container) {
-  container.innerHTML = '<div id="trackingMap" class="tracking-map" style="height: 500px;"></div>';
+  container.innerHTML = '<div id="trackingMap" class="tracking-map" aria-label="Confirmed tracking route map"></div>';
   setTimeout(() => {
     try {
       initTrackingMap(session, observations, candidates);
@@ -528,24 +598,21 @@ function renderComparisonView(session, candidate, observation, referenceObs) {
   right.append(node("h3", "", `Candidate: ${candidate.cameraId}`), renderObservationDetails(observation || {}, "Candidate"));
 
   const explanation = node("div", "comparison-explanation");
-  explanation.append(node("h3", "", "Match Explanation"), createScoreBreakdown(candidate.matchExplanation || {}));
+  explanation.append(node("h3", "", "Explainable Confidence"), node("p", "comparison-guidance", "Scores indicate similarity and route feasibility; they do not establish identity."), createScoreBreakdown(candidate.matchExplanation || {}));
 
   const actions = node("div", "comparison-actions");
-  const confirmBtn = node("button", "btn btn-success btn-lg", "Confirm Match");
-  confirmBtn.addEventListener("click", async () => {
-    await handleVerifyCandidate(session.id, candidate.id, "CONFIRM_MATCH", "Confirmed via side-by-side review");
-  });
-  const rejectBtn = node("button", "btn btn-danger btn-lg", "Reject Match");
-  rejectBtn.addEventListener("click", async () => {
-    const reason = prompt("Reason for rejection:");
-    await handleVerifyCandidate(session.id, candidate.id, "REJECT_MATCH", reason);
-  });
-  const uncertainBtn = node("button", "btn btn-warning btn-lg", "Uncertain");
-  uncertainBtn.addEventListener("click", async () => {
-    const reason = prompt("Reason for uncertainty:");
-    await handleVerifyCandidate(session.id, candidate.id, "UNCERTAIN", reason);
-  });
-  actions.append(confirmBtn, rejectBtn, uncertainBtn);
+  actions.append(node("div", "human-verification-heading", "Human Verification Required"));
+  if (candidate.status === "PENDING_REVIEW") {
+    const confirmBtn = node("button", "btn btn-success btn-lg", "Confirm Match");
+    confirmBtn.addEventListener("click", async () => { await handleVerifyCandidate(session.id, candidate.id, "CONFIRM_MATCH", "Confirmed via side-by-side review"); });
+    const rejectBtn = node("button", "btn btn-danger btn-lg", "Reject Match");
+    rejectBtn.addEventListener("click", async () => { const reason = prompt("Reason for rejection:"); await handleVerifyCandidate(session.id, candidate.id, "REJECT_MATCH", reason); });
+    const uncertainBtn = node("button", "btn btn-warning btn-lg", "Mark Uncertain");
+    uncertainBtn.addEventListener("click", async () => { const reason = prompt("Reason for uncertainty:"); await handleVerifyCandidate(session.id, candidate.id, "UNCERTAIN", reason); });
+    actions.append(confirmBtn, rejectBtn, uncertainBtn);
+  } else {
+    actions.append(node("span", `candidate-status ${statusClass(candidate.status)}`, CANDIDATE_STATUS_LABELS[candidate.status] || candidate.status));
+  }
 
   comparison.append(left, right, explanation, actions);
   container.innerHTML = "";
@@ -602,10 +669,10 @@ function initTrackingMap(session, observations, candidates) {
 }
 
 function createTrackingSessionModal() {
-  const modal = node("div", "modal-overlay", "");
+  const modal = node("div", "modal-overlay tracking-session-modal", "");
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 600px;">
-      <h2>Create Tracking Session</h2>
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="createTrackingTitle">
+      <div class="tracking-modal-head"><div><span class="eyebrow">Human-reviewed tracking</span><h2 id="createTrackingTitle">Create Tracking Session</h2><p>Choose a real reference observation from an authorized camera.</p></div><button type="button" class="tracking-modal-close" aria-label="Close create tracking session">×</button></div>
       <form id="createTrackingForm">
         <div class="form-group">
           <label>Track Type</label>
@@ -621,6 +688,7 @@ function createTrackingSessionModal() {
         <div class="form-group">
           <label>Reference Detection ID</label>
           <input name="referenceDetectionId" type="text" required placeholder="e.g., det_abc123">
+          <small>Use the existing observation identifier. Identity is not inferred.</small>
         </div>
         <div class="form-group">
           <label>Reference Timestamp</label>
@@ -672,16 +740,23 @@ function createTrackingSessionModal() {
 
     try {
       const result = await trackingApi.createSession(data);
-      document.body.removeChild(modal);
+      closeModal();
       await loadSessions();
+      if (result.session?.id) await handleSelectSession(result.session.id);
     } catch (error) {
       alert(`Failed to create session: ${error.message}`);
     }
   });
 
-  modal.querySelector("#cancelCreateTracking").addEventListener("click", () => document.body.removeChild(modal));
-  modal.addEventListener("click", (e) => { if (e.target === modal) document.body.removeChild(modal); });
+  const previousFocus = document.activeElement;
+  const onEscape = (event) => { if (event.key === "Escape") closeModal(); };
+  const closeModal = () => { document.removeEventListener("keydown", onEscape); modal.remove(); previousFocus?.focus?.(); };
+  modal.querySelector("#cancelCreateTracking").addEventListener("click", closeModal);
+  modal.querySelector(".tracking-modal-close").addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", onEscape);
   document.body.append(modal);
+  modal.querySelector("[name=trackType]")?.focus();
 }
 
 function setupRealtimeListeners() {
@@ -691,6 +766,8 @@ function setupRealtimeListeners() {
   trackingState.unsubscribers.push(
     onRealtime("tracking_session_created", ({ session }) => {
       trackingState.sessions.unshift(session);
+      trackingState.allSessions.unshift(session);
+      renderTrackingKpis();
       if (trackingState.view === "list") renderSessionsList();
     })
   );
@@ -722,30 +799,73 @@ function setupRealtimeListeners() {
   );
 }
 
+function renderTrackingKpis() {
+  const host = $("#trackingKpis");
+  if (!host) return;
+  const sessions = trackingState.allSessions;
+  const counts = {
+    active: sessions.filter((session) => !["CLOSED", "REJECTED"].includes(session.status)).length,
+    pending: sessions.filter((session) => ["CANDIDATE_FOUND", "HUMAN_REVIEW"].includes(session.status)).length,
+    confirmed: sessions.filter((session) => session.status === "CONFIRMED" || session.verificationStatus === "CONFIRMED").length,
+    closed: sessions.filter((session) => session.status === "CLOSED").length
+  };
+  host.textContent = "";
+  [["Active Tracks", counts.active], ["Pending Review", counts.pending], ["Confirmed Matches", counts.confirmed], ["Closed Sessions", counts.closed]].forEach(([label, value]) => {
+    const card = node("article", "tracking-kpi"); card.append(node("span", "", label), node("strong", "", String(value))); host.append(card);
+  });
+}
+
+function renderTrackingWorkspaceState() {
+  const container = $("#trackingContent");
+  if (!container || trackingState.selectedSessionId) return;
+  container.textContent = "";
+  if (trackingState.loading) {
+    const loading = node("div", "tracking-loading tracking-workspace-loading");
+    loading.append(node("span", "tracking-spinner"), node("strong", "", "Loading tracking workspace"), node("small", "", "Fetching current sessions and review state…")); container.append(loading); return;
+  }
+  if (trackingState.error) {
+    const error = node("div", "tracking-error tracking-workspace-error");
+    const retry = node("button", "primary", "Retry"); retry.type = "button"; retry.addEventListener("click", loadSessions);
+    error.append(node("strong", "", "Could not load tracking sessions"), node("small", "", "Tracking details are temporarily unavailable."), retry); container.append(error); return;
+  }
+  const empty = node("section", "tracking-empty-workspace");
+  const icon = node("span", "tracking-empty-icon", "TRK");
+  if (!trackingState.allSessions.length) {
+    const create = node("button", "primary", "+ Create Tracking Session"); create.type = "button"; create.addEventListener("click", createTrackingSessionModal);
+    const types = node("div", "tracking-empty-types"); types.append(node("span", "", "Person"), node("span", "", "Vehicle"));
+    empty.append(icon, node("span", "eyebrow", "Authorized camera workflow"), node("h2", "", "No active tracking sessions"), node("p", "", "Start a tracking session using a reference observation from an authorized CCTV camera."), types, create);
+  } else {
+    const select = node("button", "primary", "Select first active session"); select.type = "button"; select.addEventListener("click", () => handleSelectSession(trackingState.allSessions.find((session) => session.status !== "CLOSED")?.id || trackingState.allSessions[0].id));
+    empty.append(icon, node("span", "eyebrow", "Session workspace"), node("h2", "", "Select a tracking session"), node("p", "", "Choose a session from Active Tracks to review its reference observation, candidate matches, timeline, route, and human-verification state."), select);
+  }
+  container.append(empty);
+}
+
 export function renderTrackingPage() {
   const panel = $("#multiCameraTrackingPanel");
   if (!panel) return;
 
   trackingState.view = "list";
+  trackingState.selectedSessionId = null;
   trackingState.detailTab = "timeline";
 
   panel.innerHTML = `
     <div class="tracking-header">
-      <h1>Multi-Camera Tracking</h1>
-      <div class="tracking-filters">
-        <select id="filterTrackType"><option value="all">All Types</option><option value="PERSON">Person</option><option value="VEHICLE">Vehicle</option></select>
-        <select id="filterStatus"><option value="all">All Status</option><option value="SEARCHING">Searching</option><option value="CANDIDATE_FOUND">Candidates Found</option><option value="HUMAN_REVIEW">Human Review</option><option value="CONFIRMED">Confirmed</option><option value="REJECTED">Rejected</option><option value="CLOSED">Closed</option></select>
-        <button class="btn btn-primary" id="createTrackingBtn">+ New Tracking Session</button>
-      </div>
+      <div><span class="eyebrow">Multi-Camera Tracking</span><h1>Tracking Operations</h1><p>Track persons and vehicles across authorized camera feeds using human-reviewed candidate matching.</p></div>
+      <button class="primary tracking-create-primary" id="createTrackingBtn">+ New Tracking Session</button>
     </div>
+    <section class="tracking-kpis" id="trackingKpis" aria-label="Tracking summary"></section>
     <div class="tracking-layout">
       <aside class="tracking-sidebar" id="trackingSidebar">
-        <div class="sidebar-header">Active Tracks</div>
+        <div class="tracking-sidebar-head"><div><span class="eyebrow">Session Queue</span><h2>Active Tracks</h2></div><span class="tracking-live-dot">Live</span></div>
+        <div class="tracking-filters">
+          <label class="tracking-search">Search<input id="trackingSearch" type="search" placeholder="Tracking ID or camera" /></label>
+          <label>Type<select id="filterTrackType"><option value="all">All Types</option><option value="PERSON">Person</option><option value="VEHICLE">Vehicle</option></select></label>
+          <label>Status<select id="filterStatus"><option value="all">All Statuses</option><option value="SEARCHING">Active</option><option value="CANDIDATE_FOUND">Candidates Found</option><option value="HUMAN_REVIEW">Pending Review</option><option value="CONFIRMED">Confirmed</option><option value="REJECTED">Rejected</option><option value="CLOSED">Closed</option></select></label>
+        </div>
         <div id="trackingSessionsList" class="sessions-list"></div>
       </aside>
-      <main class="tracking-main" id="trackingContent">
-        <div class="empty-state">Select a tracking session or create a new one.</div>
-      </main>
+      <main class="tracking-main" id="trackingContent"></main>
     </div>
   `;
 
@@ -753,6 +873,8 @@ export function renderTrackingPage() {
   const filterStatus = $("#filterStatus");
   filterTrackType.value = trackingState.filters.trackType;
   filterStatus.value = trackingState.filters.status;
+  $("#trackingSearch").value = trackingState.search;
+  $("#trackingSearch").addEventListener("input", (event) => { trackingState.search = event.currentTarget.value; renderSessionsList(); });
   filterTrackType.addEventListener("change", async () => {
     trackingState.filters.trackType = filterTrackType.value;
     await loadSessions();
@@ -765,12 +887,15 @@ export function renderTrackingPage() {
   $("#createTrackingBtn").addEventListener("click", createTrackingSessionModal);
 
   setupRealtimeListeners();
+  renderTrackingKpis();
+  renderTrackingWorkspaceState();
   loadSessions();
 }
 
 export function cleanupTracking() {
   trackingState.unsubscribers.forEach((unsub) => unsub());
   trackingState.unsubscribers = [];
+  trackingState.selectedSessionId = null;
   const panel = $("#multiCameraTrackingPanel");
   if (panel) panel.replaceChildren();
 }

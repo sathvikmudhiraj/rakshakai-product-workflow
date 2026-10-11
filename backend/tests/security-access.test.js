@@ -735,6 +735,48 @@ test("Admin can access admin-only routes while Police and Citizen cannot", async
   }
 });
 
+test("SLA updates are Admin-only, validated, persisted, and audited", async () => {
+  const currentResponse = await request("/api/sla/config", { headers: authHeaders("Admin") });
+  assert.equal(currentResponse.status, 200);
+  const current = (await currentResponse.json()).config;
+  const high = current.find((policy) => policy.severity === "HIGH");
+  assert.ok(high);
+
+  const invalid = await request("/api/sla/config", {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ updates: [{ ...high, warningBeforeAssignmentMinutes: high.assignmentSlaMinutes }] })
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json()).error, /warning.*less than/i);
+
+  for (const role of ["Police Officer", "Citizen"]) {
+    const denied = await request("/api/sla/config", {
+      method: "PATCH",
+      headers: { ...authHeaders(role), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ updates: [high] })
+    });
+    assert.equal(denied.status, 403, role);
+  }
+
+  const nextResponseMinutes = Number(high.responseSlaMinutes) + 1;
+  const updated = await request("/api/sla/config", {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ updates: [{ ...high, responseSlaMinutes: nextResponseMinutes }] })
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).message, "SLA settings updated successfully");
+
+  const persisted = await readDatabase();
+  assert.equal(persisted.slaConfig.find((policy) => policy.severity === "HIGH").responseSlaMinutes, nextResponseMinutes);
+  const audit = persisted.auditLogs.find((log) => log.action === "sla_policy_updated" && log.severity === "HIGH");
+  assert.ok(audit);
+  assert.ok(audit.changedFields.includes("responseSlaMinutes"));
+  assert.equal(audit.oldValues.responseSlaMinutes, high.responseSlaMinutes);
+  assert.equal(audit.newValues.responseSlaMinutes, nextResponseMinutes);
+});
+
 test("Admin can create, list, update, deactivate, activate, and reset Police accounts", async () => {
   const payload = {
     name: "Inspector Meera Singh",

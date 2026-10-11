@@ -61,6 +61,7 @@ function isLoginRequest(path) {
 
 function safeApiMessage(path, status, data = {}, code = "") {
   const loginRequest = isLoginRequest(path);
+  if (path.split("?")[0] === "/api/copilot/query" && typeof data.error === "string" && data.error.trim()) return data.error;
   if (code === "API_TIMEOUT") return "Network request timed out. Check that RakshakAI services are reachable and try again.";
   if (String(data.code || "").startsWith("GEOCODER_")) {
     return typeof data.error === "string" && data.error.trim()
