@@ -59,4 +59,8 @@ test("evidence intake controls use a full-width responsive form layout", () => {
   assert.match(css, /\.video-evidence-form select,[\s\S]*?width: 100%/);
 });
 
+test("GIS action labels wrap safely across platform font metrics", () => {
+  assert.match(css, /\.gis-button-label \{[^}]*max-width: 100%[^}]*overflow-wrap: anywhere/);
+});
+
 test.after(() => dom.window.close());

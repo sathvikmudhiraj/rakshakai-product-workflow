@@ -292,7 +292,7 @@ h1 { margin-bottom: 0; }
 .hybrid-dispatch-card small { color: #526a78; }
 .dispatch-reason { margin: 2px 0 0; color: #334e5d; font-size: .7rem; }
 .hybrid-dispatch-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.gis-button-label { min-width: 0; overflow: visible; text-overflow: clip; }
+.gis-button-label { min-width: 0; max-width: 100%; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
 .gis-button-icon {
   position: relative;
   display: inline-block;

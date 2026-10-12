@@ -51,7 +51,7 @@ runtime database, API key, logs, and container state were not added to Git.
 - AI service: 15 passed
 - Targeted media gateway: 17 passed
 - Backend: 400 passed
-- Frontend: 71 passed
+- Frontend: 72 passed
 - JavaScript syntax: 185 files passed
 - Production frontend build: passed
 - `git diff --check`: passed before commit
@@ -65,6 +65,6 @@ validated. Physical-camera networking, credentials, codecs, NVR behavior, load,
 retention, and site reliability require separate field validation.
 
 The interactive browser surface was unavailable to the validation agent. UI behavior
-was therefore verified by the 71-test frontend suite, including the advisory language,
+was therefore verified by the 72-test frontend suite, including the advisory language,
 camera/timestamp/snapshot/detection/confidence/health fields, Confirm/Reject/Uncertain
 actions, notification navigation, responsiveness, and role gating.
