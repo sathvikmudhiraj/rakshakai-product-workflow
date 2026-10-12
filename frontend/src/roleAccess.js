@@ -62,13 +62,14 @@ const RESTRICTED_AI_HEALTH = { configured: false, status: "restricted" };
 
 export async function loadAiVisionData({ role, api }) {
   const operator = isOperatorRole(role);
-  const [cameras, sources, videoEvidence, aiHealth] = await Promise.all([
+  const [cameras, sources, videoEvidence, aiHealth, aiObservations] = await Promise.all([
     operator ? api("/api/camera-feeds") : Promise.resolve({ cameras: [] }),
     operator ? api("/api/camera-sources") : Promise.resolve({ sources: [] }),
     operator ? api("/api/video-evidence") : Promise.resolve({ evidence: [], observations: [] }),
     operator
       ? api("/api/ai/health").catch(() => ({ configured: true, status: "unreachable" }))
-      : Promise.resolve({ ...RESTRICTED_AI_HEALTH })
+      : Promise.resolve({ ...RESTRICTED_AI_HEALTH }),
+    operator ? api("/api/ai-observations") : Promise.resolve({ observations: [], pendingCount: 0 })
   ]);
-  return { cameras, sources, videoEvidence, aiHealth };
+  return { cameras, sources, videoEvidence, aiHealth, aiObservations };
 }

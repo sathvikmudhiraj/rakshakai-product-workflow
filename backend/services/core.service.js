@@ -47,6 +47,7 @@ const trackingCandidatesRepository = require("../repositories/trackingCandidates
 const trackingVerificationsRepository = require("../repositories/trackingVerifications.repository");
 const cameraAdjacencyRepository = require("../repositories/cameraAdjacency.repository");
 const trackingScoreConfigRepository = require("../repositories/trackingScoreConfig.repository");
+const aiObservationsRepository = require("../repositories/aiObservations.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -76,6 +77,7 @@ const {
 const slaService = require("./sla.service");
 const { runSlaSweep } = require("./slaSweep.service");
 const realtimeEvents = require("./realtimeEvents.service");
+const { validateCameraEndpoint } = require("./cameraEndpointPolicy.service");
 
 const root = path.join(__dirname, "..");
 function loadLocalEnv() {
@@ -129,7 +131,8 @@ const repositories = [
   trackingCandidatesRepository,
   trackingVerificationsRepository,
   cameraAdjacencyRepository,
-  trackingScoreConfigRepository
+  trackingScoreConfigRepository,
+  aiObservationsRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -195,6 +198,7 @@ function seedDb() {
     cameraHealthEvents: [],
     cameraHealthAlerts: [],
     cameraHealthThresholds: {},
+    aiObservations: [],
     notifications: [],
     notificationReceipts: [],
     devices: [
@@ -347,7 +351,8 @@ async function readDatabase() {
     trackingCandidates,
     trackingVerifications,
     cameraAdjacency,
-    trackingScoreConfig
+    trackingScoreConfig,
+    aiObservations
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -380,7 +385,8 @@ async function readDatabase() {
     trackingCandidatesRepository.list(defaults),
     trackingVerificationsRepository.list(defaults),
     cameraAdjacencyRepository.list(defaults),
-    trackingScoreConfigRepository.list(defaults)
+    trackingScoreConfigRepository.list(defaults),
+    aiObservationsRepository.list(defaults)
   ]);
   const state = stateResult.rows[0]?.data || {};
   const custodyByEvidence = new Map();
@@ -426,7 +432,8 @@ async function readDatabase() {
     trackingCandidates,
     trackingVerifications,
     cameraAdjacency,
-    trackingScoreConfig
+    trackingScoreConfig,
+    aiObservations
   });
 }
 
@@ -474,7 +481,8 @@ async function writeDatabase(db) {
       [trackingCandidatesRepository, db.trackingCandidates || []],
       [trackingVerificationsRepository, db.trackingVerifications || []],
       [cameraAdjacencyRepository, db.cameraAdjacency || []],
-      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []],
+      [aiObservationsRepository, db.aiObservations || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -506,7 +514,8 @@ async function writeDatabase(db) {
       [trackingObservationsRepository, db.trackingObservations || []],
       [trackingSessionsRepository, db.trackingSessions || []],
       [cameraAdjacencyRepository, db.cameraAdjacency || []],
-      [trackingScoreConfigRepository, db.trackingScoreConfig || []]
+      [trackingScoreConfigRepository, db.trackingScoreConfig || []],
+      [aiObservationsRepository, db.aiObservations || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
       const ids = records.map((record) => record.id);
@@ -2274,6 +2283,7 @@ function alertForResponse(db, alert) {
 function ensureProductShape(db) {
   db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
   db.notificationReceipts = Array.isArray(db.notificationReceipts) ? db.notificationReceipts : [];
+  db.aiObservations = Array.isArray(db.aiObservations) ? db.aiObservations : [];
   db.cameraSources = Array.isArray(db.cameraSources) ? db.cameraSources : [];
   db.detections = Array.isArray(db.detections) ? db.detections : [];
   db.videoEvidence = Array.isArray(db.videoEvidence) ? db.videoEvidence : [];
@@ -2985,6 +2995,7 @@ function cameraSourceForResponse(db, source) {
     || String(alert.title || "").includes(source.name)
   );
   const incidentCount = db.incidents.filter((incident) => incident.sourceId === source.id || incident.sourceName === source.name).length;
+  const cameraObservations = (db.aiObservations || []).filter((item) => item.cameraId === source.id);
   return {
     id: source.id,
     cameraId: source.cameraId || source.id,
@@ -2998,6 +3009,10 @@ function cameraSourceForResponse(db, source) {
     statusLabel: sourceStatusLabel(source),
     enabled: source.enabled !== false,
     aiEnabled: Boolean(source.aiEnabled),
+    streamEnabled: Boolean(source.streamEnabled),
+    healthEnabled: source.healthEnabled !== false,
+    streamType: source.streamType || "rtsp",
+    samplingIntervalMs: source.samplingIntervalMs || 1000,
     isDemo,
     badge: isDemo ? "DEMO CAMERA / SIMULATED FEED" : "REAL CCTV",
     hasStreamConfig: !isDemo && hasStreamConfig,
@@ -3016,6 +3031,22 @@ function cameraSourceForResponse(db, source) {
     lastStreamReceivedAt: source.lastStreamReceivedAt || null,
     lastFrameReceivedAt: source.lastFrameReceivedAt || null,
     lastHealthyAt: source.lastHealthyAt || null,
+    streamState: isDemo ? "DISABLED" : String(source.streamState || (source.streamEnabled ? "CONFIGURED" : "DISABLED")).toUpperCase(),
+    gatewayHealth: isDemo ? "DEMO" : String(source.gatewayHealth || "UNKNOWN").toUpperCase(),
+    aiState: isDemo ? "AI_DISABLED" : String(source.aiState || (source.aiEnabled ? "AI_UNAVAILABLE" : "AI_DISABLED")).toUpperCase(),
+    connected: !isDemo && source.connected === true,
+    lastConnectedAt: source.lastConnectedAt || null,
+    lastFrameAt: source.lastFrameAt || source.lastFrameReceivedAt || null,
+    frameAgeMs: Number.isFinite(Number(source.frameAgeMs)) ? Number(source.frameAgeMs) : null,
+    measuredFps: Number.isFinite(Number(source.measuredFps ?? source.fps)) ? Number(source.measuredFps ?? source.fps) : null,
+    latencyMs: Number.isFinite(Number(source.latencyMs)) ? Number(source.latencyMs) : null,
+    reconnectCount: Math.max(0, Number(source.reconnectCount) || 0),
+    lastGatewayError: source.lastGatewayError || null,
+    lastHealthUpdate: source.lastHealthUpdate || source.lastHealthCheckAt || null,
+    lastAiSuccessAt: source.lastAiSuccessAt || null,
+    lastDetectionAt: source.lastDetectionAt || null,
+    pendingObservationCount: cameraObservations.filter((item) => item.status === "PENDING_REVIEW").length,
+    latestObservationId: cameraObservations.sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt))[0]?.id || null,
     maintenanceMode: Boolean(source.maintenanceMode),
     maintenanceReason: source.maintenanceReason || null,
     latestDetection,
@@ -3047,7 +3078,7 @@ function camerasForResponse(db) {
         health: source.status || demo.health || "unknown",
         aiStatus: isDemoCameraSource(source)
           ? (demo.aiStatus || "Demo AI sample")
-          : "Possible detection only after authorized snapshot analysis",
+          : String(source.aiState || (source.aiEnabled ? "AI_UNAVAILABLE" : "AI_DISABLED")).toUpperCase(),
         density: isDemoCameraSource(source) ? Number(demo.density) || 0 : null,
         scene: isDemoCameraSource(source) ? demo.scene : null
       };
@@ -3079,6 +3110,12 @@ function safeCameraConfigBody(body, existing = {}) {
       ? String(body.criticality || existing.criticality || "NORMAL").toUpperCase() : "NORMAL",
     expectedFps: body.expectedFps === undefined ? (existing.expectedFps ?? null) : Math.max(1, Math.min(120, Number(body.expectedFps) || 25)),
     aiEnabled: body.aiEnabled === undefined ? Boolean(existing.aiEnabled) : Boolean(body.aiEnabled),
+    streamEnabled: body.streamEnabled === undefined ? Boolean(existing.streamEnabled) : Boolean(body.streamEnabled),
+    healthEnabled: body.healthEnabled === undefined ? existing.healthEnabled !== false : Boolean(body.healthEnabled),
+    streamType: String(body.streamType || existing.streamType || "rtsp").toLowerCase() === "simulator" && process.env.NODE_ENV !== "production" ? "simulator" : "rtsp",
+    samplingIntervalMs: body.samplingIntervalMs === undefined
+      ? Math.max(250, Math.min(60_000, Number(existing.samplingIntervalMs || 1_000)))
+      : Math.max(250, Math.min(60_000, Number(body.samplingIntervalMs) || 1_000)),
     enabled: body.enabled === undefined ? existing.enabled !== false : Boolean(body.enabled),
     isDemo: false,
     lastFrameStatus: existing.lastFrameStatus || "snapshot unavailable",
@@ -3087,7 +3124,10 @@ function safeCameraConfigBody(body, existing = {}) {
   };
   if (Object.prototype.hasOwnProperty.call(body, "streamUrl") || Object.prototype.hasOwnProperty.call(body, "rtspUrl")) {
     const streamUrl = String(body.streamUrl || body.rtspUrl || "").trim().slice(0, 500);
-    if (streamUrl) next.streamUrl = streamUrl;
+    if (streamUrl) {
+      if (next.streamType !== "simulator") validateCameraEndpoint(streamUrl);
+      next.streamUrl = streamUrl;
+    }
     else if (!next.streamUrl) delete next.streamUrl;
     delete next.rtspUrl;
   }
@@ -4451,6 +4491,9 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
     sourceType: input.sourceType || "manual",
     sourceName: input.sourceName || user?.name || "Command Center",
     sourceRecordId: input.sourceRecordId || null,
+    sourceCameraId: input.sourceCameraId || null,
+    sourceObservationId: input.sourceObservationId || null,
+    sourceAlertId: input.sourceAlertId || null,
     zone: input.zone || input.address || "Unassigned",
     address: input.address || input.zone || "Location not specified",
     lat: point?.lat ?? null,
@@ -5417,6 +5460,9 @@ async function apiInternal(req, res, url) {
         sourceType: "ai_detection",
         sourceName: alert.sourceName,
         sourceRecordId: alert.id,
+        sourceCameraId: alert.sourceCameraId || alert.sourceId || null,
+        sourceObservationId: alert.sourceObservationId || null,
+        sourceAlertId: alert.id,
         zone: alert.zone,
         address: alert.address || alert.zone,
         lat: alert.lat,

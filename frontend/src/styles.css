@@ -646,6 +646,33 @@ h1 { margin-bottom: 0; }
 .camera-registry-meta strong { color: #243946; font-size: .8rem; overflow-wrap: anywhere; }
 .camera-row-actions { display: grid; grid-template-columns: 1fr; gap: 7px; justify-content: end; min-width: 150px; }
 .camera-row-actions button { width: 100%; min-height: 36px; padding: 7px 10px; }
+.source-badge.stream-streaming { background: #e6f7ef; color: #087552; }
+.source-badge.stream-connecting, .source-badge.stream-reconnecting { background: #fff4d8; color: #8b6000; }
+.source-badge.stream-no_frames, .source-badge.stream-degraded { background: #fff0dd; color: #9a5300; }
+.source-badge.stream-auth_failed, .source-badge.stream-offline { background: #fde9e7; color: #a53531; }
+.source-badge.stream-disabled, .source-badge.stream-configured { background: #edf2f5; color: #516774; }
+.ai-observation-panel { margin-top: 14px; }
+.ai-observation-queue { display: grid; gap: 12px; min-width: 0; }
+.ai-observation-filter { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.ai-observation-card { display: grid; grid-template-columns: minmax(190px,280px) minmax(0,1fr); gap: 17px; overflow: hidden; border: 1px solid #d7e3e8; border-left: 4px solid #c58a18; border-radius: 10px; background: #fff; padding: 14px; box-shadow: 0 5px 18px rgba(22,48,64,.045); }
+.ai-observation-card.status-confirmed { border-left-color: #087f65; background: #f8fcfa; }
+.ai-observation-card.status-rejected { border-left-color: #a94842; background: #fffafa; }
+.ai-observation-card.status-uncertain { border-left-color: #b47a12; background: #fffcf5; }
+.ai-observation-media { display: grid; place-items: center; min-height: 150px; overflow: hidden; border: 1px solid #d9e3e7; border-radius: 8px; background: #132421; }
+.ai-observation-media img { display: block; width: 100%; height: 100%; min-height: 150px; max-height: 210px; object-fit: cover; }
+.ai-observation-no-frame { color: #bfd0cb; font-size: .75rem; font-weight: 850; }
+.ai-observation-body { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.ai-observation-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.ai-observation-head h3 { margin: 2px 0 0; color: #183240; font-size: 1.18rem; overflow-wrap: anywhere; }
+.ai-observation-source, .ai-observation-body p { margin: 0; color: #36505d; line-height: 1.45; overflow-wrap: anywhere; }
+.ai-observation-body > small { color: var(--muted); font-weight: 750; }
+.ai-observation-detections { display: grid; gap: 6px; padding: 10px; border: 1px solid #e0e8ec; border-radius: 8px; background: #f7fafb; }
+.ai-detection-row { display: grid; grid-template-columns: minmax(80px,auto) minmax(90px,1fr) auto; align-items: center; gap: 9px; color: #28424f; font-size: .78rem; font-weight: 850; text-transform: capitalize; }
+.ai-confidence-meter { height: 7px; overflow: hidden; border-radius: 999px; background: #dce7ea; }
+.ai-confidence-fill { display: block; height: 100%; border-radius: inherit; background: #078474; }
+.ai-advisory-notice { border: 1px solid #efd69b; border-radius: 8px; background: #fff8e8; color: #765200 !important; padding: 9px 11px; font-size: .78rem; font-weight: 850; }
+.ai-observation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ai-observation-link { color: #0b736c !important; }
 .live-vision-layout { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(280px,.55fr); gap: 14px; }
 .live-camera-panel, .live-status-panel { min-width: 0; }
 .emergency-toggle { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; background: #fff2d6; color: #9b5d00; padding: 8px 12px; font-size: .78rem; font-weight: 950; white-space: nowrap; }
@@ -1177,6 +1204,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .video-evidence-layout, .video-review-split { grid-template-columns: 1fr; }
   .cctv-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .camera-registry-row { grid-template-columns: 1fr; }
+  .ai-observation-card { grid-template-columns: minmax(170px,.7fr) minmax(0,1.3fr); }
   .camera-row-actions { grid-template-columns: repeat(2,minmax(0,160px)); justify-content: flex-start; }
   .cctv-filters { justify-content: flex-start; }
   .camera-config-form { grid-template-columns: repeat(6,minmax(0,1fr)); }
@@ -1199,6 +1227,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .camera-config-note { align-items: flex-start; flex-direction: column; }
   .camera-field, .field-half, .field-quarter, .camera-config-form .camera-form-actions { grid-column: 1 / -1; }
   .camera-row-actions { grid-template-columns: 1fr; }
+  .ai-observation-card { grid-template-columns: 1fr; padding: 11px; }
+  .ai-observation-media { min-height: 180px; }
+  .ai-observation-actions button { flex: 1 1 135px; }
   .command-hero { gap: 20px; padding: 23px 20px; border-radius: 16px; }
   .command-hero h2 { font-size: 1.55rem; }
   .command-health { width: 100%; min-width: 0; }

@@ -17,6 +17,8 @@ const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
 const copilotRoutes = require("./routes/copilot.routes");
 const notificationRoutes = require("./routes/notifications.routes");
+const aiObservationsRoutes = require("./routes/aiObservations.routes");
+const mediaGatewayRoutes = require("./routes/mediaGateway.routes");
 const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
@@ -34,6 +36,7 @@ const { validateCameraCredentialConfig } = require("./services/cameraSecrets.ser
 const { installShutdownHandlers } = require("./services/shutdown.service");
 const realtimeEvents = require("./services/realtimeEvents.service");
 const { runCameraHealthSweep } = require("./services/cameraHealthMonitor.service");
+const { gateway: mediaGateway, startConfiguredStreams } = require("./services/mediaGatewayRuntime.service");
 const { helmetDirectives } = require("../csp.config.cjs");
 
 let io = null;
@@ -102,6 +105,12 @@ function initializeSocketIO(httpServer) {
   for (const [event, handler] of cameraHealthHandlers) realtimeEvents.on(event, handler);
   httpServer.once("close", () => {
     for (const [event, handler] of cameraHealthHandlers) realtimeEvents.off(event, handler);
+  });
+  const gatewayEvents = ["camera_stream_state_changed", "camera_health_updated", "camera_reconnected", "ai_detection_received", "observation_created", "observation_reviewed", "alert_created_from_observation", "ai_service_unavailable"];
+  const gatewayHandlers = new Map(gatewayEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of gatewayHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of gatewayHandlers) realtimeEvents.off(event, handler);
   });
   const assignmentEvents = ["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"];
   const assignmentHandlers = new Map(assignmentEvents.map((event) => [event, (payload) => {
@@ -683,6 +692,8 @@ app.post("/api/tracking/camera-adjacency", trackingController.createCameraAdjace
 app.get("/api/tracking/score-config", trackingController.getScoreConfig);
 app.post("/api/tracking/score-config", trackingController.updateScoreConfig);
 app.use("/api/ai", aiRoutes);
+app.use("/api/ai-observations", aiObservationsRoutes);
+app.use("/api/media-gateway", mediaGatewayRoutes);
 app.post("/api/rakshak/analyze-frame", aiFrameLimiter, require("./controllers/ai.controller").analyzeFrame);
 app.use("/api/missing-persons", missingPersonRoutes);
 app.get("/api/reports", legacyHandler("/api/reports"));
@@ -774,6 +785,7 @@ async function start(listenPort = port) {
       "app_state"
       , "notifications"
       , "notification_receipts"
+      , "ai_observations"
     ];
     const result = await query(
       "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = ANY($1::text[])",
@@ -797,6 +809,9 @@ async function start(listenPort = port) {
       const address = httpServer.address();
       const activePort = typeof address === "object" && address ? address.port : listenPort;
       console.log(`RakshakAI Backend running at http://localhost:${activePort}/api (${getDatabaseMode()})`);
+      startConfiguredStreams().then((count) => {
+        if (count) console.log(`RakshakAI media gateway started ${count} configured stream(s).`);
+      }).catch((error) => console.error("RakshakAI media gateway startup failed:", error.message));
       // Dispatch escalation sweep: flips expired "pending" ACK windows and auto-dispatches
       // backup units. In-process guard prevents overlap; a session-level pg advisory lock
       // (in runEscalationSweep) ensures only one instance sweeps in multi-instance setups.
@@ -850,6 +865,7 @@ async function start(listenPort = port) {
         clearInterval(escalationTimer);
         clearInterval(slaEscalationTimer);
         clearInterval(cameraHealthTimer);
+        mediaGateway.stopAll().catch(() => {});
       });
       console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
       console.log(`RakshakAI SLA escalation sweep every ${slaSweepIntervalMs}ms`);

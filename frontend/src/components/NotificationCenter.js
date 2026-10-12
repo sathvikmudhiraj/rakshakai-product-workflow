@@ -166,7 +166,7 @@ export function mountNotificationCenter({ navigate, openCopilot, showCopilot = t
 
   const openRelated = async (item) => {
     try { await api(`/api/notifications/${encodeURIComponent(item.id)}/opened`, { method: "POST" }); } catch {}
-    const view = ({ incident: "incident-command", report: "missing", camera: "cctv", tracking_session: "multi-camera-tracking", tracking_candidate: "multi-camera-tracking", evidence: "video-evidence" })[item.entityType];
+    const view = ({ incident: "incident-command", report: "missing", camera: "cctv", ai_observation: "cctv", tracking_session: "multi-camera-tracking", tracking_candidate: "multi-camera-tracking", evidence: "video-evidence" })[item.entityType];
     if (view && typeof navigate === "function") { navigate({ view, entityType: item.entityType, entityId: item.entityId }); hide(); }
   };
 
@@ -197,8 +197,21 @@ export function mountNotificationCenter({ navigate, openCopilot, showCopilot = t
     copilot.addEventListener("click", () => { hide(); openCopilot(); }); filters.append(copilot);
   }
 
-  const open = () => { previousFocus = document.activeElement; drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false; launcher.setAttribute("aria-expanded", "true"); load(); close.focus(); };
-  const hide = () => { drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); backdrop.hidden = true; launcher.setAttribute("aria-expanded", "false"); (previousFocus?.isConnected ? previousFocus : launcher).focus(); };
+  const open = () => {
+    previousFocus = document.activeElement;
+    if (mobileDock.matches && root.parentElement !== document.body) {
+      document.body.append(root);
+      root.classList.remove("docked");
+    }
+    drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false;
+    launcher.setAttribute("aria-expanded", "true"); load(); close.focus();
+  };
+  const hide = () => {
+    drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); backdrop.hidden = true;
+    launcher.setAttribute("aria-expanded", "false");
+    if (mobileDock.matches) syncDock();
+    (previousFocus?.isConnected ? previousFocus : launcher).focus();
+  };
   const clamp = ({ left, top }) => { const size = launcher.getBoundingClientRect().width || 58, margin = 12; return { left: Math.min(Math.max(margin, Number(left) || margin), innerWidth - size - margin), top: Math.min(Math.max(margin, Number(top) || margin), innerHeight - size - margin) }; };
   const position = (value, save = false) => { const next = clamp(value); launcher.style.left = `${next.left}px`; launcher.style.top = `${next.top}px`; launcher.style.right = "auto"; launcher.style.bottom = "auto"; if (save) try { localStorage.setItem(POSITION_KEY, JSON.stringify(next)); } catch {} };
   try { const saved = JSON.parse(localStorage.getItem(POSITION_KEY) || "null"); if (saved) position(saved); } catch {}

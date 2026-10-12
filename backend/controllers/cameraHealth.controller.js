@@ -1,4 +1,4 @@
-const { readDatabase, writeDatabase, userFromReq, hasRole } = require("../services/core.service");
+const { readDatabase, writeDatabase, userFromReq, hasRole, cameraSourcesForResponse } = require("../services/core.service");
 const { acknowledgeHealthAlert, applyHealthSample, setMaintenance } = require("../services/cameraHealth.service");
 const realtimeEvents = require("../services/realtimeEvents.service");
 
@@ -7,6 +7,15 @@ function requireRole(req, db, roles) {
   if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
   if (!hasRole(user, roles)) throw Object.assign(new Error("You do not have permission for this action"), { status: 403 });
   return user;
+}
+
+function publicCamera(db, camera) {
+  if (!camera) return camera;
+  return cameraSourcesForResponse({ ...db, cameraSources: [camera] })[0];
+}
+
+function publicResult(db, result) {
+  return { ...result, camera: publicCamera(db, result.camera) };
 }
 
 function emitResult(result) {
@@ -20,7 +29,7 @@ function emitResult(result) {
 exports.summary = async (req, res, next) => {
   try {
     const db = await readDatabase(); requireRole(req, db, ["Admin", "Police Officer"]);
-    const cameras = db.cameraSources || [];
+    const cameras = cameraSourcesForResponse(db);
     const counts = cameras.reduce((result, camera) => { const key = String(camera.healthStatus || "UNKNOWN").toUpperCase(); result[key] = (result[key] || 0) + 1; return result; }, {});
     res.json({ cameras, counts, activeAlerts: (db.cameraHealthAlerts || []).filter((alert) => alert.active), thresholds: db.cameraHealthThresholds || {} });
   } catch (error) { next(error); }
@@ -31,7 +40,7 @@ exports.camera = async (req, res, next) => {
     const db = await readDatabase(); requireRole(req, db, ["Admin", "Police Officer"]);
     const camera = (db.cameraSources || []).find((item) => item.id === req.params.id || item.cameraId === req.params.id);
     if (!camera) return res.status(404).json({ error: "Camera source not found" });
-    res.json({ camera, alerts: (db.cameraHealthAlerts || []).filter((alert) => alert.cameraId === camera.id), history: (db.cameraHealthEvents || []).filter((event) => event.cameraId === camera.id).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)) });
+    res.json({ camera: publicCamera(db, camera), alerts: (db.cameraHealthAlerts || []).filter((alert) => alert.cameraId === camera.id), history: (db.cameraHealthEvents || []).filter((event) => event.cameraId === camera.id).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)) });
   } catch (error) { next(error); }
 };
 
@@ -39,7 +48,7 @@ exports.observe = async (req, res, next) => {
   try {
     const db = await readDatabase(); requireRole(req, db, ["Admin", "Police Officer"]);
     const result = applyHealthSample(db, req.params.id, req.body || {});
-    await writeDatabase(db); emitResult(result); res.status(200).json(result);
+    await writeDatabase(db); const safeResult = publicResult(db, result); emitResult(safeResult); res.status(200).json(safeResult);
   } catch (error) { next(error); }
 };
 
@@ -54,7 +63,7 @@ exports.acknowledge = async (req, res, next) => {
 exports.maintenance = async (req, res, next) => {
   try {
     const db = await readDatabase(); const user = requireRole(req, db, ["Admin"]);
-    const result = setMaintenance(db, req.params.id, req.body || {}, user); await writeDatabase(db); emitResult(result); res.json(result);
+    const result = setMaintenance(db, req.params.id, req.body || {}, user); await writeDatabase(db); const safeResult = publicResult(db, result); emitResult(safeResult); res.json(safeResult);
   } catch (error) { next(error); }
 };
 
@@ -82,6 +91,6 @@ exports.simulate = async (req, res, next) => {
     };
     const state = states[String(req.body?.state || "").toLowerCase()];
     if (!state) return res.status(400).json({ error: "Unsupported camera health simulation state" });
-    const result = applyHealthSample(db, req.params.id, { ...state, simulated: true }); await writeDatabase(db); emitResult(result); res.json(result);
+    const result = applyHealthSample(db, req.params.id, { ...state, simulated: true }); await writeDatabase(db); const safeResult = publicResult(db, result); emitResult(safeResult); res.json(safeResult);
   } catch (error) { next(error); }
 };

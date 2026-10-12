@@ -93,6 +93,8 @@ const state = {
   dispatchAlternativesVisible: false,
   zones: [],
   cameraSources: [],
+  aiObservations: [],
+  aiObservationCameraId: null,
   cameraFilters: { kind: "all", sourceType: "all", status: "all" },
   videoEvidence: { evidence: [], observations: [] },
   activeEvidenceId: null,
@@ -513,6 +515,11 @@ function initializeRealtimeAlerts() {
     state.cameraRegistry = (state.cameraRegistry || []).map((item) => item.id === camera.id ? { ...item, ...camera } : item);
     renderCameras(state.cameraRegistry);
   }));
+  ["camera_stream_state_changed", "camera_health_updated", "camera_reconnected", "ai_service_unavailable", "observation_created", "observation_reviewed", "alert_created_from_observation"].forEach((eventName) => {
+    realtimeUnsubscribers.push(onRealtime(eventName, () => {
+      refresh().catch((error) => console.warn("Could not refresh media gateway data:", error.message));
+    }));
+  });
 }
 
 function syncTopbarOffset() {
@@ -539,6 +546,7 @@ function showApp() {
       if (entityType === "incident") state.selectedIncidentId = entityId;
       if (entityType === "tracking_session") document.body.dataset.trackingSessionId = entityId;
       if (entityType === "tracking_candidate") document.body.dataset.trackingCandidateId = entityId;
+      if (entityType === "ai_observation") state.aiObservationCameraId = state.aiObservations.find((item) => item.id === entityId)?.cameraId || null;
       setView(view);
     }
   });
@@ -3213,9 +3221,9 @@ function cameraSummaryCards(cameras) {
   const demo = cameras.filter((camera) => camera.isDemo);
   return [
     { label: "Total Cameras", value: cameras.length },
-    { label: "Healthy", value: cameras.filter((camera) => camera.healthStatus === "ONLINE").length },
-    { label: "Needs attention", value: cameras.filter((camera) => !["ONLINE", "UNKNOWN", "MAINTENANCE"].includes(camera.healthStatus)).length },
-    { label: "Offline", value: cameras.filter((camera) => camera.healthStatus === "OFFLINE").length },
+    { label: "Streaming", value: real.filter((camera) => camera.streamState === "STREAMING").length },
+    { label: "Needs attention", value: real.filter((camera) => ["RECONNECTING", "DEGRADED", "NO_FRAMES", "AUTH_FAILED"].includes(camera.streamState)).length },
+    { label: "Offline", value: real.filter((camera) => camera.streamState === "OFFLINE").length },
     { label: "Real Configured", value: real.filter((camera) => camera.hasStreamConfig).length },
     { label: "Demo Feeds", value: demo.length }
   ];
@@ -3228,7 +3236,7 @@ function filteredCameras(cameras) {
       || (state.cameraFilters.kind === "real" && !camera.isDemo);
     const sourceType = camera.isDemo ? "demo" : camera.type;
     const typeMatch = state.cameraFilters.sourceType === "all" || sourceType === state.cameraFilters.sourceType;
-    const statusMatch = state.cameraFilters.status === "all" || camera.status === state.cameraFilters.status;
+    const statusMatch = state.cameraFilters.status === "all" || String(camera.streamState || camera.status || "unknown").toLowerCase() === state.cameraFilters.status;
     return kindMatch && typeMatch && statusMatch;
   });
 }
@@ -3237,10 +3245,13 @@ function cameraRegistryRow(camera) {
   const row = node("article", `camera-registry-row ${camera.isDemo ? "demo-camera" : "real-camera"}`);
   const identity = node("div", "camera-identity");
   const sourceLabel = camera.isDemo ? "DEMO" : camera.sourceTypeLabel || displayValue(camera.type, "Unknown");
-  const statusLabel = String(camera.statusLabel || camera.status || "Unknown").toUpperCase();
+  const streamState = String(camera.streamState || (camera.isDemo ? "DISABLED" : "CONFIGURED")).toUpperCase();
+  const gatewayHealth = String(camera.gatewayHealth || (camera.isDemo ? "DEMO" : "UNKNOWN")).toUpperCase();
+  const aiState = String(camera.aiState || (camera.aiEnabled ? "AI_UNAVAILABLE" : "AI_DISABLED")).toUpperCase();
+  const statusLabel = streamState.replaceAll("_", " ");
   identity.append(node("span", `source-badge ${camera.isDemo ? "demo" : "real"}`, camera.badge || (camera.isDemo ? "DEMO CAMERA / SIMULATED FEED" : "REAL CCTV")));
   identity.append(node("span", `source-badge source-type ${camera.isDemo ? "demo" : ""}`, sourceLabel));
-  identity.append(node("span", `source-badge ${camera.status || "unknown"}`, statusLabel));
+  identity.append(node("span", `source-badge stream-${streamState.toLowerCase()}`, `STREAM ${statusLabel}`));
   identity.append(node("strong", "", camera.name));
   identity.append(node("small", "", `${camera.cameraId || camera.id} - ${camera.location || camera.zone || "Unassigned"}`));
 
@@ -3248,12 +3259,16 @@ function cameraRegistryRow(camera) {
   [
     ["Camera ID", camera.cameraId || camera.id],
     ["Location", camera.location || camera.zone || "Unassigned"],
-    ["AI enabled", camera.aiEnabled ? "Yes" : "No"],
-    ["Last checked", cameraTime(camera.lastCheckedAt)],
-    ["Frame status", camera.lastFrameStatus || "Snapshot unavailable"],
-    ["Health", camera.healthStatus || "UNKNOWN"],
-    ["FPS / latency", `${camera.healthTelemetry?.fps ?? "--"} / ${camera.healthTelemetry?.latencyMs ?? "--"} ms`],
-    ["Health reason", camera.healthReason || "No health detail"]
+    ["Gateway", gatewayHealth],
+    ["AI", aiState.replace(/^AI_/, "")],
+    ["Connected", camera.connected ? "Verified" : "Not verified"],
+    ["FPS", camera.measuredFps == null ? "Not measured" : String(camera.measuredFps)],
+    ["Frame age", camera.frameAgeMs == null ? "Unavailable" : `${(camera.frameAgeMs / 1000).toFixed(1)} sec`],
+    ["Latency", camera.latencyMs == null ? "Not measured" : `${camera.latencyMs} ms`],
+    ["Reconnects", String(camera.reconnectCount || 0)],
+    ["Last AI success", cameraTime(camera.lastAiSuccessAt)],
+    ["Pending review", String(camera.pendingObservationCount || 0)],
+    ["Status detail", camera.lastGatewayError || camera.healthReason || "No health detail"]
   ].forEach(([label, value]) => {
     const item = node("span", "");
     item.append(node("small", "", label), node("strong", "", value));
@@ -3261,11 +3276,11 @@ function cameraRegistryRow(camera) {
   });
 
   const viewer = node("div", "camera-viewer-status");
-  const viewerTitle = camera.isDemo ? "Simulated demo feed" : camera.streamProxyStatus || "Stream proxy not configured";
+  const viewerTitle = camera.isDemo ? "Simulated demo feed" : `${streamState} · Gateway ${gatewayHealth} · AI ${aiState.replace(/^AI_/, "")}`;
   const viewerText = camera.isDemo
     ? "This is not a production CCTV/NVR/DVR/IP camera."
     : camera.hasStreamConfig
-      ? "RTSP and ONVIF sources require backend transcoding to HLS, WebRTC, or MJPEG before browser viewing."
+      ? `Secure backend ingest samples one frame every ${camera.samplingIntervalMs || 1000} ms. Credentials are never sent to this browser.`
       : "No backend stream configuration is stored for this camera.";
   viewer.append(node("strong", "", viewerTitle), node("small", "", viewerText));
 
@@ -3279,14 +3294,23 @@ function cameraRegistryRow(camera) {
   analyze.dataset.cameraAnalyze = camera.id;
   analyze.disabled = !camera.isDemo && !camera.aiEnabled;
   actions.append(analyze);
+  const observations = node("button", "ghost", "View Observations");
+  observations.type = "button";
+  observations.dataset.cameraObservations = camera.id;
+  actions.append(observations);
   if (isAdminRole() && !camera.isDemo && !camera.externalConfig) {
+    const gateway = node("button", "ghost", camera.connected ? "Stop Gateway" : "Start Gateway");
+    gateway.type = "button";
+    gateway.dataset.cameraGateway = camera.id;
+    gateway.dataset.gatewayAction = camera.connected ? "stop" : "start";
+    gateway.disabled = !camera.streamEnabled;
     const edit = node("button", "ghost", "Edit");
     edit.type = "button";
     edit.dataset.cameraEdit = camera.id;
     const remove = node("button", "danger", "Delete");
     remove.type = "button";
     remove.dataset.cameraDelete = camera.id;
-    actions.append(edit, remove);
+    actions.append(gateway, edit, remove);
   }
 
   row.append(identity, meta, viewer, actions);
@@ -3320,13 +3344,64 @@ function renderCameras(cameras = []) {
   }
 }
 
+function renderAiObservationQueue(observations = state.aiObservations) {
+  const container = $("#aiObservationQueue");
+  if (!container) return;
+  container.textContent = "";
+  const selectedCamera = state.aiObservationCameraId;
+  const visible = observations.filter((item) => !selectedCamera || item.cameraId === selectedCamera);
+  if (selectedCamera) {
+    const filter = node("div", "ai-observation-filter");
+    filter.append(node("span", "chip", `Camera ${selectedCamera}`));
+    const clear = node("button", "ghost", "Show all cameras"); clear.type = "button"; clear.dataset.clearObservationCamera = "true";
+    filter.append(clear); container.append(filter);
+  }
+  if (!visible.length) {
+    const empty = node("div", "empty-state");
+    empty.append(node("strong", "", "No AI observations in this queue"), node("small", "", "Supported gateway detections will appear here for mandatory human review."));
+    container.append(empty); return;
+  }
+  visible.forEach((observation) => {
+    const card = node("article", `ai-observation-card status-${String(observation.status || "pending_review").toLowerCase()}`);
+    card.dataset.observationId = observation.id;
+    const media = node("div", "ai-observation-media");
+    if (observation.previewAvailable && observation.previewUrl) {
+      const image = document.createElement("img"); image.src = observation.previewUrl; image.alt = `Reviewed frame for ${observation.id}`; image.loading = "lazy";
+      media.append(image);
+    } else media.append(node("span", "ai-observation-no-frame", "Frame not retained"));
+    const body = node("div", "ai-observation-body");
+    const head = node("div", "ai-observation-head");
+    const title = node("div", ""); title.append(node("span", "eyebrow", "AI Observation"), node("h3", "", observation.id));
+    head.append(title, node("span", `chip observation-${String(observation.status).toLowerCase()}`, String(observation.status).replaceAll("_", " ")));
+    const source = node("p", "ai-observation-source", `${observation.cameraId} · ${observation.cameraName} · ${observation.zone}`);
+    const timing = node("small", "", `Captured ${cameraTime(observation.capturedAt)} · Processed ${cameraTime(observation.processedAt)}`);
+    const detections = node("div", "ai-observation-detections");
+    (observation.detections || []).forEach((detection) => {
+      const row = node("div", "ai-detection-row");
+      const label = node("span", "", detection.label);
+      const meter = node("span", "ai-confidence-meter"); const fill = node("span", "ai-confidence-fill"); fill.style.width = `${Math.round((detection.confidence || 0) * 100)}%`; meter.append(fill);
+      row.append(label, meter, node("strong", "", `${Math.round((detection.confidence || 0) * 100)}%`)); detections.append(row);
+    });
+    const notice = node("p", "ai-advisory-notice", "AI result is advisory. Human verification is required. Confirmation creates an alert, not an incident.");
+    body.append(head, source, timing, detections, node("p", "", observation.reason || "Human review required."), notice);
+    if (["PENDING_REVIEW", "UNCERTAIN"].includes(observation.status)) {
+      const actions = node("div", "ai-observation-actions");
+      [["Confirm", "CONFIRMED", "primary"], ["Reject", "REJECTED", "danger"], ["Mark Uncertain", "UNCERTAIN", "ghost"]].forEach(([label, decision, className]) => {
+        const button = node("button", className, label); button.type = "button"; button.dataset.observationReview = observation.id; button.dataset.reviewDecision = decision; actions.append(button);
+      });
+      body.append(actions);
+    } else if (observation.alertId) body.append(node("small", "ai-observation-link", `Linked alert: ${observation.alertId}`));
+    card.append(media, body); container.append(card);
+  });
+}
+
 function renderCameraAiSettings(cameras = [], aiHealth = {}) {
   const container = $("#cameraAiStatus");
   if (!container) return;
   const realCameras = cameras.filter((camera) => !camera.isDemo);
   const configured = realCameras.filter((camera) => camera.hasStreamConfig).length;
-  const connected = realCameras.filter((camera) => camera.status === "online").length;
-  const unavailable = realCameras.filter((camera) => !["online", "available", "ready"].includes(camera.status)).length;
+  const connected = realCameras.filter((camera) => camera.streamState === "STREAMING").length;
+  const unavailable = realCameras.filter((camera) => ["RECONNECTING", "DEGRADED", "NO_FRAMES", "AUTH_FAILED", "OFFLINE"].includes(camera.streamState)).length;
   const disabled = realCameras.filter((camera) => camera.enabled === false || !camera.aiEnabled).length;
   const aiState = aiHealth.status === "connected"
     ? "Connected"
@@ -3341,8 +3416,8 @@ function renderCameraAiSettings(cameras = [], aiHealth = {}) {
   const cards = [
     { label: "AI service", value: aiState, detail: aiDetail, state: aiState.toLowerCase() },
     { label: "Configured", value: configured, detail: "Production cameras with backend stream configuration.", state: "configured" },
-    { label: "Connected", value: connected, detail: "Production cameras reporting online.", state: "connected" },
-    { label: "Unavailable", value: unavailable, detail: "Production cameras offline or in an unknown state.", state: "unavailable" },
+    { label: "Connected", value: connected, detail: "Production streams verified by received frames.", state: "connected" },
+    { label: "Unavailable", value: unavailable, detail: "Gateway reconnect, frame, authentication, or offline states.", state: "unavailable" },
     { label: "Disabled", value: disabled, detail: "Production cameras disabled or with camera AI turned off.", state: "disabled" }
   ];
   container.textContent = "";
@@ -3354,8 +3429,8 @@ function renderCameraAiSettings(cameras = [], aiHealth = {}) {
   const summary = $("#cameraSummary");
   if (summary) {
     const demoFeeds = cameras.filter((camera) => camera.isDemo).length;
-    const healthy = cameras.filter((camera) => camera.status === "online").length;
-    const offline = cameras.filter((camera) => camera.status === "offline").length;
+    const healthy = realCameras.filter((camera) => camera.streamState === "STREAMING").length;
+    const offline = realCameras.filter((camera) => camera.streamState === "OFFLINE").length;
     const needsAttention = cameras.length - healthy - offline;
     summary.textContent = "";
     [["Total Cameras", cameras.length], ["Healthy", healthy], ["Needs Attention", needsAttention], ["Offline", offline], ["Real Configured", configured], ["Demo Feeds", demoFeeds]].forEach(([label, value]) => {
@@ -5642,7 +5717,7 @@ async function refresh() {
   const operator = isOperatorRole();
   const admin = isAdminRole();
   const aiVision = loadAiVisionData({ role: state.user?.role, api });
-  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, sla, { cameras, sources, videoEvidence, aiHealth }] = await Promise.all([
+  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, sla, { cameras, sources, videoEvidence, aiHealth, aiObservations }] = await Promise.all([
     operator ? api("/api/dashboard") : Promise.resolve({ summary: {} }),
     api("/api/reports"),
     operator ? api("/api/zones") : Promise.resolve({ zones: [] }),
@@ -5704,6 +5779,8 @@ async function refresh() {
   renderStationRegistry(stations.stations);
   renderSatelliteMaps();
   renderCameras(cameras.cameras);
+  state.aiObservations = aiObservations.observations || [];
+  renderAiObservationQueue(state.aiObservations);
   renderCameraAiSettings(cameras.cameras, aiHealth);
   renderSlaSettings(state.slaConfig, state.escalationAlerts);
   renderVideoEvidence(videoEvidence);
@@ -5867,6 +5944,9 @@ function openCameraConfig(camera = null) {
   form.elements.namedItem("location").value = camera?.isDemo ? "" : camera?.location || camera?.zone || "";
   form.elements.namedItem("sourceType").value = camera?.isDemo ? "rtsp" : camera?.type || "rtsp";
   form.elements.namedItem("aiEnabled").value = camera?.aiEnabled ? "true" : "false";
+  form.elements.namedItem("streamEnabled").value = camera?.streamEnabled ? "true" : "false";
+  form.elements.namedItem("healthEnabled").value = camera?.healthEnabled === false ? "false" : "true";
+  form.elements.namedItem("samplingIntervalMs").value = camera?.samplingIntervalMs || 1000;
   form.elements.namedItem("status").value = camera?.status || "unknown";
   form.elements.namedItem("criticality").value = camera?.criticality || "NORMAL";
   form.elements.namedItem("expectedFps").value = camera?.expectedFps || 25;
@@ -5908,6 +5988,9 @@ $("#cameraConfigForm")?.addEventListener("submit", async (event) => {
       location: data.get("location"),
       sourceType: data.get("sourceType"),
       aiEnabled: data.get("aiEnabled") === "true",
+      streamEnabled: data.get("streamEnabled") === "true",
+      healthEnabled: data.get("healthEnabled") === "true",
+      samplingIntervalMs: Number(data.get("samplingIntervalMs")),
       status: data.get("status"),
       criticality: data.get("criticality"),
       expectedFps: Number(data.get("expectedFps"))
@@ -5939,21 +6022,31 @@ $("#cameraGridLarge")?.addEventListener("click", async (event) => {
   const analyzeButton = event.target.closest("[data-camera-analyze]");
   const editButton = event.target.closest("[data-camera-edit]");
   const deleteButton = event.target.closest("[data-camera-delete]");
-  const button = testButton || analyzeButton || editButton || deleteButton;
+  const gatewayButton = event.target.closest("[data-camera-gateway]");
+  const observationsButton = event.target.closest("[data-camera-observations]");
+  const button = testButton || analyzeButton || editButton || deleteButton || gatewayButton || observationsButton;
   if (!button) return;
-  const id = button.dataset.cameraTest || button.dataset.cameraAnalyze || button.dataset.cameraEdit || button.dataset.cameraDelete;
+  const id = button.dataset.cameraTest || button.dataset.cameraAnalyze || button.dataset.cameraEdit || button.dataset.cameraDelete || button.dataset.cameraGateway || button.dataset.cameraObservations;
   const camera = (state.cameraRegistry || []).find((item) => item.id === id);
   if (editButton) return openCameraConfig(camera);
+  if (observationsButton) {
+    state.aiObservationCameraId = id;
+    renderAiObservationQueue();
+    $("#aiObservationQueue")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (deleteButton && !confirm("Delete this real camera configuration? Stream credentials will be removed from backend storage.")) return;
   button.disabled = true;
   const originalText = button.textContent;
-  button.textContent = testButton ? "Testing..." : analyzeButton ? "Analyzing..." : "Deleting...";
+  button.textContent = testButton ? "Testing..." : analyzeButton ? "Analyzing..." : gatewayButton ? "Updating..." : "Deleting...";
   try {
     const result = testButton
       ? await api(`/api/camera-sources/${id}/test`, { method: "POST" })
       : analyzeButton
         ? await api(`/api/camera-sources/${id}/analyze`, { method: "POST" })
-        : await api(`/api/camera-sources/${id}`, { method: "DELETE" });
+        : gatewayButton
+          ? await api(`/api/media-gateway/cameras/${id}/${gatewayButton.dataset.gatewayAction}`, { method: "POST" })
+          : await api(`/api/camera-sources/${id}`, { method: "DELETE" });
     if (result.message) alert(result.message);
     else if (result.alert) alert(result.alert.message || "AI observation created for human review.");
     await refresh();
@@ -5963,6 +6056,28 @@ $("#cameraGridLarge")?.addEventListener("click", async (event) => {
     button.disabled = false;
     button.textContent = originalText;
   }
+});
+
+$("#refreshAiObservations")?.addEventListener("click", async () => {
+  const response = await api("/api/ai-observations");
+  state.aiObservations = response.observations || [];
+  renderAiObservationQueue();
+});
+
+$("#aiObservationQueue")?.addEventListener("click", async (event) => {
+  const clear = event.target.closest("[data-clear-observation-camera]");
+  if (clear) { state.aiObservationCameraId = null; renderAiObservationQueue(); return; }
+  const button = event.target.closest("[data-observation-review]");
+  if (!button) return;
+  const decision = button.dataset.reviewDecision;
+  const label = decision === "CONFIRMED" ? "confirm this observation and create a reviewable alert" : decision === "REJECTED" ? "reject this observation" : "mark this observation uncertain";
+  if (!confirm(`Are you sure you want to ${label}?`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/ai-observations/${encodeURIComponent(button.dataset.observationReview)}/review`, { method: "POST", body: { decision } });
+    await refresh();
+  } catch (error) { alert(error.message); }
+  finally { button.disabled = false; }
 });
 
 $("#refreshVideoEvidence")?.addEventListener("click", refresh);

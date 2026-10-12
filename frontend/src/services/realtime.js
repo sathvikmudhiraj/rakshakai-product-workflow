@@ -93,6 +93,14 @@ function setupEventListeners() {
     , "camera_storage_error"
     , "camera_health_alert_created"
     , "camera_health_alert_resolved"
+    , "camera_stream_state_changed"
+    , "camera_health_updated"
+    , "camera_reconnected"
+    , "ai_detection_received"
+    , "observation_created"
+    , "observation_reviewed"
+    , "alert_created_from_observation"
+    , "ai_service_unavailable"
   ];
 
   events.forEach((event) => {

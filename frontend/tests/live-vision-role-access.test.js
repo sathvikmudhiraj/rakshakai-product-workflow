@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { isOperatorRole, landingForRole, loadAiVisionData, resolveViewAccess } from "../src/roleAccess.js";
 
-const RESTRICTED_PATHS = ["/api/camera-feeds", "/api/camera-sources", "/api/video-evidence", "/api/ai/health"];
+const RESTRICTED_PATHS = ["/api/camera-feeds", "/api/camera-sources", "/api/video-evidence", "/api/ai/health", "/api/ai-observations"];
 
 const HTML = `<!doctype html><html><body>
   <h1 id="viewTitle">RakshakAI</h1>
@@ -76,7 +76,7 @@ test("Citizen opening /rakshak/live-vision executes production access logic and 
 test("Citizen AI Vision data loading calls api() zero times and returns safe empty results", async () => {
   const { api, calls } = recordApi();
   const role = "Citizen";
-  const { cameras, sources, videoEvidence, aiHealth } = await loadAiVisionData({ role, api });
+  const { cameras, sources, videoEvidence, aiHealth, aiObservations } = await loadAiVisionData({ role, api });
 
   assert.equal(calls.length, 0, "Citizen must not invoke any operational AI Vision API");
   for (const path of RESTRICTED_PATHS) assert.ok(!calls.includes(path), `${path} must not be requested for Citizen`);
@@ -85,6 +85,7 @@ test("Citizen AI Vision data loading calls api() zero times and returns safe emp
   assert.deepEqual(sources, { sources: [] });
   assert.deepEqual(videoEvidence, { evidence: [], observations: [] });
   assert.deepEqual(aiHealth, { configured: false, status: "restricted" });
+  assert.deepEqual(aiObservations, { observations: [], pendingCount: 0 });
 });
 
 test("Police Officer opening live-vision stays allowed and issues operational AI Vision requests", async () => {
@@ -109,10 +110,11 @@ test("Police Officer opening live-vision stays allowed and issues operational AI
     "/api/camera-feeds": { cameras: [{ id: "c1", name: "Gate A" }] },
     "/api/camera-sources": { sources: [{ id: "s1", name: "NVR" }] },
     "/api/video-evidence": { evidence: [{ id: "v1" }], observations: [] },
-    "/api/ai/health": { configured: true, status: "connected" }
+    "/api/ai/health": { configured: true, status: "connected" },
+    "/api/ai-observations": { observations: [{ id: "obs1", status: "PENDING_REVIEW" }], pendingCount: 1 }
   };
   const { api, calls } = recordApi(responses);
-  const { cameras, sources, videoEvidence, aiHealth } = await loadAiVisionData({ role: "Police Officer", api });
+  const { cameras, sources, videoEvidence, aiHealth, aiObservations } = await loadAiVisionData({ role: "Police Officer", api });
 
   assert.deepEqual(calls.sort(), [...RESTRICTED_PATHS].sort(), "operator must call all operational AI Vision endpoints");
   assert.equal(cameras.cameras.length, 1);
@@ -120,4 +122,5 @@ test("Police Officer opening live-vision stays allowed and issues operational AI
   assert.equal(videoEvidence.evidence.length, 1);
   assert.deepEqual(videoEvidence.observations, []);
   assert.equal(aiHealth.status, "connected");
+  assert.equal(aiObservations.pendingCount, 1);
 });

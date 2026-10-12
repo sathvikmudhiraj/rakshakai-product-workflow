@@ -299,10 +299,17 @@
               <div id="cameraRegistryFilters" class="cctv-filters">
                 <select data-camera-filter="kind" aria-label="Demo or real filter"><option value="all">All cameras</option><option value="real">Real configured</option><option value="demo">Demo feeds</option></select>
                 <select data-camera-filter="sourceType" aria-label="Source type filter"><option value="all">All source types</option><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
-                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="unknown">Unknown</option></select>
+                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="streaming">Streaming</option><option value="reconnecting">Reconnecting</option><option value="no_frames">No frames</option><option value="auth_failed">Auth failed</option><option value="offline">Offline</option><option value="disabled">Disabled</option></select>
               </div>
             </div>
             <div id="cameraGridLarge" class="camera-registry"></div>
+          </section>
+          <section class="panel ai-observation-panel">
+            <div class="panel-head">
+              <div><span class="eyebrow">Mandatory Human Review</span><h2>AI Observation Queue</h2><p>AI detections are advisory. Confirmation creates an alert; it never creates an incident directly.</p></div>
+              <button id="refreshAiObservations" class="ghost" type="button">Refresh Queue</button>
+            </div>
+            <div id="aiObservationQueue" class="ai-observation-queue" aria-live="polite"></div>
           </section>
         </section>
         <section class="view" data-panel="live-vision">
@@ -668,6 +675,9 @@
                   <label class="camera-field field-half">Username<input name="username" autocomplete="off" placeholder="Optional backend credential" /></label>
                   <label class="camera-field field-half">Password<input name="password" type="password" autocomplete="new-password" placeholder="Optional backend credential" /></label>
                   <label class="camera-field field-quarter">AI enabled<select name="aiEnabled"><option value="false">No</option><option value="true">Yes</option></select></label>
+                  <label class="camera-field field-quarter">Stream processing<select name="streamEnabled"><option value="false">Disabled</option><option value="true">Enabled</option></select></label>
+                  <label class="camera-field field-quarter">Health monitoring<select name="healthEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                  <label class="camera-field field-quarter">AI sample interval<input name="samplingIntervalMs" type="number" min="250" max="60000" step="250" value="1000" /><small>Milliseconds; stale samples are dropped.</small></label>
                   <div class="form-actions camera-form-actions"><button class="primary" type="submit">Save Camera</button><button id="cancelCameraConfig" class="ghost" type="button">Cancel</button></div>
                   <p id="cameraConfigStatus" class="form-status" aria-live="polite"></p>
                 </form>

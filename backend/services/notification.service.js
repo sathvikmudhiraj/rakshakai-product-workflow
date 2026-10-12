@@ -82,6 +82,42 @@ function deriveNotifications(db) {
     }));
   }
 
+  for (const camera of db.cameraSources || []) {
+    const streamState = String(camera.streamState || "").toUpperCase();
+    const aiState = String(camera.aiState || "").toUpperCase();
+    if (streamState === "STREAMING" && ["AI_UNAVAILABLE", "AI_TIMEOUT", "AI_ERROR"].includes(aiState)) {
+      notifications.push(record({
+        dedupeKey: `camera_ai_unavailable:${camera.id}:${aiState}`,
+        type: "camera_ai_unavailable", title: "AI Analysis Unavailable",
+        message: `${camera.cameraId || camera.id} stream is healthy, but AI processing is unavailable.`,
+        severity: "MEDIUM", entityType: "camera", entityId: camera.id,
+        createdAt: camera.lastHealthUpdate || camera.updatedAt, source: "Secure Media Gateway"
+      }));
+    }
+    if (["NO_FRAMES", "AUTH_FAILED", "OFFLINE"].includes(streamState)) {
+      notifications.push(record({
+        dedupeKey: `gateway_${streamState.toLowerCase()}:${camera.id}`,
+        type: `camera_${streamState.toLowerCase()}`,
+        title: streamState === "NO_FRAMES" ? "Camera Frames Missing" : `Camera ${titleWords(streamState)}`,
+        message: camera.lastGatewayError || `${camera.cameraId || camera.id} requires gateway attention.`,
+        severity: ["AUTH_FAILED", "OFFLINE"].includes(streamState) ? "HIGH" : "MEDIUM",
+        entityType: "camera", entityId: camera.id,
+        createdAt: camera.lastHealthUpdate || camera.updatedAt, source: "Secure Media Gateway"
+      }));
+    }
+  }
+
+  for (const observation of db.aiObservations || []) {
+    if (observation.status !== "PENDING_REVIEW") continue;
+    notifications.push(record({
+      dedupeKey: `ai_observation_review:${observation.id}`,
+      type: "ai_observation_review", title: "Review Required",
+      message: `${observation.cameraName || observation.cameraId} has an AI observation pending human review.`,
+      severity: "MEDIUM", entityType: "ai_observation", entityId: observation.id,
+      createdAt: observation.createdAt || observation.capturedAt, source: "AI Observation Review"
+    }));
+  }
+
   for (const candidate of db.trackingCandidates || []) {
     const status = String(candidate.status || "PENDING_REVIEW").toUpperCase();
     notifications.push(record({
@@ -264,6 +300,23 @@ function evidenceDetail(db, id) {
   return deepSafe({ kind: "Evidence", record: evidenceSummary(evidence), custody: evidence.chainOfCustody || [] });
 }
 
+function observationDetail(db, id) {
+  const observation = (db.aiObservations || []).find((item) => item.id === id);
+  if (!observation) throw Object.assign(new Error("AI observation not found"), { status: 404 });
+  return deepSafe({
+    kind: "AI Observation",
+    record: {
+      id: observation.id, cameraId: observation.cameraId, cameraName: observation.cameraName,
+      zone: observation.zone, capturedAt: observation.capturedAt, processedAt: observation.processedAt,
+      status: observation.status, detections: observation.detections, reason: observation.reason,
+      advisory: true, humanVerificationRequired: observation.humanVerificationRequired,
+      cameraHealthAtCapture: observation.cameraHealthAtCapture, aiStateAtCapture: observation.aiStateAtCapture,
+      alertId: observation.alertId || null,
+      previewUrl: observation.frameStorage?.storageKey ? `/api/ai-observations/${encodeURIComponent(observation.id)}/frame` : null
+    }
+  });
+}
+
 async function authoritativeDetail(db, user, notification) {
   if (notification.entityType === "incident") return incidentDetail(db, notification.entityId);
   if (notification.entityType === "report") return reportDetail(db, user, notification.entityId);
@@ -278,6 +331,10 @@ async function authoritativeDetail(db, user, notification) {
   if (notification.entityType === "evidence") {
     if (!OPERATOR_ROLES.includes(user.role)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
     return evidenceDetail(db, notification.entityId);
+  }
+  if (notification.entityType === "ai_observation") {
+    if (!OPERATOR_ROLES.includes(user.role)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
+    return observationDetail(db, notification.entityId);
   }
   throw Object.assign(new Error("Linked record type is not supported"), { status: 404 });
 }
