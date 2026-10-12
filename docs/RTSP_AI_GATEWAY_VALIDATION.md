@@ -1,7 +1,7 @@
 # RTSP AI Media Gateway Validation
 
-**Date:** October 13, 2026 (Asia/Calcutta)  
-**Scope:** Project-scope validation with a controlled RTSP test stream and real local YOLO inference  
+**Date:** October 13, 2026 (Asia/Calcutta)
+**Scope:** Project-scope validation with a controlled RTSP test stream and real local YOLO inference
 **Physical CCTV:** Not tested; physical-camera field validation remains a separate gate
 
 ## Environment
