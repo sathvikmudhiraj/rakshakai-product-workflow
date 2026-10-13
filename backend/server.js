@@ -683,6 +683,8 @@ app.get("/api/tracking/sessions/:sessionId", trackingController.getTrackingSessi
 app.post("/api/tracking/sessions/:sessionId/search", trackingController.searchCandidates);
 app.get("/api/tracking/sessions/:sessionId/timeline", trackingController.getSessionTimeline);
 app.get("/api/tracking/sessions/:sessionId/map", trackingController.getSessionMapData);
+app.get("/api/tracking/sessions/:sessionId/recommendations", trackingController.getSessionRecommendations);
+app.post("/api/tracking/sessions/:sessionId/handoff", trackingController.handoffSession);
 app.post("/api/tracking/sessions/:sessionId/candidates/:candidateId/verify", trackingController.verifyCandidate);
 app.get("/api/tracking/sessions/:sessionId/candidates/:candidateId", trackingController.getCandidateDetails);
 app.post("/api/tracking/sessions/:sessionId/close", trackingController.closeTrackingSession);

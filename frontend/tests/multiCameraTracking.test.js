@@ -49,7 +49,9 @@ async function testCreateSessionModalOpens() {
     if (!modal.querySelector("#createTrackingForm")) throw new Error("Form not in modal");
     if (!modal.querySelector("[name=trackType]")) throw new Error("Track type select missing");
     if (!modal.querySelector("[name=referenceCameraId]")) throw new Error("Camera select missing");
-    modal.remove();
+    document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    if (document.querySelector(".modal-overlay")) throw new Error("Escape did not close modal");
+    if (document.activeElement !== createBtn) throw new Error("Modal did not restore focus to its trigger");
     console.log("  PASS");
   } catch (error) {
     console.log("  FAIL:", error.message);

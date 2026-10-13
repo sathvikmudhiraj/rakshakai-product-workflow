@@ -62,7 +62,9 @@ const CANDIDATE_STATUS_LABELS = {
 
 const TRACK_TYPE_LABELS = {
   PERSON: "Person",
-  VEHICLE: "Vehicle"
+  VEHICLE: "Vehicle",
+  OBJECT: "Object",
+  ANIMAL: "Animal"
 };
 
 function formatTimestamp(iso) {
@@ -115,6 +117,12 @@ function createScoreBreakdown(explanation) {
     distinctiveMarks: "Markings",
     speed: "Speed",
     route: "Route"
+    ,class: "Object Class"
+    ,species: "Animal Species"
+    ,size: "Size"
+    ,markings: "Markings"
+    ,shape: "Shape"
+    ,context: "Scene Context"
   };
   for (const [key, label] of Object.entries(weights)) {
     if (explanation[key]) {
@@ -198,7 +206,7 @@ function renderCandidateCard(candidate, session, observation) {
       createStatBar("Direction", candidate.directionConsistency),
       createStatBar("Activity", candidate.activityConsistency)
     );
-  } else {
+  } else if (session.trackType === "VEHICLE") {
     breakdown.append(
       createStatBar("Plate", candidate.plateSimilarity),
       createStatBar("Appearance", candidate.colorSimilarity),
@@ -207,6 +215,15 @@ function renderCandidateCard(candidate, session, observation) {
       createStatBar("Timing", candidate.timingConsistency),
       createStatBar("Route", candidate.routeConsistency)
     );
+  } else {
+    breakdown.append(
+      createStatBar(session.trackType === "ANIMAL" ? "Species" : "Object Class", candidate.speciesSimilarity ?? candidate.classSimilarity),
+      createStatBar("Color", candidate.colorSimilarity),
+      createStatBar("Size", candidate.sizeSimilarity),
+      createStatBar("Markings", candidate.markingsSimilarity),
+      createStatBar("Spatial", candidate.spatialConsistency),
+      createStatBar("Timing", candidate.timingConsistency)
+    );
   }
 
   const actions = node("div", "candidate-actions");
@@ -214,7 +231,7 @@ function renderCandidateCard(candidate, session, observation) {
   if (candidate.status === "PENDING_REVIEW") {
     advisory = node("div", "human-review-advisory");
     advisory.append(node("strong", "", "Human verification required"), node("small", "", "AI confidence is advisory and does not establish identity."));
-    const confirmBtn = node("button", "btn btn-success btn-sm", "Confirm Match");
+    const confirmBtn = node("button", "btn btn-success btn-sm", "Confirm Sighting");
     confirmBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await handleVerifyCandidate(session.id, candidate.id, "CONFIRM_MATCH");
@@ -280,6 +297,15 @@ function renderObservationDetails(obs, label, isReference = false) {
     if (obs.estimatedSpeedKmh) grid.append(createDetailRow("Speed", `${obs.estimatedSpeedKmh.toFixed(1)} km/h`));
     if (obs.directionDegrees != null) grid.append(createDetailRow("Direction", `${obs.directionDegrees}°`));
   }
+  if (["OBJECT", "ANIMAL"].includes(obs.trackType) || obs.objectClass || obs.animalSpecies) {
+    const entityLabel = obs.trackType === "ANIMAL" ? (obs.animalSpecies || obs.species || obs.entityLabel) : (obs.objectClass || obs.entityLabel);
+    if (entityLabel) grid.append(createDetailRow(obs.trackType === "ANIMAL" ? "Species" : "Object Class", titleCase(entityLabel)));
+    if (obs.primaryColor || obs.objectColor || obs.animalColor) grid.append(createDetailRow("Color", obs.primaryColor || obs.objectColor || obs.animalColor));
+    if (obs.sizeClass || obs.approxSizeCm) grid.append(createDetailRow("Size", obs.sizeClass || `${obs.approxSizeCm} cm`));
+    if (obs.shape) grid.append(createDetailRow("Shape", obs.shape));
+    if (obs.markings?.length) grid.append(createDetailRow("Markings", obs.markings.join(", ")));
+    if (obs.contextLabel) grid.append(createDetailRow("Scene Context", obs.contextLabel));
+  }
   if (obs.detectionConfidence != null) grid.append(createDetailRow("Detection Confidence", `${Math.round(obs.detectionConfidence * 100)}%`));
   if (obs.cameraHealthStatus) grid.append(createDetailRow("Camera Health", `${obs.cameraHealthStatus} (${obs.cameraHealthSeverity || "—"})`));
 
@@ -336,6 +362,45 @@ async function handleVerifyCandidate(sessionId, candidateId, decision, reason) {
   } catch (error) {
     alert(`Verification failed: ${error.message}`);
   }
+}
+
+async function showResponseRecommendations(sessionId) {
+  try {
+    const result = await trackingApi.getRecommendations(sessionId);
+    const recommendations = result.recommendations || {};
+    const modal = node("div", "modal-overlay tracking-session-modal");
+    const content = node("div", "modal-content tracking-recommendations");
+    const heading = node("div", "tracking-modal-head");
+    const title = node("div");
+    title.append(node("span", "eyebrow", "Confirmed-location guidance"), node("h2", "", "Response Recommendations"), node("p", "", recommendations.explanation || recommendations.reason || "Recommendations unavailable."));
+    const close = node("button", "tracking-modal-close", "×"); close.type = "button"; close.setAttribute("aria-label", "Close recommendations");
+    heading.append(title, close); content.append(heading);
+    const list = node("div", "tracking-recommendation-list");
+    if ((recommendations.stations || []).length) list.append(node("h3", "", "Nearest Police Stations"));
+    for (const station of recommendations.stations || []) {
+      const row = node("article", "tracking-recommendation-card");
+      row.append(node("strong", "", station.name), node("span", "", `${station.distanceKm} km · ${station.approximate ? "approx. " : ""}${station.etaMinutes} min · ${station.availableUnits} units available`), node("small", "", station.reason));
+      list.append(row);
+    }
+    if ((recommendations.units || []).length) list.append(node("h3", "", "Recommended Available Units"));
+    for (const unit of recommendations.units || []) {
+      const row = node("article", "tracking-recommendation-card");
+      row.append(node("strong", "", unit.unitCode), node("span", "", `${unit.distanceKm} km · approx. ${unit.etaMinutes} min`), node("small", "", unit.reason));
+      const handoff = node("button", "primary", "Review in Unit Assignment"); handoff.type = "button";
+      handoff.addEventListener("click", async () => {
+        const response = await trackingApi.handoff(sessionId, { unitId: unit.id });
+        document.body.dataset.pendingTrackingUnitId = unit.id;
+        document.querySelector('[data-view="unit-assignment"]')?.click();
+        modal.remove();
+        if (response.dispatched) alert("Unexpected dispatch state. Please verify assignment records.");
+      });
+      row.append(handoff); list.append(row);
+    }
+    if (!list.childElementCount) list.append(node("div", "tracking-compact-empty", recommendations.reason || "No available units with valid live coordinates."));
+    content.append(list); modal.append(content); close.addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (event) => { if (event.target === modal) modal.remove(); });
+    document.body.append(modal);
+  } catch (error) { alert(`Could not load recommendations: ${error.message}`); }
 }
 
 function handleSideBySide(session, candidate, observation) {
@@ -435,6 +500,11 @@ function renderSessionDetail(session, observations = [], candidates = [], verifi
   const overviewActions = node("div", "tracking-session-actions");
   const search = node("button", "primary", "Search Candidates"); search.type = "button"; search.addEventListener("click", () => handleSearchSession(session.id));
   overviewActions.append(search);
+  if (session.verificationStatus === "CONFIRMED") {
+    const recommend = node("button", "ghost", "Response Options"); recommend.type = "button";
+    recommend.addEventListener("click", () => showResponseRecommendations(session.id));
+    overviewActions.append(recommend);
+  }
   if (session.status !== "CLOSED") {
     const close = node("button", "ghost", "Close Session"); close.type = "button";
     close.addEventListener("click", async () => {
@@ -448,6 +518,8 @@ function renderSessionDetail(session, observations = [], candidates = [], verifi
   const pendingCandidates = (candidates || []).filter((candidate) => candidate.status === "PENDING_REVIEW");
   const overview = node("div", "tracking-session-meta-grid");
   [
+    ["Reference Evidence", session.evidenceId || "Camera-origin reference"],
+    ["Entity Type", TRACK_TYPE_LABELS[session.trackType] || session.trackType],
     ["Reference Camera", session.referenceCameraId || "Unavailable"],
     ["Started", formatTimestamp(session.createdAt || session.referenceTimestamp)],
     ["Last Confirmed Seen", session.lastSeenCameraId ? `${session.lastSeenCameraId} · ${formatTimestamp(session.lastSeenAt)}` : `${session.referenceCameraId || "Unavailable"} · ${formatTimestamp(session.referenceTimestamp)}`],
@@ -603,9 +675,9 @@ function renderComparisonView(session, candidate, observation, referenceObs) {
   const actions = node("div", "comparison-actions");
   actions.append(node("div", "human-verification-heading", "Human Verification Required"));
   if (candidate.status === "PENDING_REVIEW") {
-    const confirmBtn = node("button", "btn btn-success btn-lg", "Confirm Match");
+    const confirmBtn = node("button", "btn btn-success btn-lg", "Confirm Sighting");
     confirmBtn.addEventListener("click", async () => { await handleVerifyCandidate(session.id, candidate.id, "CONFIRM_MATCH", "Confirmed via side-by-side review"); });
-    const rejectBtn = node("button", "btn btn-danger btn-lg", "Reject Match");
+    const rejectBtn = node("button", "btn btn-danger btn-lg", "Reject Sighting");
     rejectBtn.addEventListener("click", async () => { const reason = prompt("Reason for rejection:"); await handleVerifyCandidate(session.id, candidate.id, "REJECT_MATCH", reason); });
     const uncertainBtn = node("button", "btn btn-warning btn-lg", "Mark Uncertain");
     uncertainBtn.addEventListener("click", async () => { const reason = prompt("Reason for uncertainty:"); await handleVerifyCandidate(session.id, candidate.id, "UNCERTAIN", reason); });
@@ -639,9 +711,23 @@ function initTrackingMap(session, observations, candidates) {
   const points = [];
   for (const obs of trackObs) {
     const cam = getCameraSources().find((c) => c.id === obs.cameraId);
-    if (cam?.latitude && cam?.longitude) {
-      points.push({ lat: cam.latitude, lng: cam.longitude, cameraId: cam.id, cameraName: cam.name || cam.cameraId, time: obs.detectedAt });
+    const lat = Number(cam?.lat ?? cam?.latitude);
+    const lng = Number(cam?.lng ?? cam?.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      points.push({ lat, lng, cameraId: cam.id, cameraName: cam.name || cam.cameraId, time: obs.detectedAt });
     }
+  }
+
+  const advisoryPoints = (candidates || []).filter((candidate) => ["PENDING_REVIEW", "UNCERTAIN"].includes(candidate.status)).map((candidate) => {
+    const observation = observations.find((item) => item.id === candidate.observationId);
+    const camera = getCameraSources().find((item) => item.id === observation?.cameraId);
+    const lat = Number(camera?.lat ?? camera?.latitude);
+    const lng = Number(camera?.lng ?? camera?.longitude);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, camera, candidate } : null;
+  }).filter(Boolean);
+  for (const point of advisoryPoints) {
+    const marker = L.circleMarker([point.lat, point.lng], { radius: 8, color: "#b7791f", fillColor: "#f6c453", fillOpacity: 0.35, weight: 2, dashArray: "4 4" }).addTo(map);
+    marker.bindPopup(`<b>${point.camera.name || point.camera.cameraId || point.camera.id}</b><br>Possible sighting · ${Math.round(Number(point.candidate.overallConfidence || 0) * 100)}%<br><strong>Not confirmed — human review required</strong>`);
   }
 
   if (points.length >= 2) {
@@ -663,12 +749,14 @@ function initTrackingMap(session, observations, candidates) {
   }
 
   if (points.length > 0) {
-    const group = new L.featureGroup(points.map((p) => L.marker([p.lat, p.lng])));
+    const group = new L.featureGroup([...points, ...advisoryPoints].map((p) => L.marker([p.lat, p.lng])));
     map.fitBounds(group.getBounds().pad(0.1));
   }
 }
 
-function createTrackingSessionModal() {
+export function createTrackingSessionModal(defaults = {}) {
+  const trigger = defaults instanceof Event ? defaults.currentTarget : document.activeElement;
+  if (defaults instanceof Event) defaults = {};
   const modal = node("div", "modal-overlay tracking-session-modal", "");
   modal.innerHTML = `
     <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="createTrackingTitle">
@@ -679,6 +767,8 @@ function createTrackingSessionModal() {
           <select name="trackType" required>
             <option value="PERSON">Person</option>
             <option value="VEHICLE">Vehicle</option>
+            <option value="OBJECT">Object</option>
+            <option value="ANIMAL">Animal</option>
           </select>
         </div>
         <div class="form-group">
@@ -706,6 +796,11 @@ function createTrackingSessionModal() {
           <label>Evidence ID (optional)</label>
           <input name="evidenceId" type="text" placeholder="Link to evidence">
         </div>
+        <div class="form-group" id="trackingEntityLabelGroup" hidden>
+          <label id="trackingEntityLabelText">Detector-supported label</label>
+          <input name="entityLabel" type="text" placeholder="e.g., backpack or dog">
+          <small>Objects: backpack, handbag, suitcase, umbrella, bottle, cell phone, laptop. Animals: bird, cat, dog, horse, sheep, cow.</small>
+        </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" id="cancelCreateTracking">Cancel</button>
           <button type="submit" class="btn btn-primary">Create Session</button>
@@ -727,6 +822,26 @@ function createTrackingSessionModal() {
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
   timestampInput.value = now.toISOString().slice(0, 16);
+  const typeSelect = modal.querySelector("[name=trackType]");
+  const labelGroup = modal.querySelector("#trackingEntityLabelGroup");
+  const entityLabelInput = modal.querySelector("[name=entityLabel]");
+  const updateEntityFields = () => {
+    const visible = ["OBJECT", "ANIMAL"].includes(typeSelect.value);
+    labelGroup.hidden = !visible;
+    entityLabelInput.required = visible;
+    modal.querySelector("#trackingEntityLabelText").textContent = typeSelect.value === "ANIMAL" ? "Animal species" : "Object class";
+  };
+  typeSelect.addEventListener("change", updateEntityFields);
+  for (const [name, value] of Object.entries(defaults)) {
+    const control = modal.querySelector(`[name="${name}"]`);
+    if (control && value != null) {
+      if (name === "referenceTimestamp" && !Number.isNaN(Date.parse(value))) {
+        const local = new Date(value); local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+        control.value = local.toISOString().slice(0, 16);
+      } else control.value = value;
+    }
+  }
+  updateEntityFields();
 
   const form = modal.querySelector("#createTrackingForm");
   form.addEventListener("submit", async (e) => {
@@ -734,6 +849,21 @@ function createTrackingSessionModal() {
     const formData = new FormData(form);
     const data = Object.fromEntries(formData);
     data.referenceTimestamp = new Date(data.referenceTimestamp).toISOString();
+    data.sourceType = data.evidenceId ? "EVIDENCE" : "CAMERA";
+    data.sourceId = data.evidenceId || data.referenceCameraId;
+    data.referenceObservation = {
+      cameraId: data.referenceCameraId,
+      detectedAt: data.referenceTimestamp,
+      detectionId: data.referenceDetectionId,
+      trackType: data.trackType,
+      entityLabel: data.entityLabel || undefined,
+      objectClass: data.trackType === "OBJECT" ? data.entityLabel : undefined,
+      animalSpecies: data.trackType === "ANIMAL" ? data.entityLabel : undefined,
+      sourceType: data.sourceType,
+      sourceId: data.sourceId,
+      evidenceId: data.evidenceId || undefined
+    };
+    delete data.entityLabel;
     if (!data.incidentId) delete data.incidentId;
     if (!data.alertId) delete data.alertId;
     if (!data.evidenceId) delete data.evidenceId;
@@ -748,7 +878,9 @@ function createTrackingSessionModal() {
     }
   });
 
-  const previousFocus = document.activeElement;
+  const previousFocus = trigger instanceof window.HTMLElement && trigger !== document.body
+    ? trigger
+    : document.querySelector("#createTrackingBtn");
   const onEscape = (event) => { if (event.key === "Escape") closeModal(); };
   const closeModal = () => { document.removeEventListener("keydown", onEscape); modal.remove(); previousFocus?.focus?.(); };
   modal.querySelector("#cancelCreateTracking").addEventListener("click", closeModal);
@@ -832,7 +964,7 @@ function renderTrackingWorkspaceState() {
   const icon = node("span", "tracking-empty-icon", "TRK");
   if (!trackingState.allSessions.length) {
     const create = node("button", "primary", "+ Create Tracking Session"); create.type = "button"; create.addEventListener("click", createTrackingSessionModal);
-    const types = node("div", "tracking-empty-types"); types.append(node("span", "", "Person"), node("span", "", "Vehicle"));
+    const types = node("div", "tracking-empty-types"); types.append(node("span", "", "Person"), node("span", "", "Vehicle"), node("span", "", "Object"), node("span", "", "Animal"));
     empty.append(icon, node("span", "eyebrow", "Authorized camera workflow"), node("h2", "", "No active tracking sessions"), node("p", "", "Start a tracking session using a reference observation from an authorized CCTV camera."), types, create);
   } else {
     const select = node("button", "primary", "Select first active session"); select.type = "button"; select.addEventListener("click", () => handleSelectSession(trackingState.allSessions.find((session) => session.status !== "CLOSED")?.id || trackingState.allSessions[0].id));
@@ -851,7 +983,7 @@ export function renderTrackingPage() {
 
   panel.innerHTML = `
     <div class="tracking-header">
-      <div><span class="eyebrow">Multi-Camera Tracking</span><h1>Tracking Operations</h1><p>Track persons and vehicles across authorized camera feeds using human-reviewed candidate matching.</p></div>
+      <div><span class="eyebrow">AI-Assisted Multi-Entity Tracking</span><h1>Tracking Operations</h1><p>Track persons, vehicles, objects, and supported animals across authorized sources using human-reviewed candidate matching.</p></div>
       <button class="primary tracking-create-primary" id="createTrackingBtn">+ New Tracking Session</button>
     </div>
     <section class="tracking-kpis" id="trackingKpis" aria-label="Tracking summary"></section>
@@ -860,8 +992,8 @@ export function renderTrackingPage() {
         <div class="tracking-sidebar-head"><div><span class="eyebrow">Session Queue</span><h2>Active Tracks</h2></div><span class="tracking-live-dot">Live</span></div>
         <div class="tracking-filters">
           <label class="tracking-search">Search<input id="trackingSearch" type="search" placeholder="Tracking ID or camera" /></label>
-          <label>Type<select id="filterTrackType"><option value="all">All Types</option><option value="PERSON">Person</option><option value="VEHICLE">Vehicle</option></select></label>
-          <label>Status<select id="filterStatus"><option value="all">All Statuses</option><option value="SEARCHING">Active</option><option value="CANDIDATE_FOUND">Candidates Found</option><option value="HUMAN_REVIEW">Pending Review</option><option value="CONFIRMED">Confirmed</option><option value="REJECTED">Rejected</option><option value="CLOSED">Closed</option></select></label>
+          <label>Type<select id="filterTrackType"><option value="all">All Types</option><option value="PERSON">Person</option><option value="VEHICLE">Vehicle</option><option value="OBJECT">Object</option><option value="ANIMAL">Animal</option></select></label>
+          <label>Status<select id="filterStatus"><option value="all">All Statuses</option><option value="SEARCHING">Active</option><option value="CANDIDATE_FOUND">Candidates Found</option><option value="HUMAN_REVIEW">Pending Review</option><option value="CONFIRMED">Confirmed Activity</option><option value="REJECTED">Rejected</option><option value="CLOSED">Closed</option></select></label>
         </div>
         <div id="trackingSessionsList" class="sessions-list"></div>
       </aside>

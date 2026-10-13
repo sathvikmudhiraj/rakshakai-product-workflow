@@ -165,6 +165,41 @@ async function checkEvidenceUpload(page, role, width, browserName) {
   assert.match(await page.locator("#videoReviewSplit").innerText(), /Human verification is required/i);
 }
 
+async function checkTrackingLayout(page, viewport, screenshots, browserName, role) {
+  await page.locator('.nav-item[data-view="multi-camera-tracking"]').click();
+  const panel = page.locator('[data-panel="multi-camera-tracking"]');
+  await panel.locator(".tracking-header h1").waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector("#trackingSessionsList .tracking-loading"));
+  const layout = await panel.evaluate((element) => ({
+    panelOverflow: element.scrollWidth > element.clientWidth + 1,
+    documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    heading: element.querySelector(".tracking-header h1")?.textContent?.trim(),
+    createVisible: Boolean(element.querySelector("#createTrackingBtn")?.getClientRects().length),
+    workspaceVisible: Boolean(element.querySelector("#trackingContent")?.getClientRects().length)
+  }));
+  assert.equal(layout.panelOverflow, false, "Tracking panel must not overflow horizontally");
+  assert.equal(layout.documentOverflow, false, "Tracking page must not create document-level horizontal overflow");
+  assert.equal(layout.heading, "Tracking Operations");
+  assert.equal(layout.createVisible, true, "Tracking session action must remain visible");
+  assert.equal(layout.workspaceVisible, true, "Tracking workspace must remain visible");
+
+  await page.locator("#createTrackingBtn").click();
+  const dialog = page.locator('.tracking-session-modal [role="dialog"]');
+  await dialog.waitFor({ state: "visible" });
+  const trackType = dialog.locator('[name="trackType"]');
+  assert.deepEqual(await trackType.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["PERSON", "VEHICLE", "OBJECT", "ANIMAL"]);
+  await trackType.selectOption("OBJECT");
+  assert.equal(await dialog.locator("#trackingEntityLabelGroup").isVisible(), true);
+  assert.equal(await dialog.locator("#trackingEntityLabelText").innerText(), "Object class");
+  await trackType.selectOption("ANIMAL");
+  assert.equal(await dialog.locator("#trackingEntityLabelText").innerText(), "Animal species");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await page.locator("#createTrackingBtn").evaluate((button) => button === document.activeElement), true, "Closing the tracking dialog must restore focus");
+
+  await page.screenshot({ path: path.join(screenshots, `tracking-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
+}
+
 async function runBrowserChecks({ baseUrl, password }) {
   const users = JSON.parse(fs.readFileSync(path.join(__dirname, "../backend/data/db.example.json"), "utf8")).users;
   const screenshots = fs.mkdtempSync(path.join(os.tmpdir(), "rakshakai-browser-release-"));
@@ -172,7 +207,7 @@ async function runBrowserChecks({ baseUrl, password }) {
   for (const browserName of browserNames) {
     const browser = await browserTypes[browserName].launch(launchOptions(browserName));
     try {
-    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
       for (const role of ["Admin", "Police Officer", "Citizen"]) {
         const scenarioBaseUrl = browserName === "webkit"
           ? baseUrl.replace(/^http:/, "https:")
@@ -317,6 +352,7 @@ async function runBrowserChecks({ baseUrl, password }) {
               && violation.lineNumber === 5
             )), [], "No application CSP violations before rendering native media controls");
             await checkEvidenceUpload(page, role, viewport.width, browserName);
+            await checkTrackingLayout(page, viewport, screenshots, browserName, role);
           }
           assert.deepEqual(errors, [], "No uncaught browser errors");
           const cspViolations = await page.evaluate(() => window.releaseCspViolations);

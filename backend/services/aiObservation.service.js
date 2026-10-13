@@ -5,7 +5,13 @@ const auditLogsRepository = require("../repositories/auditLogs.repository");
 const { readDatabase, writeSelectedRecords, addAuditLog } = require("./core.service");
 const { writeEvidenceObject, readEvidenceObject, cleanupEvidenceObject } = require("./evidenceStorage.service");
 
-const SUPPORTED_LABELS = new Set(["person", "car", "truck", "bus", "motorcycle", "bicycle"]);
+// YOLOv8n uses the COCO label set. Keep this allow-list explicit so the UI
+// never claims support for a class the deployed detector cannot identify.
+const SUPPORTED_LABELS = new Set([
+  "person", "car", "truck", "bus", "motorcycle", "bicycle",
+  "backpack", "handbag", "suitcase", "umbrella", "bottle", "cell phone", "laptop",
+  "bird", "cat", "dog", "horse", "sheep", "cow"
+]);
 const REVIEW_STATES = new Set(["PENDING_REVIEW", "CONFIRMED", "REJECTED", "UNCERTAIN"]);
 const DEDUPE_WINDOW_MS = Math.max(1_000, Number(process.env.AI_OBSERVATION_DEDUPE_MS || 15_000));
 let persistenceQueue = Promise.resolve();

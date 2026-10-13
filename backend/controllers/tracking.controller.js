@@ -6,7 +6,8 @@ const trackingCandidatesRepository = require("../repositories/trackingCandidates
 const trackingVerificationsRepository = require("../repositories/trackingVerifications.repository");
 const cameraAdjacencyRepository = require("../repositories/cameraAdjacency.repository");
 const cameraSourcesRepository = require("../repositories/cameraSources.repository");
-const { readDatabase, writeDatabase, userFromReq, hasRole, addAuditLog } = require("../services/core.service");
+const auditLogsRepository = require("../repositories/auditLogs.repository");
+const { readDatabase, writeDatabase, writeSelectedRecords, userFromReq, hasRole, addAuditLog, routeBetween, routeUrl, strictPoint } = require("../services/core.service");
 const { withTransaction } = require("../services/postgres.service");
 const { getDatabaseMode } = require("../services/postgres.service");
 
@@ -32,8 +33,8 @@ async function authenticate(req, roles) {
 
 function validateTrackingSessionInput(body, user) {
   const trackType = String(body.trackType || "").toUpperCase();
-  if (!["PERSON", "VEHICLE"].includes(trackType)) {
-    throw Object.assign(new Error("trackType must be PERSON or VEHICLE"), { status: 400 });
+  if (!Object.values(TRACK_TYPES).includes(trackType)) {
+    throw Object.assign(new Error("trackType must be PERSON, VEHICLE, OBJECT, or ANIMAL"), { status: 400 });
   }
   const referenceDetectionId = String(body.referenceDetectionId || "").trim();
   if (!referenceDetectionId) throw Object.assign(new Error("referenceDetectionId is required"), { status: 400 });
@@ -46,7 +47,10 @@ function validateTrackingSessionInput(body, user) {
   const alertId = body.alertId ? String(body.alertId).trim() : null;
   const evidenceId = body.evidenceId ? String(body.evidenceId).trim() : null;
   const referenceObservation = body.referenceObservation || null;
-  return { trackType, referenceDetectionId, referenceCameraId, referenceTimestamp, incidentId, alertId, evidenceId, referenceObservation };
+  const referenceObservationId = body.referenceObservationId ? String(body.referenceObservationId).trim() : null;
+  const sourceType = evidenceId ? "EVIDENCE" : "CAMERA";
+  const sourceId = evidenceId || referenceCameraId;
+  return { trackType, referenceDetectionId, referenceCameraId, referenceTimestamp, incidentId, alertId, evidenceId, referenceObservation, referenceObservationId, sourceType, sourceId };
 }
 
 function validateVerificationInput(body) {
@@ -62,6 +66,19 @@ exports.createTrackingSession = async (req, res, next) => {
   try {
     const { db, user } = await authenticate(req, ["Police Officer", "Admin"]);
     const input = validateTrackingSessionInput(req.body, user);
+    if (!(db.cameraSources || []).some((camera) => camera.id === input.referenceCameraId)) {
+      throw Object.assign(new Error("Reference camera is not an authorized source"), { status: 404 });
+    }
+    if (input.evidenceId && !(db.videoEvidence || []).some((item) => item.id === input.evidenceId)) {
+      throw Object.assign(new Error("Reference evidence not found"), { status: 404 });
+    }
+    const referenceLabel = input.referenceObservation && trackingService.observationEntityLabel(input.referenceObservation, input.trackType);
+    if ([TRACK_TYPES.OBJECT, TRACK_TYPES.ANIMAL].includes(input.trackType) && !referenceLabel) {
+      throw Object.assign(new Error(`${input.trackType.toLowerCase()} reference label is required`), { status: 400 });
+    }
+    if (referenceLabel && !trackingService.supportedEntityLabel(input.trackType, referenceLabel)) {
+      throw Object.assign(new Error(`Unsupported by current AI model: ${input.trackType.toLowerCase()} label '${referenceLabel}'`), { status: 422, code: "TRACKING_LABEL_UNSUPPORTED" });
+    }
     const databaseMode = getDatabaseMode();
 
     const result = await (databaseMode === "postgres"
@@ -71,24 +88,33 @@ exports.createTrackingSession = async (req, res, next) => {
             { ...input, createdBy: user.id }
           );
           if (input.referenceObservation) {
-            await trackingService.createObservation(
+            const observation = await trackingService.createObservation(
               { ...db, client },
-              { sessionId: session.id, ...input.referenceObservation }
+              { ...input.referenceObservation, sessionId: session.id, cameraId: input.referenceCameraId, detectedAt: input.referenceTimestamp, detectionId: input.referenceDetectionId, trackType: input.trackType,
+                sourceType: input.sourceType, sourceId: input.sourceId, evidenceId: input.evidenceId }
             );
+            session.referenceObservationId = observation.id;
+            await trackingSessionsRepository.upsert(session, client);
           }
           return session;
         })
       : (async () => {
           const session = await trackingService.createTrackingSession(db, { ...input, createdBy: user.id });
           if (input.referenceObservation) {
-            await trackingService.createObservation(db, { sessionId: session.id, ...input.referenceObservation });
+            const observation = await trackingService.createObservation(db, { ...input.referenceObservation, sessionId: session.id, cameraId: input.referenceCameraId,
+              detectedAt: input.referenceTimestamp, detectionId: input.referenceDetectionId, trackType: input.trackType,
+              sourceType: input.sourceType, sourceId: input.sourceId, evidenceId: input.evidenceId });
+            session.referenceObservationId = observation.id;
+            await trackingSessionsRepository.upsert(session, db);
           }
           await writeDatabase(db);
           return session;
         })()
     );
 
-    addAuditLog(db, "tracking_session_created", user, result.id, `Created ${input.trackType} tracking session from camera ${input.referenceCameraId}`, isoNow());
+    const startAction = input.evidenceId ? "tracking_started_from_evidence" : "tracking_session_started";
+    const startAudit = addAuditLog(db, startAction, user, result.id, `Entity ${input.trackType}; source ${input.sourceType}:${input.sourceId}`, isoNow());
+    await writeSelectedRecords(db, [[auditLogsRepository, [startAudit]]]);
 
     emitTrackingEvent("tracking_session_created", { session: result });
 
@@ -105,8 +131,9 @@ exports.getTrackingSession = async (req, res, next) => {
     const session = (await trackingSessionsRepository.list(db)).find((s) => s.id === sessionId);
     if (!session) throw Object.assign(new Error("Tracking session not found"), { status: 404 });
 
-    const observations = (await trackingObservationsRepository.list(db)).filter((o) => o.sessionId === sessionId);
     const candidates = (await trackingCandidatesRepository.list(db)).filter((c) => c.sessionId === sessionId);
+    const candidateObservationIds = new Set(candidates.map((candidate) => candidate.observationId));
+    const observations = (await trackingObservationsRepository.list(db)).filter((observation) => observation.sessionId === sessionId || candidateObservationIds.has(observation.id));
     const verifications = (await trackingVerificationsRepository.list(db)).filter((v) => v.sessionId === sessionId);
 
     res.json({ session, observations, candidates, verifications });
@@ -151,12 +178,10 @@ exports.searchCandidates = async (req, res, next) => {
     const referenceObs = observations.find((o) => o.detectionId === session.referenceDetectionId) || observations[0];
     if (!referenceObs) throw Object.assign(new Error("Reference observation not found"), { status: 404 });
 
-    let candidates;
-    if (session.trackType === TRACK_TYPES.PERSON) {
-      candidates = await trackingService.searchCandidatesForPerson(db, session, referenceObs, parseInt(timeWindowMinutes, 10));
-    } else {
-      candidates = await trackingService.searchCandidatesForVehicle(db, session, referenceObs, parseInt(timeWindowMinutes, 10));
-    }
+    let candidates = await trackingService.searchCandidates(db, session, referenceObs, parseInt(timeWindowMinutes, 10));
+    const existingObservationIds = new Set((await trackingCandidatesRepository.list(db))
+      .filter((candidate) => candidate.sessionId === sessionId).map((candidate) => candidate.observationId));
+    candidates = candidates.filter((candidate) => !existingObservationIds.has(candidate.observationId));
 
     if (candidates.length > 0) {
       await (getDatabaseMode() === "postgres"
@@ -176,7 +201,8 @@ exports.searchCandidates = async (req, res, next) => {
       emitTrackingEvent("tracking_candidates_found", { sessionId, candidates, count: candidates.length });
     }
 
-    addAuditLog(db, "tracking_search_performed", user, sessionId, `Found ${candidates.length} candidates`, isoNow());
+    const searchAudit = addAuditLog(db, candidates.length ? "candidate_found" : "tracking_search_performed", user, sessionId, `Entity ${session.trackType}; found ${candidates.length} candidates`, isoNow());
+    await writeSelectedRecords(db, [[auditLogsRepository, [searchAudit]]]);
 
     res.json({ session, candidates, referenceObservation: referenceObs });
   } catch (error) {
@@ -196,6 +222,9 @@ exports.verifyCandidate = async (req, res, next) => {
 
     const candidate = (await trackingCandidatesRepository.list(db)).find((c) => c.id === candidateId && c.sessionId === sessionId);
     if (!candidate) throw Object.assign(new Error("Candidate not found"), { status: 404 });
+    if (!["PENDING_REVIEW", "UNCERTAIN"].includes(candidate.status)) {
+      throw Object.assign(new Error("Candidate has already received a final human decision"), { status: 409 });
+    }
 
     const databaseMode = getDatabaseMode();
 
@@ -214,6 +243,7 @@ exports.verifyCandidate = async (req, res, next) => {
           };
           await trackingVerificationsRepository.upsert(verification, client);
 
+          candidate.verificationId = verification.id;
           candidate.status = decision === "CONFIRM_MATCH" ? "CONFIRMED" : decision === "REJECT_MATCH" ? "REJECTED" : "UNCERTAIN";
           candidate.reviewedAt = isoNow();
           candidate.reviewedBy = user.id;
@@ -223,23 +253,30 @@ exports.verifyCandidate = async (req, res, next) => {
           if (decision === "CONFIRM_MATCH") {
             const obs = (await trackingObservationsRepository.list({ ...db, client })).find((o) => o.id === candidate.observationId);
             if (obs) {
+              const previousCamera = (db.cameraSources || []).find((camera) => camera.id === (session.lastSeenCameraId || session.referenceCameraId));
+              const confirmedCamera = (db.cameraSources || []).find((camera) => camera.id === obs.cameraId);
+              const previousJurisdiction = previousCamera?.jurisdiction || previousCamera?.zone || null;
+              const confirmedJurisdiction = confirmedCamera?.jurisdiction || confirmedCamera?.zone || null;
               session.lastSeenCameraId = obs.cameraId;
               session.lastSeenAt = obs.detectedAt;
               session.confidence = candidate.overallConfidence;
               session.verificationStatus = "CONFIRMED";
-              if (session.status !== "CONFIRMED" && session.status !== "CLOSED") {
-                session.status = "HUMAN_REVIEW";
-              }
+              session.status = session.status === "CLOSED" ? "CLOSED" : "CONFIRMED";
+              session.lastConfirmedObservationId = obs.id;
               session.updatedAt = isoNow();
               await trackingSessionsRepository.upsert(session, client);
+              const locationAudit = addAuditLog({ ...db, client }, "confirmed_location_updated", user, sessionId, `Entity ${session.trackType}; camera ${obs.cameraId}; observation ${obs.id}`, isoNow());
+              await auditLogsRepository.upsert(locationAudit, client);
+              if (previousJurisdiction && confirmedJurisdiction && previousJurisdiction !== confirmedJurisdiction) {
+                const jurisdictionAudit = addAuditLog({ ...db, client }, "jurisdiction_changed", user, sessionId, `Entity ${session.trackType}; ${previousJurisdiction} -> ${confirmedJurisdiction}`, isoNow());
+                await auditLogsRepository.upsert(jurisdictionAudit, client);
+              }
             }
-          } else if (decision === "REJECT_MATCH") {
-            session.verificationStatus = "REJECTED";
-            session.updatedAt = isoNow();
-            await trackingSessionsRepository.upsert(session, client);
           }
 
-          addAuditLog({ ...db, client }, "tracking_candidate_verified", user, sessionId, `Candidate ${candidateId} ${decision.toLowerCase().replace("_", " ")}: ${reason || "No reason provided"}`, isoNow());
+          const action = decision === "CONFIRM_MATCH" ? "candidate_confirmed" : decision === "REJECT_MATCH" ? "candidate_rejected" : "candidate_uncertain";
+          const decisionAudit = addAuditLog({ ...db, client }, action, user, sessionId, `Entity ${session.trackType}; candidate ${candidateId}: ${reason || "No reason provided"}`, isoNow());
+          await auditLogsRepository.upsert(decisionAudit, client);
         })
       : (async () => {
           const verification = {
@@ -255,6 +292,7 @@ exports.verifyCandidate = async (req, res, next) => {
           };
           await trackingVerificationsRepository.upsert(verification, db);
 
+          candidate.verificationId = verification.id;
           candidate.status = decision === "CONFIRM_MATCH" ? "CONFIRMED" : decision === "REJECT_MATCH" ? "REJECTED" : "UNCERTAIN";
           candidate.reviewedAt = isoNow();
           candidate.reviewedBy = user.id;
@@ -264,28 +302,38 @@ exports.verifyCandidate = async (req, res, next) => {
           if (decision === "CONFIRM_MATCH") {
             const obs = (await trackingObservationsRepository.list(db)).find((o) => o.id === candidate.observationId);
             if (obs) {
+              const previousCamera = (db.cameraSources || []).find((camera) => camera.id === (session.lastSeenCameraId || session.referenceCameraId));
+              const confirmedCamera = (db.cameraSources || []).find((camera) => camera.id === obs.cameraId);
+              const previousJurisdiction = previousCamera?.jurisdiction || previousCamera?.zone || null;
+              const confirmedJurisdiction = confirmedCamera?.jurisdiction || confirmedCamera?.zone || null;
               session.lastSeenCameraId = obs.cameraId;
               session.lastSeenAt = obs.detectedAt;
               session.confidence = candidate.overallConfidence;
               session.verificationStatus = "CONFIRMED";
-              if (session.status !== "CONFIRMED" && session.status !== "CLOSED") {
-                session.status = "HUMAN_REVIEW";
-              }
+              session.status = session.status === "CLOSED" ? "CLOSED" : "CONFIRMED";
+              session.lastConfirmedObservationId = obs.id;
               session.updatedAt = isoNow();
               await trackingSessionsRepository.upsert(session, db);
+              addAuditLog(db, "confirmed_location_updated", user, sessionId, `Entity ${session.trackType}; camera ${obs.cameraId}; observation ${obs.id}`, isoNow());
+              if (previousJurisdiction && confirmedJurisdiction && previousJurisdiction !== confirmedJurisdiction) {
+                addAuditLog(db, "jurisdiction_changed", user, sessionId, `Entity ${session.trackType}; ${previousJurisdiction} -> ${confirmedJurisdiction}`, isoNow());
+              }
             }
-          } else if (decision === "REJECT_MATCH") {
-            session.verificationStatus = "REJECTED";
-            session.updatedAt = isoNow();
-            await trackingSessionsRepository.upsert(session, db);
           }
 
-          addAuditLog(db, "tracking_candidate_verified", user, sessionId, `Candidate ${candidateId} ${decision.toLowerCase().replace("_", " ")}: ${reason || "No reason provided"}`, isoNow());
+          const action = decision === "CONFIRM_MATCH" ? "candidate_confirmed" : decision === "REJECT_MATCH" ? "candidate_rejected" : "candidate_uncertain";
+          addAuditLog(db, action, user, sessionId, `Entity ${session.trackType}; candidate ${candidateId}: ${reason || "No reason provided"}`, isoNow());
           await writeDatabase(db);
         })()
     );
 
     emitTrackingEvent("tracking_candidate_verified", { sessionId, candidateId, decision, reason, verifiedBy: user.id });
+    if (decision === "CONFIRM_MATCH") {
+      emitTrackingEvent("tracking_last_seen_updated", {
+        sessionId, entityType: session.trackType, cameraId: session.lastSeenCameraId,
+        observedAt: session.lastSeenAt, candidateId, humanVerified: true
+      });
+    }
 
     res.json({ session, candidate, verification: { decision, reason, actorId: user.id, timestamp: isoNow() } });
   } catch (error) {
@@ -315,7 +363,8 @@ exports.closeTrackingSession = async (req, res, next) => {
         })()
     );
 
-    addAuditLog(db, "tracking_session_closed", user, sessionId, "Tracking session closed by operator", isoNow());
+    const closeAudit = addAuditLog(db, "tracking_session_closed", user, sessionId, `Entity ${session.trackType}; tracking session closed by operator`, isoNow());
+    await writeSelectedRecords(db, [[auditLogsRepository, [closeAudit]]]);
     emitTrackingEvent("tracking_session_closed", { sessionId });
 
     res.json({ session });
@@ -354,12 +403,12 @@ exports.getSessionTimeline = async (req, res, next) => {
     const session = (await trackingSessionsRepository.list(db)).find((s) => s.id === sessionId);
     if (!session) throw Object.assign(new Error("Tracking session not found"), { status: 404 });
 
-    const observations = (await trackingObservationsRepository.list(db))
-      .filter((o) => o.sessionId === sessionId)
-      .sort((a, b) => new Date(a.detectedAt).getTime() - new Date(b.detectedAt).getTime());
-
     const candidates = (await trackingCandidatesRepository.list(db))
       .filter((c) => c.sessionId === sessionId)
+      .sort((a, b) => new Date(a.detectedAt).getTime() - new Date(b.detectedAt).getTime());
+    const candidateObservationIds = new Set(candidates.map((candidate) => candidate.observationId));
+    const observations = (await trackingObservationsRepository.list(db))
+      .filter((observation) => observation.sessionId === sessionId || candidateObservationIds.has(observation.id))
       .sort((a, b) => new Date(a.detectedAt).getTime() - new Date(b.detectedAt).getTime());
 
     const verifications = (await trackingVerificationsRepository.list(db))
@@ -399,43 +448,131 @@ exports.getSessionMapData = async (req, res, next) => {
     const session = (await trackingSessionsRepository.list(db)).find((s) => s.id === sessionId);
     if (!session) throw Object.assign(new Error("Tracking session not found"), { status: 404 });
 
-    const observations = (await trackingObservationsRepository.list(db))
-      .filter((o) => o.sessionId === sessionId)
-      .sort((a, b) => new Date(a.detectedAt).getTime() - new Date(b.detectedAt).getTime());
-
-    const candidates = (await trackingCandidatesRepository.list(db))
-      .filter((c) => c.sessionId === sessionId && c.status === "CONFIRMED");
-
-    const confirmedObsIds = new Set(candidates.map((c) => c.observationId));
-    const confirmedObservations = observations.filter((o) => confirmedObsIds.has(o.id));
-
-    const trackPoints = [];
-    const allTrackObs = [session.referenceCameraId, ...confirmedObservations.map((o) => o.cameraId)];
-    for (const camId of allTrackObs) {
-      const cam = (db.cameraSources || []).find((c) => c.id === camId);
-      if (cam?.latitude && cam?.longitude) {
-        const obs = observations.find((o) => o.cameraId === camId) || confirmedObservations.find((o) => o.cameraId === camId);
-        trackPoints.push({
-          cameraId: cam.id,
-          cameraName: cam.name || cam.cameraId,
-          lat: cam.latitude,
-          lng: cam.longitude,
-          timestamp: obs?.detectedAt,
-          isReference: camId === session.referenceCameraId,
-          isLastSeen: camId === session.lastSeenCameraId
-        });
-      }
+    const allObservations = await trackingObservationsRepository.list(db);
+    const reference = allObservations.find((item) => item.id === session.referenceObservationId)
+      || allObservations.find((item) => item.sessionId === sessionId && item.detectionId === session.referenceDetectionId);
+    const candidates = (await trackingCandidatesRepository.list(db)).filter((item) => item.sessionId === sessionId);
+    const observationById = new Map(allObservations.map((item) => [item.id, item]));
+    const pointFor = (observation, state, candidate = null) => {
+      if (!observation) return null;
+      const camera = (db.cameraSources || []).find((item) => item.id === observation.cameraId);
+      const lat = Number(camera?.lat ?? camera?.latitude);
+      const lng = Number(camera?.lng ?? camera?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { cameraId: camera.id, cameraName: camera.name || camera.cameraId || camera.id, lat, lng,
+        timestamp: observation.detectedAt, state, candidateId: candidate?.id || null,
+        confidence: candidate?.overallConfidence ?? null, isReference: state === "REFERENCE",
+        isLastSeen: state === "CONFIRMED" && camera.id === session.lastSeenCameraId };
+    };
+    const referencePoint = pointFor(reference || { cameraId: session.referenceCameraId, detectedAt: session.referenceTimestamp }, "REFERENCE");
+    const confirmedPoints = candidates.filter((item) => item.status === "CONFIRMED")
+      .map((item) => pointFor(observationById.get(item.observationId), "CONFIRMED", item)).filter(Boolean)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const pendingPoints = candidates.filter((item) => ["PENDING_REVIEW", "UNCERTAIN"].includes(item.status))
+      .map((item) => pointFor(observationById.get(item.observationId), item.status, item)).filter(Boolean);
+    const trackPoints = [referencePoint, ...confirmedPoints].filter(Boolean);
+    let totalDistanceMeters = 0;
+    for (let index = 1; index < confirmedPoints.length; index += 1) {
+      totalDistanceMeters += trackingService.haversineDistance(confirmedPoints[index - 1].lat, confirmedPoints[index - 1].lng, confirmedPoints[index].lat, confirmedPoints[index].lng);
     }
+    const elapsedSeconds = confirmedPoints.length > 1
+      ? Math.max(1, (new Date(confirmedPoints.at(-1).timestamp) - new Date(confirmedPoints[0].timestamp)) / 1000) : 0;
+    const directionDegrees = confirmedPoints.length > 1
+      ? Math.round(trackingService.bearingBetween(confirmedPoints[0].lat, confirmedPoints[0].lng, confirmedPoints.at(-1).lat, confirmedPoints.at(-1).lng)) : null;
 
     res.json({
       session,
       trackPoints,
-      referenceCamera: trackPoints.find((p) => p.isReference),
-      lastSeenCamera: trackPoints.find((p) => p.isLastSeen)
+      pendingPoints,
+      referenceCamera: referencePoint,
+      lastSeenCamera: confirmedPoints.find((point) => point.isLastSeen) || null,
+      movement: { basedOnConfirmedSightings: true, confirmedPointCount: confirmedPoints.length,
+        totalDistanceMeters: Math.round(totalDistanceMeters), elapsedSeconds, directionDegrees,
+        averageSpeedMps: elapsedSeconds ? Number((totalDistanceMeters / elapsedSeconds).toFixed(2)) : null }
     });
   } catch (error) {
     next(error);
   }
+};
+
+async function trackingRecommendations(db, session) {
+  if (session.verificationStatus !== "CONFIRMED" || !session.lastSeenCameraId) {
+    return { authoritative: false, reason: "A human-confirmed sighting is required before operational recommendations are available.", stations: [], units: [] };
+  }
+  const camera = (db.cameraSources || []).find((item) => item.id === session.lastSeenCameraId);
+  const lat = Number(camera?.lat ?? camera?.latitude);
+  const lng = Number(camera?.lng ?? camera?.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { authoritative: false, reason: "The confirmed camera has no valid GIS coordinates.", stations: [], units: [] };
+  }
+  const distanceFrom = (item) => {
+    const itemLat = Number(item.lat ?? item.latitude);
+    const itemLng = Number(item.lng ?? item.longitude);
+    return Number.isFinite(itemLat) && Number.isFinite(itemLng) ? trackingService.haversineDistance(lat, lng, itemLat, itemLng) : null;
+  };
+  const stationSeeds = (db.policeStations || []).map((station) => ({
+    id: station.id, name: station.stationName || station.name || station.id,
+    jurisdiction: station.jurisdiction || null, operational: station.operational !== false,
+    availableUnits: (db.responseUnits || []).filter((unit) => (unit.stationId || unit.linkedStationId || unit.policeStationId) === station.id
+      && ["AVAILABLE", "ACTIVE", "PATROLLING"].includes(String(unit.status || "").toUpperCase())).length,
+    distanceMeters: distanceFrom(station)
+  })).filter((item) => item.operational && item.distanceMeters != null)
+    .sort((left, right) => left.distanceMeters - right.distanceMeters).slice(0, 5);
+  const stations = await Promise.all(stationSeeds.map(async (item) => {
+    const station = (db.policeStations || []).find((record) => record.id === item.id);
+    const route = await routeBetween(routeUrl(strictPoint(station), { lat, lng }));
+    return { ...item, distanceMeters: route.distanceMeters, distanceKm: route.distanceKm,
+      etaMinutes: route.durationMinutes, approximate: Boolean(route.approximate), route,
+      reason: `${item.jurisdiction ? `${item.jurisdiction} jurisdiction; ` : ""}operational station ranked by road ETA and distance from the human-confirmed camera${route.approximate ? " (routing fallback)" : ""}.` };
+  }));
+  stations.sort((left, right) => left.etaMinutes - right.etaMinutes || left.distanceMeters - right.distanceMeters);
+  const unitSeeds = (db.responseUnits || []).map((unit) => ({
+    id: unit.id, unitCode: unit.unitCode || unit.callsign || unit.id, status: unit.status,
+    stationId: unit.stationId || unit.policeStationId || null, workload: Number(unit.activeIncidentCount || 0),
+    distanceMeters: distanceFrom(unit)
+  })).filter((item) => ["AVAILABLE", "ACTIVE", "PATROLLING"].includes(String(item.status || "").toUpperCase()) && item.distanceMeters != null)
+    .sort((left, right) => left.distanceMeters - right.distanceMeters || left.workload - right.workload).slice(0, 5);
+  const units = await Promise.all(unitSeeds.map(async (item) => {
+    const unit = (db.responseUnits || []).find((record) => record.id === item.id);
+    const route = await routeBetween(routeUrl(strictPoint(unit), { lat, lng }));
+    return { ...item, distanceMeters: route.distanceMeters, distanceKm: route.distanceKm,
+      etaMinutes: route.durationMinutes, approximate: Boolean(route.approximate), route,
+      reason: `Eligible ${String(item.status).toUpperCase()} unit ranked by road ETA, distance, jurisdiction and workload (${item.workload})${route.approximate ? "; routing fallback in use" : ""}.` };
+  }));
+  units.sort((left, right) => left.etaMinutes - right.etaMinutes || left.distanceMeters - right.distanceMeters || left.workload - right.workload);
+  return { authoritative: true, confirmedCameraId: camera.id, confirmedAt: session.lastSeenAt, stations, units,
+    explanation: "Recommendations use only the latest human-confirmed sighting. Selecting a unit does not dispatch it." };
+}
+
+exports.getSessionRecommendations = async (req, res, next) => {
+  try {
+    const { db, user } = await authenticate(req, ["Police Officer", "Admin"]);
+    const session = (await trackingSessionsRepository.list(db)).find((item) => item.id === req.params.sessionId);
+    if (!session) throw Object.assign(new Error("Tracking session not found"), { status: 404 });
+    const recommendations = await trackingRecommendations(db, session);
+    if (recommendations.authoritative) {
+      const details = `Entity ${session.trackType}; confirmed camera ${recommendations.confirmedCameraId}`;
+      const existingActions = new Set((db.auditLogs || []).filter((log) => log.incidentId === session.id && log.details === details).map((log) => log.action));
+      const audits = [];
+      if (!existingActions.has("station_recommendations_generated")) audits.push(addAuditLog(db, "station_recommendations_generated", user, session.id, details, isoNow()));
+      if (!existingActions.has("unit_recommendations_generated")) audits.push(addAuditLog(db, "unit_recommendations_generated", user, session.id, details, isoNow()));
+      if (audits.length) await writeSelectedRecords(db, [[auditLogsRepository, audits]]);
+    }
+    res.json({ sessionId: session.id, recommendations });
+  } catch (error) { next(error); }
+};
+
+exports.handoffSession = async (req, res, next) => {
+  try {
+    const { db, user } = await authenticate(req, ["Police Officer", "Admin"]);
+    const session = (await trackingSessionsRepository.list(db)).find((item) => item.id === req.params.sessionId);
+    if (!session) throw Object.assign(new Error("Tracking session not found"), { status: 404 });
+    if (session.verificationStatus !== "CONFIRMED") throw Object.assign(new Error("Confirm a sighting before operational handoff"), { status: 409 });
+    const unitId = req.body?.unitId ? String(req.body.unitId) : null;
+    const audit = addAuditLog(db, "unit_assignment_opened_from_tracking", user, session.id, `Entity ${session.trackType}${unitId ? `; unit ${unitId}` : ""}; no dispatch was performed`, isoNow());
+    await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);
+    res.json({ sessionId: session.id, unitId, dispatched: false, navigateTo: "unit-assignment", message: "Review and confirm dispatch manually in Unit Assignment." });
+  } catch (error) { next(error); }
 };
 
 exports.getCameraAdjacency = async (req, res, next) => {
@@ -504,10 +641,23 @@ exports.updateScoreConfig = async (req, res, next) => {
     if (!trackType || !weightKey || weightValue == null) {
       throw Object.assign(new Error("trackType, weightKey, weightValue are required"), { status: 400 });
     }
+    const normalizedTrackType = String(trackType).toUpperCase();
+    const allowedWeights = {
+      PERSON: trackingService.DEFAULT_PERSON_WEIGHTS,
+      VEHICLE: trackingService.DEFAULT_VEHICLE_WEIGHTS,
+      OBJECT: trackingService.DEFAULT_OBJECT_WEIGHTS,
+      ANIMAL: trackingService.DEFAULT_ANIMAL_WEIGHTS
+    };
+    if (!allowedWeights[normalizedTrackType] || !Object.prototype.hasOwnProperty.call(allowedWeights[normalizedTrackType], weightKey)) {
+      throw Object.assign(new Error("Unsupported score weight for this tracking type"), { status: 400 });
+    }
+    if (!Number.isFinite(Number(weightValue)) || Number(weightValue) < 0 || Number(weightValue) > 1) {
+      throw Object.assign(new Error("weightValue must be between 0 and 1"), { status: 400 });
+    }
 
     const config = {
       id: uid("cfg"),
-      trackType: trackType.toUpperCase(),
+      trackType: normalizedTrackType,
       weightKey,
       weightValue: Number(weightValue),
       description: description || null,
@@ -548,5 +698,6 @@ exports.getScoreConfig = async (req, res, next) => {
 
 exports.__testables = {
   validateTrackingSessionInput,
-  validateVerificationInput
+  validateVerificationInput,
+  trackingRecommendations
 };

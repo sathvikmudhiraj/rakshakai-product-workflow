@@ -36,7 +36,9 @@ test("tracking routes enforce API RBAC for unauthenticated and Citizen callers",
   for (const request of [
     fetch(`${baseUrl}/api/tracking/sessions`, { headers: headers("Citizen") }),
     fetch(`${baseUrl}/api/tracking/sessions`, { method: "POST", headers: headers("Citizen"), body: JSON.stringify({ trackType: "PERSON", referenceDetectionId: "det", referenceCameraId: "cam_c19" }) }),
-    fetch(`${baseUrl}/api/tracking/sessions/missing/search`, { method: "POST", headers: headers("Citizen"), body: "{}" })
+    fetch(`${baseUrl}/api/tracking/sessions/missing/search`, { method: "POST", headers: headers("Citizen"), body: "{}" }),
+    fetch(`${baseUrl}/api/tracking/sessions/missing/recommendations`, { headers: headers("Citizen") }),
+    fetch(`${baseUrl}/api/tracking/sessions/missing/handoff`, { method: "POST", headers: headers("Citizen"), body: "{}" })
   ]) assert.equal((await request).status, 403);
 });
 

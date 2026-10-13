@@ -35,7 +35,9 @@ async function runSlaSweep({
     if (!alert.active) return;
     Object.assign(alert, {
       active: false, resolved: true, resolvedAt: currentIso,
-      resolvedBy: "system:sla-scheduler", updatedAt: currentIso
+      // resolved_by is a foreign key to users(id). Automated resolutions have
+      // no human actor; the scheduler identity is retained in the timeline.
+      resolvedBy: null, updatedAt: currentIso
     });
     resolvedAlerts.push(alert);
     addTimeline(incident, "ESCALATION_ALERT_RESOLVED", `${alert.title}: ${reason}`, {

@@ -21,6 +21,7 @@ module.exports = createRepository({
     { name: "updated_at", value: (item) => dateValue(item.updatedAt || item.createdAt) }
   ],
   deserialize: (row) => ({
+    ...(row.data || {}),
     id: row.id,
     trackType: row.track_type,
     status: row.status,

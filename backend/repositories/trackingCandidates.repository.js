@@ -29,6 +29,7 @@ module.exports = createRepository({
     { name: "created_at", value: (item) => dateValue(item.createdAt) }
   ],
   deserialize: (row) => ({
+    ...(row.data || {}),
     id: row.id,
     sessionId: row.session_id,
     observationId: row.observation_id,

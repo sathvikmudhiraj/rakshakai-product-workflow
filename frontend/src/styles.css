@@ -2533,3 +2533,27 @@ body.notification-center-mounted .copilot-launcher { display: grid; }
   .copilot-safety-note { text-align: left; }
   .copilot-message.user { max-width: 94%; margin-left: auto; }
 }
+.tracking-recommendation-list {
+  display: grid;
+  gap: 12px;
+}
+
+.tracking-recommendation-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 14px;
+  border: 1px solid var(--border, #d8e1e7);
+  border-radius: 12px;
+  background: #f8fbfc;
+}
+
+.tracking-recommendation-card span,
+.tracking-recommendation-card small { grid-column: 1; }
+.tracking-recommendation-card button { grid-column: 2; grid-row: 1 / span 3; }
+
+@media (max-width: 640px) {
+  .tracking-recommendation-card { grid-template-columns: minmax(0, 1fr); }
+  .tracking-recommendation-card button { grid-column: 1; grid-row: auto; width: 100%; }
+}

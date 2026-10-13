@@ -41,6 +41,7 @@ module.exports = createRepository({
     { name: "ai_metadata", value: (item) => JSON.stringify(item.aiMetadata || {}) }
   ],
   deserialize: (row) => ({
+    ...(row.data || {}),
     id: row.id,
     sessionId: row.session_id,
     cameraId: row.camera_id,

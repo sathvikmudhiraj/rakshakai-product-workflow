@@ -33,7 +33,7 @@ import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } f
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
 import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
-import { configureTracking, renderTrackingPage, cleanupTracking } from "./components/MultiCameraTracking.js";
+import { configureTracking, renderTrackingPage, cleanupTracking, createTrackingSessionModal } from "./components/MultiCameraTracking.js";
 import { configureCopilot, mountCopilot, openCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
 import { mountNotificationCenter, unmountNotificationCenter } from "./components/NotificationCenter.js";
 
@@ -3899,7 +3899,10 @@ function renderVideoEvidence(data = state.videoEvidence) {
       const analyze = node("button", "primary", "Run AI Analysis");
       analyze.type = "button";
       analyze.dataset.evidenceAnalyze = evidence.id;
-      actions.append(select, analyze);
+      const track = node("button", "ghost", "Start Tracking");
+      track.type = "button";
+      track.dataset.evidenceTrack = evidence.id;
+      actions.append(select, analyze, track);
       card.append(head, meta, actions);
       list.append(card);
     });
@@ -3970,6 +3973,11 @@ function renderVideoReviewPanel() {
       convert.dataset.observationConvert = observation.id;
       convert.disabled = status !== "verified";
       actions.append(convert);
+      const startTracking = node("button", "ghost", "Start Tracking");
+      startTracking.type = "button";
+      startTracking.dataset.observationTrack = observation.id;
+      startTracking.dataset.evidenceId = evidence.id;
+      actions.append(startTracking);
       card.append(notes, actions);
       right.append(card);
     });
@@ -6127,9 +6135,20 @@ $("#videoEvidenceForm")?.addEventListener("submit", async (event) => {
 $("#videoEvidenceList")?.addEventListener("click", async (event) => {
   const select = event.target.closest("[data-evidence-select]");
   const analyze = event.target.closest("[data-evidence-analyze]");
-  if (!select && !analyze) return;
-  const id = select?.dataset.evidenceSelect || analyze?.dataset.evidenceAnalyze;
+  const track = event.target.closest("[data-evidence-track]");
+  if (!select && !analyze && !track) return;
+  const id = select?.dataset.evidenceSelect || analyze?.dataset.evidenceAnalyze || track?.dataset.evidenceTrack;
   state.activeEvidenceId = id;
+  if (track) {
+    const evidence = (state.videoEvidence?.evidence || []).find((item) => item.id === id);
+    setView("multi-camera-tracking");
+    createTrackingSessionModal({
+      evidenceId: id,
+      referenceDetectionId: `evidence_${id}`,
+      referenceCameraId: evidence?.cameraId || evidence?.sourceCameraId || ""
+    });
+    return;
+  }
   if (select) return renderVideoEvidence();
   const original = analyze.textContent;
   analyze.disabled = true;
@@ -6148,6 +6167,24 @@ $("#videoEvidenceList")?.addEventListener("click", async (event) => {
 $("#videoReviewSplit")?.addEventListener("click", async (event) => {
   const review = event.target.closest("[data-observation-review]");
   const convert = event.target.closest("[data-observation-convert]");
+  const track = event.target.closest("[data-observation-track]");
+  if (track) {
+    const evidenceId = track.dataset.evidenceId;
+    const observation = (state.videoEvidence?.observations || []).find((item) => item.id === track.dataset.observationTrack);
+    const evidence = (state.videoEvidence?.evidence || []).find((item) => item.id === evidenceId);
+    const trackType = observation?.vehicleType || observation?.possiblePlateText ? "VEHICLE" : observation?.objectType ? "OBJECT" : "PERSON";
+    const supportedObjectLabel = String(observation?.objectType || "").toLowerCase().match(/backpack|handbag|suitcase|umbrella|bottle|cell phone|laptop/)?.[0] || "";
+    setView("multi-camera-tracking");
+    createTrackingSessionModal({
+      trackType,
+      evidenceId,
+      entityLabel: supportedObjectLabel,
+      referenceDetectionId: observation?.id || track.dataset.observationTrack,
+      referenceTimestamp: observation?.capturedAt || observation?.createdAt || evidence?.uploadedAt,
+      referenceCameraId: observation?.cameraId || evidence?.cameraId || evidence?.sourceCameraId || ""
+    });
+    return;
+  }
   if (!review && !convert) return;
   const id = review?.dataset.observationReview || convert?.dataset.observationConvert;
   const notes = $(`[data-observation-notes="${id}"]`)?.value || "";

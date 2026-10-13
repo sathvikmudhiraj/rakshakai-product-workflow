@@ -120,15 +120,48 @@ function deriveNotifications(db) {
 
   for (const candidate of db.trackingCandidates || []) {
     const status = String(candidate.status || "PENDING_REVIEW").toUpperCase();
+    const session = (db.trackingSessions || []).find((item) => item.id === candidate.sessionId);
+    const entity = titleWords(candidate.entityType || session?.trackType || "entity");
     notifications.push(record({
       dedupeKey: `tracking_candidate_${status}:${candidate.id}`,
       type: status === "PENDING_REVIEW" ? "tracking_review" : `tracking_${status.toLowerCase()}`,
-      title: status === "PENDING_REVIEW" ? "Tracking Review" : `Tracking ${titleWords(status)}`,
-      message: status === "PENDING_REVIEW" ? "Possible match requires human verification" : `Tracking candidate was ${titleWords(status).toLowerCase()}`,
+      title: status === "PENDING_REVIEW" ? `${entity} Sighting Review` : `${entity} Sighting ${titleWords(status)}`,
+      message: status === "PENDING_REVIEW" ? `Possible ${entity.toLowerCase()} sighting requires human verification` : `${entity} sighting was ${titleWords(status).toLowerCase()}`,
       severity: status === "PENDING_REVIEW" ? "MEDIUM" : "INFO",
       entityType: "tracking_candidate", entityId: candidate.id,
       createdAt: candidate.createdAt || candidate.detectedAt || candidate.reviewedAt,
       source: candidate.sessionId || "Multi-Camera Tracking"
+    }));
+  }
+
+  for (const session of db.trackingSessions || []) {
+    const entity = titleWords(session.trackType || "entity");
+    if (session.verificationStatus === "CONFIRMED" && session.lastSeenAt) {
+      notifications.push(record({
+        dedupeKey: `tracking_location:${session.id}:${session.lastSeenAt}`,
+        type: "tracking_location_confirmed", title: `${entity} Confirmed Sighting`,
+        message: `Last confirmed location changed to ${session.lastSeenCameraId}. Human verified.`,
+        severity: "INFO", entityType: "tracking_session", entityId: session.id,
+        createdAt: session.lastSeenAt, source: "Multi-Entity Tracking"
+      }));
+    }
+    if (session.status === "CLOSED") {
+      notifications.push(record({
+        dedupeKey: `tracking_closed:${session.id}`, type: "tracking_session_closed",
+        title: `${entity} Tracking Session Closed`, message: `${session.id} was closed by an authorized operator.`,
+        severity: "INFO", entityType: "tracking_session", entityId: session.id,
+        createdAt: session.updatedAt || session.createdAt, source: "Multi-Entity Tracking"
+      }));
+    }
+  }
+
+  for (const audit of db.auditLogs || []) {
+    if (audit.action !== "jurisdiction_changed" || !audit.incidentId) continue;
+    notifications.push(record({
+      dedupeKey: `tracking_jurisdiction:${audit.id}`, type: "tracking_jurisdiction_changed",
+      title: "Jurisdiction Transition Detected", message: audit.details || "Confirmed tracking movement crossed jurisdiction.",
+      severity: "MEDIUM", entityType: "tracking_session", entityId: audit.incidentId,
+      createdAt: audit.timestamp, source: "Multi-Entity Tracking"
     }));
   }
 

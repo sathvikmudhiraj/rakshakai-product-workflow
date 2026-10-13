@@ -152,7 +152,11 @@ test("operational correction adds an alert resolution timeline record", async ()
   await sweep(db, baseTime + 2 * MINUTE);
   item.assignedUnitId = "unit_1"; item.status = "Assigned";
   await sweep(db, baseTime + 2 * MINUTE);
-  assert.ok(db.incidentTimeline.some((event) => event.eventType === "ESCALATION_ALERT_RESOLVED"));
+  const resolvedAlert = db.escalationAlerts.find((alert) => alert.alertType === "ASSIGNMENT_BREACH");
+  const timelineEvent = db.incidentTimeline.find((event) => event.eventType === "ESCALATION_ALERT_RESOLVED");
+  assert.equal(resolvedAlert.resolvedBy, null, "automated resolution must not populate the users foreign key");
+  assert.equal(timelineEvent.actorRole, "System");
+  assert.equal(timelineEvent.actorName, "SLA Scheduler");
 });
 
 test("serious incident enters investigation monitoring", async () => {

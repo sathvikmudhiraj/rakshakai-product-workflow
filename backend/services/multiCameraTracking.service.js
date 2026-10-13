@@ -12,7 +12,7 @@ const auditLogsRepository = require("../repositories/auditLogs.repository");
 const { addAuditLog } = require("./core.service");
 const realtimeEvents = require("./realtimeEvents.service");
 
-const TRACK_TYPES = Object.freeze({ PERSON: "PERSON", VEHICLE: "VEHICLE" });
+const TRACK_TYPES = Object.freeze({ PERSON: "PERSON", VEHICLE: "VEHICLE", OBJECT: "OBJECT", ANIMAL: "ANIMAL" });
 const SESSION_STATUSES = Object.freeze(["SEARCHING", "CANDIDATE_FOUND", "HUMAN_REVIEW", "CONFIRMED", "REJECTED", "CLOSED"]);
 const CANDIDATE_STATUSES = Object.freeze(["PENDING_REVIEW", "CONFIRMED", "REJECTED", "UNCERTAIN"]);
 const VERIFICATION_DECISIONS = Object.freeze(["CONFIRM_MATCH", "REJECT_MATCH", "UNCERTAIN"]);
@@ -41,6 +41,21 @@ const DEFAULT_VEHICLE_WEIGHTS = Object.freeze({
   speed: 0.05,
   direction: 0.05
 });
+
+const DEFAULT_OBJECT_WEIGHTS = Object.freeze({
+  class: 0.30, color: 0.15, shape: 0.10, size: 0.10, markings: 0.10,
+  appearance: 0.10, spatial: 0.05, timing: 0.05, context: 0.05
+});
+
+const DEFAULT_ANIMAL_WEIGHTS = Object.freeze({
+  species: 0.35, color: 0.15, size: 0.10, markings: 0.10,
+  appearance: 0.10, spatial: 0.10, timing: 0.05, direction: 0.05
+});
+
+// These are labels supported by the deployed COCO detector. Unknown labels are
+// rejected instead of implying a model capability that is not actually loaded.
+const SUPPORTED_OBJECT_LABELS = Object.freeze(["backpack", "handbag", "suitcase", "umbrella", "bottle", "cell phone", "laptop"]);
+const SUPPORTED_ANIMAL_LABELS = Object.freeze(["bird", "cat", "dog", "horse", "sheep", "cow"]);
 
 function uid(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
@@ -95,13 +110,50 @@ async function persistTrackingRecord(repository, collection, record, db) {
 
 async function getScoreWeights(trackType, db = {}) {
   const configs = await trackingScoreConfigRepository.list(db);
-  const weights = trackType === TRACK_TYPES.PERSON ? { ...DEFAULT_PERSON_WEIGHTS } : { ...DEFAULT_VEHICLE_WEIGHTS };
+  const defaults = {
+    [TRACK_TYPES.PERSON]: DEFAULT_PERSON_WEIGHTS,
+    [TRACK_TYPES.VEHICLE]: DEFAULT_VEHICLE_WEIGHTS,
+    [TRACK_TYPES.OBJECT]: DEFAULT_OBJECT_WEIGHTS,
+    [TRACK_TYPES.ANIMAL]: DEFAULT_ANIMAL_WEIGHTS
+  };
+  const weights = { ...(defaults[trackType] || DEFAULT_PERSON_WEIGHTS) };
   for (const config of configs) {
-    if (weights.hasOwnProperty(config.weightKey)) {
+    if (config.trackType === trackType && Object.prototype.hasOwnProperty.call(weights, config.weightKey)) {
       weights[config.weightKey] = config.weightValue;
     }
   }
   return weights;
+}
+
+function normalizedLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ");
+  return ({ phone: "cell phone", mobile: "cell phone", cellphone: "cell phone" })[normalized] || normalized;
+}
+
+function supportedEntityLabel(trackType, label) {
+  const normalized = normalizedLabel(label);
+  if (trackType === TRACK_TYPES.OBJECT) return SUPPORTED_OBJECT_LABELS.includes(normalized);
+  if (trackType === TRACK_TYPES.ANIMAL) return SUPPORTED_ANIMAL_LABELS.includes(normalized);
+  return true;
+}
+
+function categorySimilarity(left, right) {
+  const a = normalizedLabel(left);
+  const b = normalizedLabel(right);
+  if (!a || !b || a === "unknown" || b === "unknown") return 0;
+  return a === b ? 1 : 0;
+}
+
+function numericSimilarity(left, right) {
+  const a = Number(left);
+  const b = Number(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return 0;
+  return clamp01(1 - Math.abs(a - b) / Math.max(a, b));
+}
+
+function cameraCoordinate(camera, key) {
+  const value = key === "lat" ? camera?.lat ?? camera?.latitude : camera?.lng ?? camera?.longitude;
+  return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
 function normalizePlate(text) {
@@ -189,8 +241,10 @@ function gaitSimilarity(gait1, gait2) {
 }
 
 function spatialConsistency(cam1, cam2, timeDiffSeconds, maxSpeed = 15) {
-  if (!cam1?.latitude || !cam1?.longitude || !cam2?.latitude || !cam2?.longitude) return 0.5;
-  const distance = haversineDistance(cam1.latitude, cam1.longitude, cam2.latitude, cam2.longitude);
+  const lat1 = cameraCoordinate(cam1, "lat"), lng1 = cameraCoordinate(cam1, "lng");
+  const lat2 = cameraCoordinate(cam2, "lat"), lng2 = cameraCoordinate(cam2, "lng");
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return 0.5;
+  const distance = haversineDistance(lat1, lng1, lat2, lng2);
   const maxPossibleDistance = maxSpeed * timeDiffSeconds;
   if (distance <= maxPossibleDistance) return 1;
   return Math.max(0, maxPossibleDistance / distance);
@@ -198,8 +252,10 @@ function spatialConsistency(cam1, cam2, timeDiffSeconds, maxSpeed = 15) {
 
 function timingConsistency(camA, camB, timeDiffSeconds, expectedMin, expectedMax) {
   if (expectedMin == null || expectedMax == null) {
-    if (!camA?.latitude || !camA?.longitude || !camB?.latitude || !camB?.longitude) return 0.5;
-    const distance = haversineDistance(camA.latitude, camA.longitude, camB.latitude, camB.longitude);
+    const latA = cameraCoordinate(camA, "lat"), lngA = cameraCoordinate(camA, "lng");
+    const latB = cameraCoordinate(camB, "lat"), lngB = cameraCoordinate(camB, "lng");
+    if (latA == null || lngA == null || latB == null || lngB == null) return 0.5;
+    const distance = haversineDistance(latA, lngA, latB, lngB);
     const walkSpeed = 1.4;
     const runSpeed = 5;
     const vehicleSpeed = 13.9;
@@ -215,8 +271,10 @@ function timingConsistency(camA, camB, timeDiffSeconds, expectedMin, expectedMax
 
 function directionConsistency(dir1, dir2, cam1, cam2) {
   if (dir1 == null || dir2 == null) {
-    if (!cam1?.latitude || !cam1?.longitude || !cam2?.latitude || !cam2?.longitude) return 0.5;
-    const expectedBearing = bearingBetween(cam1.latitude, cam1.longitude, cam2.latitude, cam2.longitude);
+    const lat1 = cameraCoordinate(cam1, "lat"), lng1 = cameraCoordinate(cam1, "lng");
+    const lat2 = cameraCoordinate(cam2, "lat"), lng2 = cameraCoordinate(cam2, "lng");
+    if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return 0.5;
+    const expectedBearing = bearingBetween(lat1, lng1, lat2, lng2);
     const diff = angleDifference(dir1 ?? expectedBearing, dir2 ?? expectedBearing);
     return Math.max(0, 1 - diff / 180);
   }
@@ -255,8 +313,10 @@ function speedConsistency(speed1, speed2, timeDiffSeconds, distanceMeters) {
 }
 
 function routeConsistency(cam1, cam2, dir1, dir2) {
-  if (!cam1?.latitude || !cam1?.longitude || !cam2?.latitude || !cam2?.longitude) return 0.5;
-  const expectedBearing = bearingBetween(cam1.latitude, cam1.longitude, cam2.latitude, cam2.longitude);
+  const lat1 = cameraCoordinate(cam1, "lat"), lng1 = cameraCoordinate(cam1, "lng");
+  const lat2 = cameraCoordinate(cam2, "lat"), lng2 = cameraCoordinate(cam2, "lng");
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return 0.5;
+  const expectedBearing = bearingBetween(lat1, lng1, lat2, lng2);
   let score = 0.5;
   if (dir1 != null) score += Math.max(0, 1 - angleDifference(dir1, expectedBearing) / 180) * 0.25;
   if (dir2 != null) score += Math.max(0, 1 - angleDifference(dir2, expectedBearing) / 180) * 0.25;
@@ -350,6 +410,7 @@ async function searchCandidatesForPerson(db, session, referenceObs, timeWindowMi
 
   for (const obs of candidateObs) {
     if (obs.sessionId === session.id) continue;
+    if ((obs.trackType || obs.entityType) && (obs.trackType || obs.entityType) !== TRACK_TYPES.PERSON) continue;
 
     const timeDiff = Math.abs(new Date(obs.detectedAt).getTime() - referenceTime) / 1000;
     const camRef = (db.cameraSources || []).find((c) => c.id === session.referenceCameraId);
@@ -390,6 +451,13 @@ async function searchCandidatesForPerson(db, session, referenceObs, timeWindowMi
       id: uid("cand"),
       sessionId: session.id,
       observationId: obs.id,
+      candidateObservationId: obs.id,
+      referenceObservationId: session.referenceObservationId || referenceObs.id,
+      referenceEvidenceId: session.evidenceId || null,
+      entityType: session.trackType,
+      sourceType: obs.sourceType || "CAMERA",
+      sourceId: obs.sourceId || obs.cameraId,
+      humanVerificationRequired: true,
       cameraId: obs.cameraId,
       detectedAt: obs.detectedAt,
       appearanceSimilarity: clamp01(adjustedAppearance),
@@ -437,6 +505,7 @@ async function searchCandidatesForVehicle(db, session, referenceObs, timeWindowM
 
   for (const obs of candidateObs) {
     if (obs.sessionId === session.id) continue;
+    if ((obs.trackType || obs.entityType) && (obs.trackType || obs.entityType) !== TRACK_TYPES.VEHICLE) continue;
 
     const timeDiff = Math.abs(new Date(obs.detectedAt).getTime() - referenceTime) / 1000;
     const camRef = (db.cameraSources || []).find((c) => c.id === session.referenceCameraId);
@@ -491,6 +560,13 @@ async function searchCandidatesForVehicle(db, session, referenceObs, timeWindowM
       id: uid("cand"),
       sessionId: session.id,
       observationId: obs.id,
+      candidateObservationId: obs.id,
+      referenceObservationId: session.referenceObservationId || referenceObs.id,
+      referenceEvidenceId: session.evidenceId || null,
+      entityType: session.trackType,
+      sourceType: obs.sourceType || "CAMERA",
+      sourceId: obs.sourceId || obs.cameraId,
+      humanVerificationRequired: true,
       cameraId: obs.cameraId,
       detectedAt: obs.detectedAt,
       plateSimilarity: clamp01(adjustedPlate),
@@ -527,7 +603,96 @@ async function searchCandidatesForVehicle(db, session, referenceObs, timeWindowM
   return candidates.slice(0, 20);
 }
 
-async function createTrackingSession(db, { trackType, referenceDetectionId, referenceCameraId, referenceTimestamp, createdBy, incidentId, alertId, evidenceId, referenceObservation }) {
+function observationEntityLabel(observation, trackType) {
+  if (trackType === TRACK_TYPES.OBJECT) return observation.objectClass || observation.entityLabel || observation.label;
+  if (trackType === TRACK_TYPES.ANIMAL) return observation.animalSpecies || observation.species || observation.entityLabel || observation.label;
+  return observation.entityLabel || observation.label;
+}
+
+async function searchCandidatesForEntity(db, session, referenceObs, timeWindowMinutes = 30) {
+  const trackType = session.trackType;
+  if (![TRACK_TYPES.OBJECT, TRACK_TYPES.ANIMAL].includes(trackType)) {
+    throw Object.assign(new Error(`Unsupported entity search type: ${trackType}`), { status: 400 });
+  }
+  const referenceLabel = observationEntityLabel(referenceObs, trackType);
+  if (!supportedEntityLabel(trackType, referenceLabel)) {
+    throw Object.assign(new Error(`Unsupported by current AI model: ${trackType.toLowerCase()} label '${referenceLabel || "unknown"}'`), {
+      status: 422,
+      code: "TRACKING_LABEL_UNSUPPORTED"
+    });
+  }
+  const referenceTime = new Date(referenceObs.detectedAt).getTime();
+  const windowMs = Math.max(1, Number(timeWindowMinutes) || 30) * 60 * 1000;
+  const adjacent = await getAdjacentCameras(session.referenceCameraId, db);
+  const adjacentIds = new Set(adjacent.map((camera) => camera.id));
+  const weights = await getScoreWeights(trackType, db);
+  const referenceCamera = (db.cameraSources || []).find((camera) => camera.id === session.referenceCameraId);
+  const candidates = [];
+
+  for (const observation of db.trackingObservations || []) {
+    const detected = new Date(observation.detectedAt).getTime();
+    if (observation.sessionId === session.id || !adjacentIds.has(observation.cameraId) || Math.abs(detected - referenceTime) > windowMs) continue;
+    if ((observation.trackType || observation.entityType) && (observation.trackType || observation.entityType) !== trackType) continue;
+    const candidateLabel = observationEntityLabel(observation, trackType);
+    if (!supportedEntityLabel(trackType, candidateLabel)) continue;
+    const camera = (db.cameraSources || []).find((item) => item.id === observation.cameraId);
+    const timeDiff = Math.abs(detected - referenceTime) / 1000;
+    const labelKey = trackType === TRACK_TYPES.OBJECT ? "class" : "species";
+    const factors = {
+      [labelKey]: categorySimilarity(referenceLabel, candidateLabel),
+      color: colorSimilarity(referenceObs.primaryColor || referenceObs.objectColor || referenceObs.animalColor, observation.primaryColor || observation.objectColor || observation.animalColor),
+      size: categorySimilarity(referenceObs.sizeClass, observation.sizeClass) || numericSimilarity(referenceObs.approxSizeCm, observation.approxSizeCm),
+      markings: distinctiveMarksSimilarity(referenceObs.distinctiveMarks || referenceObs.markings, observation.distinctiveMarks || observation.markings),
+      appearance: embeddingSimilarity(referenceObs.appearanceEmbedding, observation.appearanceEmbedding),
+      spatial: spatialConsistency(referenceCamera, camera, timeDiff, trackType === TRACK_TYPES.ANIMAL ? 12 : 3),
+      timing: timingConsistency(referenceCamera, camera, timeDiff)
+    };
+    if (trackType === TRACK_TYPES.OBJECT) {
+      factors.shape = categorySimilarity(referenceObs.shape, observation.shape);
+      factors.context = categorySimilarity(referenceObs.contextLabel, observation.contextLabel);
+    } else {
+      factors.direction = directionConsistency(referenceObs.directionDegrees, observation.directionDegrees, referenceCamera, camera);
+    }
+    let weighted = 0;
+    let weightTotal = 0;
+    const explanation = {};
+    for (const [key, weight] of Object.entries(weights)) {
+      const raw = clamp01(factors[key]);
+      const adjusted = adjustForCameraHealth(raw, observation.cameraHealthStatus, observation.cameraHealthSeverity);
+      weighted += adjusted * Number(weight);
+      weightTotal += Number(weight);
+      explanation[key] = { raw, adjusted, weight: Number(weight) };
+    }
+    const overall = weightTotal ? weighted / weightTotal : 0;
+    if (overall < 0.25) continue;
+    candidates.push({
+      id: uid("cand"), sessionId: session.id, observationId: observation.id,
+      candidateObservationId: observation.id, referenceObservationId: session.referenceObservationId || referenceObs.id,
+      referenceEvidenceId: session.evidenceId || null, entityType: trackType,
+      sourceType: observation.sourceType || "CAMERA", sourceId: observation.sourceId || observation.cameraId,
+      cameraId: observation.cameraId, detectedAt: observation.detectedAt,
+      appearanceSimilarity: clamp01(factors.appearance), spatialConsistency: clamp01(factors.spatial),
+      timingConsistency: clamp01(factors.timing), directionConsistency: clamp01(factors.direction),
+      classSimilarity: trackType === TRACK_TYPES.OBJECT ? clamp01(factors.class) : null,
+      speciesSimilarity: trackType === TRACK_TYPES.ANIMAL ? clamp01(factors.species) : null,
+      colorSimilarity: clamp01(factors.color), sizeSimilarity: clamp01(factors.size),
+      markingsSimilarity: clamp01(factors.markings), overallConfidence: clamp01(overall),
+      humanVerificationRequired: true, status: "PENDING_REVIEW",
+      matchExplanation: { ...explanation, cameraHealth: { status: observation.cameraHealthStatus, severity: observation.cameraHealthSeverity } },
+      createdAt: isoNow()
+    });
+  }
+  candidates.sort((left, right) => right.overallConfidence - left.overallConfidence);
+  return candidates.slice(0, 20);
+}
+
+async function searchCandidates(db, session, referenceObs, timeWindowMinutes = 30) {
+  if (session.trackType === TRACK_TYPES.PERSON) return searchCandidatesForPerson(db, session, referenceObs, timeWindowMinutes);
+  if (session.trackType === TRACK_TYPES.VEHICLE) return searchCandidatesForVehicle(db, session, referenceObs, timeWindowMinutes);
+  return searchCandidatesForEntity(db, session, referenceObs, timeWindowMinutes);
+}
+
+async function createTrackingSession(db, { trackType, referenceDetectionId, referenceCameraId, referenceTimestamp, createdBy, incidentId, alertId, evidenceId, referenceObservation, referenceObservationId, sourceType, sourceId }) {
   const session = {
     id: uid("track"),
     trackType,
@@ -541,6 +706,10 @@ async function createTrackingSession(db, { trackType, referenceDetectionId, refe
     incidentId,
     alertId,
     evidenceId,
+    referenceObservationId: referenceObservationId || null,
+    sourceType: sourceType || (evidenceId ? "EVIDENCE" : "CAMERA"),
+    sourceId: sourceId || evidenceId || referenceCameraId,
+    humanVerificationRequired: true,
     data: {},
     createdAt: isoNow(),
     updatedAt: isoNow()
@@ -557,7 +726,8 @@ async function createObservation(db, { sessionId, cameraId, detectedAt, detectio
     detectedAt,
     detectionId,
     ...fields,
-    data: {}
+    humanVerificationRequired: true,
+    data: fields.data || {}
   };
   await persistTrackingRecord(trackingObservationsRepository, "trackingObservations", obs, db);
   return obs;
@@ -585,6 +755,10 @@ module.exports = {
   MOVEMENT_STATES,
   DEFAULT_PERSON_WEIGHTS,
   DEFAULT_VEHICLE_WEIGHTS,
+  DEFAULT_OBJECT_WEIGHTS,
+  DEFAULT_ANIMAL_WEIGHTS,
+  SUPPORTED_OBJECT_LABELS,
+  SUPPORTED_ANIMAL_LABELS,
   uid,
   isoNow,
   clamp01,
@@ -608,10 +782,14 @@ module.exports = {
   speedConsistency,
   routeConsistency,
   adjustForCameraHealth,
+  supportedEntityLabel,
+  observationEntityLabel,
   buildCameraGraph,
   getAdjacentCameras,
   searchCandidatesForPerson,
   searchCandidatesForVehicle,
+  searchCandidatesForEntity,
+  searchCandidates,
   createTrackingSession,
   createObservation,
   createCandidates,

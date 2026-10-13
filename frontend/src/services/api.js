@@ -133,6 +133,8 @@ export const trackingApi = {
     api(`/api/tracking/sessions/${sessionId}/search?timeWindowMinutes=${timeWindowMinutes}`, { method: "POST" }),
   getTimeline: (sessionId) => api(`/api/tracking/sessions/${sessionId}/timeline`),
   getMapData: (sessionId) => api(`/api/tracking/sessions/${sessionId}/map`),
+  getRecommendations: (sessionId) => api(`/api/tracking/sessions/${sessionId}/recommendations`),
+  handoff: (sessionId, data = {}) => api(`/api/tracking/sessions/${sessionId}/handoff`, { method: "POST", body: data }),
   verifyCandidate: (sessionId, candidateId, decision, reason) =>
     api(`/api/tracking/sessions/${sessionId}/candidates/${candidateId}/verify`, {
       method: "POST",
