@@ -10,6 +10,8 @@ export function emptyRouteNavigationState(overrides = {}) {
     selectionMode: null,
     routeLoading: false,
     locationLoading: false,
+    locationTracking: false,
+    locationTrackingFixes: 0,
     currentLocation: null,
     ...overrides
   };

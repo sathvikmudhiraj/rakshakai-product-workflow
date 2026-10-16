@@ -1,5 +1,6 @@
-const test = require("node:test");
+﻿const test = require("node:test");
 const assert = require("node:assert/strict");
+const { after } = require("node:test");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");
 
 const TEST_DB_URL = process.env.DATABASE_URL;
@@ -8,6 +9,10 @@ if (!TEST_DB_URL) {
   console.log("Skipping Phase 1 integration tests: DATABASE_URL not set");
   process.exit(0);
 }
+
+after(async () => {
+  await closePool();
+});
 
 function createTestClient() {
   return getPool();
@@ -24,13 +29,15 @@ function createTestClient() {
 }
 
 async function setupTestData(client) {
-  await client.query("DELETE FROM police_officers");
-  await client.query("DELETE FROM response_units");
-  await client.query("DELETE FROM police_beats");
-  await client.query("DELETE FROM police_stations");
-  await client.query("DELETE FROM officer_ranks WHERE code IN ('SI', 'ASI', 'CI', 'TEST_RANK')");
-  await client.query("DELETE FROM users WHERE role = 'Police Officer'");
-  await client.query("DELETE FROM users WHERE email LIKE 'test_%@example.com'");
+  await client.query(`
+    DELETE FROM police_officers;
+    DELETE FROM response_units;
+    DELETE FROM police_beats;
+    DELETE FROM police_stations;
+    DELETE FROM officer_ranks WHERE code IN ('SI', 'ASI', 'CI', 'TEST_RANK');
+    DELETE FROM users WHERE role = 'Police Officer';
+    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+  `);
 
   await client.query(`
     INSERT INTO officer_ranks (id, code, name, level, active) VALUES
@@ -55,14 +62,16 @@ async function setupTestData(client) {
 }
 
 async function cleanupTestData(client) {
-  await client.query("DELETE FROM police_officers");
-  await client.query("DELETE FROM response_units");
-  await client.query("DELETE FROM police_beats");
-  await client.query("DELETE FROM police_stations");
-  await client.query("DELETE FROM officer_ranks WHERE code IN ('TEST_RANK')");
-  await client.query("DELETE FROM users WHERE role = 'Police Officer'");
-  await client.query("DELETE FROM users WHERE email LIKE 'test_%@example.com'");
-  await client.query("DELETE FROM app_state WHERE key = 'operational'");
+  await client.query(`
+    DELETE FROM police_officers;
+    DELETE FROM response_units;
+    DELETE FROM police_beats;
+    DELETE FROM police_stations;
+    DELETE FROM officer_ranks WHERE code IN ('TEST_RANK');
+    DELETE FROM users WHERE role = 'Police Officer';
+    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+    DELETE FROM app_state WHERE key = 'operational';
+  `);
 }
 
 test("Phase 1: station can contain multiple beats", async () => {
@@ -450,7 +459,7 @@ test("Phase 1: response_units table has station_id and beat_id columns", async (
 
   const columns = await client.query(`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'response_units' AND column_name IN ('station_id', 'beat_id')
+    WHERE table_schema = current_schema() AND table_name = 'response_units' AND column_name IN ('station_id', 'beat_id')
   `);
   assert.equal(columns.rows.length, 2);
 
@@ -463,7 +472,8 @@ test("Phase 1: composite FK constraints exist", async () => {
 
   const constraints = await client.query(`
     SELECT constraint_name FROM information_schema.table_constraints
-    WHERE table_name IN ('police_officers', 'response_units')
+    WHERE constraint_schema = current_schema()
+    AND table_name IN ('police_officers', 'response_units')
     AND constraint_type = 'FOREIGN KEY'
     AND constraint_name LIKE '%station_beat%'
   `);
@@ -478,7 +488,7 @@ test("Phase 1: indexes exist for new tables", async () => {
 
   const indexes = await client.query(`
     SELECT indexname FROM pg_indexes
-    WHERE tablename IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers', 'response_units')
+    WHERE schemaname = current_schema() AND tablename IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers', 'response_units')
     AND indexname LIKE 'idx_%'
   `);
   assert.ok(indexes.rows.length >= 15);
@@ -492,7 +502,8 @@ test("Phase 1: unique constraints exist", async () => {
 
   const constraints = await client.query(`
     SELECT constraint_name FROM information_schema.table_constraints
-    WHERE table_name IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers')
+    WHERE constraint_schema = current_schema()
+    AND table_name IN ('police_stations', 'police_beats', 'officer_ranks', 'police_officers')
     AND constraint_type = 'UNIQUE'
   `);
   const constraintNames = constraints.rows.map(r => r.constraint_name);

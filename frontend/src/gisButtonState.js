@@ -4,6 +4,7 @@ export function gisRouteButtonStates({
   route = null,
   routeLoading = false,
   locationLoading = false,
+  locationTracking = false,
   selectionMode = null,
   baseLayer = "streets",
   hasRouteWork = false,
@@ -47,11 +48,20 @@ export function gisRouteButtonStates({
       active: baseLayer === "satellite"
     },
     location: {
-      disabled: routeLoading || locationLoading,
+      disabled: routeLoading || locationLoading || locationTracking,
       label: locationLoading ? "Getting location..." : "Use My Location",
       icon: "location",
       title: locationLoading ? "Getting your current location." : "Use your current location as the route start.",
-      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Getting your current location." : ""
+      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Getting your current location." : locationTracking ? "Stop live GPS tracking before requesting a one-time location." : ""
+    },
+    tracking: {
+      disabled: routeLoading || locationLoading,
+      label: locationTracking ? "Stop GPS Tracking" : "Start GPS Tracking",
+      icon: "location",
+      title: locationTracking ? "Stop continuous GPS tracking." : "Continuously update the route start from this device.",
+      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Wait for the current location request to finish." : "",
+      pressed: locationTracking,
+      active: locationTracking
     },
     fit: {
       disabled: false,

@@ -66,7 +66,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:5000",
+        target: process.env.VITE_BACKEND_PROXY_TARGET || "http://127.0.0.1:5000",
         changeOrigin: false,
         configure(proxy) {
           proxy.on("error", (error, req, res) => {
@@ -78,6 +78,11 @@ export default defineConfig({
             res.end(JSON.stringify({ error: "Backend unavailable" }));
           });
         }
+      },
+      "/socket.io": {
+        target: process.env.VITE_BACKEND_PROXY_TARGET || "http://127.0.0.1:5000",
+        ws: true,
+        changeOrigin: false
       }
     }
   }

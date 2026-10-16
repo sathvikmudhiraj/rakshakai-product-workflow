@@ -60,6 +60,10 @@
             <p class="auth-assurance"><span></span> Encrypted session · Role-based access</p>
           </form>
           <form id="registerForm" class="login-form auth-form app-hidden" data-auth-panel="register">
+            <button class="auth-back" type="button" data-auth-mode="login" aria-label="Back to sign in">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+              <span>Back to sign in</span>
+            </button>
             <div class="auth-heading">
               <span class="auth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/></svg>
@@ -103,6 +107,7 @@
         <nav class="navigation">
           <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
           <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
+          <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
           <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
           <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
           <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
@@ -110,15 +115,24 @@
           <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
           <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
           <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
+          <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
           <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
           <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
+        </nav>
+        <span class="nav-label">ERSS-112</span>
+        <nav class="navigation">
+          <button class="nav-item" data-view="erss-call-taker" data-roles="Police Officer,Admin">Call Taker</button>
+          <button class="nav-item" data-view="erss-dispatcher" data-roles="Police Officer,Admin">Dispatcher</button>
+          <button class="nav-item" data-view="erss-assistance" data-roles="Police Officer,Admin">Inter-Station Assistance</button>
+          <button class="nav-item" data-view="erss-supervisor" data-roles="Admin">Supervisor Queue</button>
+          <button class="nav-item" data-view="erss-field" data-roles="Police Officer,Admin">Field Assignments</button>
         </nav>
         <div class="role-box">Active role: <strong id="currentUser">Connecting...</strong></div>
       </aside>
       <main class="workspace">
         <header class="topbar">
           <div><span class="eyebrow page-eyebrow">RakshakAI Operations</span><h1 id="viewTitle">Sector 7 Safety Grid</h1></div>
-          <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="logoutButton" class="ghost">Logout</button></div>
+          <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="logoutButton" class="ghost" type="button">Sign out</button></div>
         </header>
         <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
 
@@ -154,9 +168,11 @@
             <div class="panel-head"><div><span class="eyebrow">Camera Sources</span><h2>Unified Source Control</h2></div></div>
             <div id="sourceSelector" class="source-selector"></div>
           </section>
-          <div class="dashboard-grid operations-grid">
-            <section class="panel"><div class="panel-head"><div><span class="eyebrow">Operations Queue</span><h2>Live Incidents</h2></div><div class="panel-actions"><span id="queueCount" class="chip">-- active</span><button id="createIncident" class="ghost">Open Incident</button></div></div><div id="incidentList" class="stack"></div></section>
-            <section class="panel"><div class="panel-head"><div><span class="eyebrow">Emergency Response</span><h2>Dispatch Timeline</h2></div></div><ol id="timeline" class="timeline"></ol><div id="routeSummary" class="route-summary">Route engine ready for nearest unit navigation.</div><div class="actions"><button id="assignIncident" class="ghost">Assign Unit</button><button id="routeIncident" class="ghost">Suggest Route</button><button id="closeIncident" class="ghost">Close Incident</button><button id="runAiScan" class="primary">Run AI Scan</button></div></section>
+          <div class="dashboard-lower-grid">
+            <div class="dashboard-lower-left">
+              <section class="panel dispatch-timeline-panel"><div class="panel-head"><div><span class="eyebrow">Emergency Response</span><h2>Dispatch Timeline</h2></div></div><ol id="timeline" class="timeline"></ol><div id="routeSummary" class="route-summary">Route engine ready for nearest unit navigation.</div><div class="actions"><button id="assignIncident" class="ghost">Assign Unit</button><button id="routeIncident" class="ghost">Suggest Route</button><button id="closeIncident" class="ghost">Close Incident</button><button id="runAiScan" class="primary">Run AI Scan</button></div></section>
+            </div>
+            <section class="panel live-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Operations Queue</span><h2>Live Incidents</h2></div><div class="panel-actions"><span id="queueCount" class="chip">-- active</span><button id="createIncident" class="ghost">Open Incident</button></div></div><div id="incidentList" class="stack"></div></section>
           </div>
         </section>
 
@@ -209,18 +225,40 @@
           </div>
         </section>
 
+        <section class="view" data-panel="unit-assignment">
+          <div class="command-page-head">
+            <div><span class="eyebrow">Human-confirmed dispatch</span><h2>Unit Assignment</h2><p>Prioritize incidents awaiting a response unit and assign only from the current operational registry.</p></div>
+            <button id="refreshUnitAssignment" class="ghost" type="button">Refresh Assignment Data</button>
+          </div>
+          <div class="unit-assignment-filters" aria-label="Unit assignment filters">
+            <label><span>Search</span><input id="assignmentSearch" type="search" placeholder="Incident ID, unit, location" autocomplete="off" /></label>
+            <label><span>Incidents</span><select id="assignmentIncidentFilter"><option value="unassigned">Unassigned</option><option value="all">All dispatchable</option><option value="critical">Critical</option><option value="high">High</option><option value="warning">SLA warning</option><option value="breached">SLA breached</option><option value="escalated">Escalated</option></select></label>
+            <label><span>Units</span><select id="assignmentUnitFilter"><option value="available">Available</option><option value="all">All units</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option></select></label>
+          </div>
+          <div class="unit-assignment-workspace">
+            <section class="panel assignment-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Response queue</span><h2>Incidents Requiring Response</h2></div></div><div id="assignmentIncidentList" class="assignment-list"></div></section>
+            <section class="panel assignment-units-panel"><div class="panel-head"><div><span class="eyebrow">Operator decision</span><h2>Recommended / Available Units</h2></div><button id="assignmentOpenMap" class="ghost" type="button">Open in GIS</button></div><div id="assignmentSelectedIncident" class="assignment-selected"></div><div id="assignmentRecommendation" class="assignment-recommendation"></div><div id="assignmentUnitList" class="assignment-list"></div></section>
+            <section class="panel assignment-active-panel"><div class="panel-head"><div><span class="eyebrow">Current workload</span><h2>Active Assignments</h2></div></div><div id="assignmentActiveList" class="assignment-list"></div></section>
+          </div>
+        </section>
+
         <section class="view" data-panel="gis">
           <div class="gis-page-head">
-            <div><span class="eyebrow">RakshakAI Operations</span><h2>GIS Monitoring</h2></div>
+            <div><span class="eyebrow">RakshakAI Operations</span><h2>Operational Map &amp; Routing</h2></div>
           </div>
           <div class="gis-layout">
             <section class="panel gis-map-card">
               <div class="gis-toolbar" aria-label="GIS navigation controls">
-                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
+                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
                 <div class="gis-tool-group"><span>Points</span><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button></div>
                 <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Choose a point or calculate a route before clearing." disabled>Clear Route</button></div>
               </div>
               <p id="mapNavigationStatus" class="gis-status-bar" aria-live="polite">Select "Set Start," then click the map.</p>
+              <div id="unitGpsTelemetryStatus" class="unit-gps-status" aria-live="polite">
+                <strong id="unitGpsState">GPS tracking stopped</strong>
+                <span id="unitGpsLastUpdate">Last update: --</span>
+                <span id="unitGpsAccuracy">Accuracy: --</span>
+              </div>
               <div id="gisMap" class="event-map large" data-satellite-map data-map-layer="satellite" data-map-lat="17.5109" data-map-lng="78.3276" data-map-zoom="12"></div>
             </section>
             <aside class="navigation-panel">
@@ -260,45 +298,33 @@
             <div>
               <span class="eyebrow">Authorized CCTV Registry</span>
               <h2>Enterprise Camera Management</h2>
-              <p>Manage safe camera metadata, health checks, and AI observation workflows without exposing stream URLs or credentials to the browser.</p>
+              <p>Monitor camera metadata, health checks, and AI observation workflows. Admin configuration is available in Settings → Camera &amp; AI.</p>
             </div>
-            <button id="showCameraConfig" class="primary" type="button">Add Camera</button>
           </div>
-          <section class="cctv-summary-grid" id="cameraSummary"></section>
-          <section class="panel cctv-management-panel" id="cameraConfigPanel" hidden>
-            <div class="panel-head"><div><span class="eyebrow">Admin Only</span><h2>Secure Camera Configuration</h2></div></div>
-            <form id="cameraConfigForm" class="form camera-config-form" autocomplete="off">
-              <input type="hidden" name="cameraId" />
-              <div class="camera-config-note"><strong>Backend-only secrets</strong><span>Stream credentials are stored backend-side and never exposed to frontend.</span></div>
-              <label class="camera-field field-half">Camera name<input name="name" placeholder="Gate A NVR Camera 01" required /></label>
-              <label class="camera-field field-half">Location<input name="location" placeholder="Gate A / Sector 7" required /></label>
-              <label class="camera-field field-half">Source type<select name="sourceType"><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option></select></label>
-              <label class="camera-field field-half">Status<select name="status"><option value="unknown">Unknown</option><option value="online">Online</option><option value="offline">Offline</option></select></label>
-              <label class="camera-field field-full">Stream URL<input name="streamUrl" placeholder="rtsp://<user>:<password>@<camera-host>/<path>" /></label>
-              <label class="camera-field field-half">Username<input name="username" autocomplete="off" placeholder="Optional backend credential" /></label>
-              <label class="camera-field field-half">Password<input name="password" type="password" autocomplete="new-password" placeholder="Optional backend credential" /></label>
-              <label class="camera-field field-quarter">AI enabled<select name="aiEnabled"><option value="false">No</option><option value="true">Yes</option></select></label>
-              <div class="form-actions camera-form-actions"><button class="primary" type="submit">Save Camera</button><button id="cancelCameraConfig" class="ghost" type="button">Cancel</button></div>
-              <p id="cameraConfigStatus" class="form-status" aria-live="polite"></p>
-            </form>
-          </section>
           <section class="panel">
             <div class="panel-head cctv-registry-head">
               <div><span class="eyebrow">CCTV Monitoring</span><h2>Camera Registry</h2></div>
               <div id="cameraRegistryFilters" class="cctv-filters">
                 <select data-camera-filter="kind" aria-label="Demo or real filter"><option value="all">All cameras</option><option value="real">Real configured</option><option value="demo">Demo feeds</option></select>
                 <select data-camera-filter="sourceType" aria-label="Source type filter"><option value="all">All source types</option><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
-                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="unknown">Unknown</option></select>
+                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="streaming">Streaming</option><option value="reconnecting">Reconnecting</option><option value="no_frames">No frames</option><option value="auth_failed">Auth failed</option><option value="offline">Offline</option><option value="disabled">Disabled</option></select>
               </div>
             </div>
             <div id="cameraGridLarge" class="camera-registry"></div>
+          </section>
+          <section class="panel ai-observation-panel">
+            <div class="panel-head">
+              <div><span class="eyebrow">Mandatory Human Review</span><h2>AI Observation Queue</h2><p>AI detections are advisory. Confirmation creates an alert; it never creates an incident directly.</p></div>
+              <button id="refreshAiObservations" class="ghost" type="button">Refresh Queue</button>
+            </div>
+            <div id="aiObservationQueue" class="ai-observation-queue" aria-live="polite"></div>
           </section>
         </section>
         <section class="view" data-panel="live-vision">
           <div class="live-vision-layout">
             <section class="panel live-camera-panel">
               <div class="panel-head">
-                <div><span class="eyebrow">Phone Camera Mode</span><h2>Rakshak Live Vision</h2></div>
+                <div><span class="eyebrow">Phone Camera Mode</span><h2>Camera Observation Workspace</h2></div>
                 <label class="emergency-toggle"><input id="emergencyMode" type="checkbox" /> Emergency Mode</label>
               </div>
               <div class="live-video-wrap">
@@ -394,7 +420,19 @@
             <div id="videoReviewSplit" class="video-review-split"><div class="empty-state">Select evidence to review observations.</div></div>
           </section>
         </section>
-        <section class="view" data-panel="missing"><div class="dashboard-grid single"><section class="panel"><span class="eyebrow">Citizen Intake</span><h2>Submit Missing Person / Object Report</h2><form id="missingForm" class="form missing-report-form"><label>Report Type<select name="reportType"><option value="missing_person">Missing Person</option><option value="missing_object">Missing Object</option><option value="emergency_report">Emergency Report</option></select></label><label>Urgency Level<select name="urgency"><option value="medium">Normal Urgency</option><option value="high">High Urgency</option><option value="critical">Critical Emergency</option><option value="low">Low Urgency</option></select></label><label>Person/Object Name<input name="personName" value="Aarav Sharma" placeholder="Enter missing person or object name" required /></label><label>Age / Estimated Age<input name="age" value="8" type="number" min="0" placeholder="Enter age if person, or leave blank for object" /></label><label>Last Seen Location<input name="lastSeen" value="Gate A, Sector 7" placeholder="Enter last seen location" required /></label><div class="form-coordinate-row"><label>Latitude<input name="lat" type="number" step="any" placeholder="Latitude" /></label><label>Longitude<input name="lng" type="number" step="any" placeholder="Longitude" /></label></div><div class="form-actions"><button id="useReportLocation" class="ghost" type="button">Use My Current Location</button></div><label>Description / Identifying Details<input name="description" placeholder="Add clothing, color, object details, contact notes, or other useful information" /></label><label class="file-drop" for="personFile"><span>Upload Photo or Evidence</span><strong id="fileName">No file selected</strong><input id="personFile" name="personFile" type="file" accept="image/*,video/*" /></label><div id="filePreview" class="file-preview" hidden></div><div class="form-actions"><button id="registerReportBtn" class="primary" type="submit">Submit Report for Review</button></div><p id="missingFormStatus" class="form-status" aria-live="polite"></p></form></section><section id="caseQueuePanel" class="panel"><h2>My Submitted Reports</h2><div id="caseList" class="stack"></div></section></div></section>
+        <section class="view" data-panel="multi-camera-tracking">
+          <div id="multiCameraTrackingPanel"></div>
+        </section>
+        <section class="view" data-panel="missing">
+          <section class="citizen-report-intro" aria-labelledby="reportCenterHeading">
+            <div><span class="eyebrow" id="reportCenterEyebrow">Public Reporting</span><h2 id="reportCenterHeading">Report a missing person or property</h2><p id="reportCenterCopy">Provide clear details for police review. You can return here to track every report you submit.</p></div>
+            <ol class="report-process" aria-label="Report process"><li><strong>1</strong><span>Submit details</span></li><li><strong>2</strong><span>Police review</span></li><li><strong>3</strong><span>Status updates</span></li></ol>
+          </section>
+          <div class="citizen-report-layout">
+            <section class="panel report-form-panel"><div class="panel-head"><div><span class="eyebrow">New Report</span><h2>Tell us what is missing</h2><p>Fields marked required help officers begin review.</p></div></div><form id="missingForm" class="form missing-report-form"><label>Report Type<select name="reportType"><option value="missing_person">Missing Person</option><option value="missing_object">Missing Object / Property</option><option value="emergency_report">Emergency Report</option></select></label><label>Urgency Level<select name="urgency"><option value="medium">Normal Urgency</option><option value="high">High Urgency</option><option value="critical">Critical Emergency</option><option value="low">Low Urgency</option></select></label><label>Person or Property Name<input name="personName" placeholder="Enter the person's name or a short property description" required /></label><label>Age / Estimated Age<input name="age" type="number" min="0" placeholder="For a person report, if known" /></label><label class="field-wide">Last Seen Location<input name="lastSeen" placeholder="Address, landmark, area, or route" required /></label><div class="form-coordinate-row field-wide"><label>Latitude<input name="lat" type="number" step="any" placeholder="Optional" /></label><label>Longitude<input name="lng" type="number" step="any" placeholder="Optional" /></label></div><div class="form-actions field-wide"><button id="useReportLocation" class="ghost" type="button">Use My Current Location</button></div><label class="field-wide">Description / Identifying Details<textarea name="description" rows="3" placeholder="Clothing, color, identifying marks, property details, or contact notes"></textarea></label><label class="file-drop field-wide" for="personFile"><span>Upload Photo or Evidence</span><strong id="fileName">No file selected</strong><small>Images or short videos can help police review.</small><input id="personFile" name="personFile" type="file" accept="image/*,video/*" /></label><div id="filePreview" class="file-preview field-wide" hidden></div><div class="form-actions field-wide"><button id="registerReportBtn" class="primary" type="submit">Submit Report for Review</button></div><p id="missingFormStatus" class="form-status field-wide" aria-live="polite"></p></form></section>
+            <section id="caseQueuePanel" class="panel report-status-panel"><div class="panel-head"><div><span class="eyebrow">Report Status</span><h2 id="reportQueueTitle">My Submitted Reports</h2><p id="reportQueueCopy">Police review and linked-incident updates appear here.</p></div><span id="reportQueueCount" class="chip">0 reports</span></div><div id="caseList" class="stack"></div></section>
+          </div>
+        </section>
         <section class="view" data-panel="alerts">
           <section class="alert-console">
             <div class="alert-console-head">
@@ -433,7 +471,7 @@
               </div>
               <label class="manual-alert-message">
                 Message
-                <input name="message" value="Crowd control announcement required near main entry" maxlength="160" required />
+                <input name="message" placeholder="Describe what happened and the action required" maxlength="160" required />
               </label>
               <div class="manual-alert-row manual-alert-footer">
                 <label>
@@ -468,7 +506,7 @@
           <div class="dashboard-grid single settings-grid">
             <section class="panel">
               <div class="panel-head">
-                <div><span class="eyebrow">Closed Cases</span><h2>Incident History</h2></div>
+                <div><span class="eyebrow">Closed Cases</span><h2>Closed Cases &amp; Resolution Review</h2></div>
                 <div class="panel-actions"><span id="historyCount" class="chip">-- closed</span><button id="clearHistory" class="ghost alert-clear" type="button">Clear History</button></div>
               </div>
               <div id="historyList" class="stack"></div>
@@ -480,13 +518,39 @@
           </div>
         </section>
         <section class="view" data-panel="settings">
-          <div class="dashboard-grid single settings-grid">
-            <section class="panel security-settings">
+          <div class="settings-page-head">
+            <div class="settings-head-identity"><span class="settings-head-icon" aria-hidden="true">ST</span><div><span class="eyebrow">Secure Administration</span><h2>Configuration Workspace</h2><p>Manage protected command-center configuration from one controlled workspace.</p></div></div>
+            <div class="settings-head-meta"><span>7 configuration areas</span><strong>Admin access</strong></div>
+          </div>
+          <label class="settings-mobile-nav" for="settingsSectionSelect">Settings section
+            <select id="settingsSectionSelect">
+              <option value="security">Account &amp; Security</option>
+              <option value="device-health">Device Health</option>
+              <option value="police-units">Police Units</option>
+              <option value="police-stations">Police Stations</option>
+              <option value="camera-ai">Camera &amp; AI</option>
+              <option value="sla-escalation">SLA &amp; Escalation</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+          <div class="settings-workspace">
+            <nav class="settings-nav" aria-label="Settings sections">
+              <div class="settings-nav-head"><span>Settings</span><small>Configuration areas</small></div>
+              <button class="settings-nav-item active" type="button" data-settings-section="security" aria-current="page">Account &amp; Security<small>Password and session</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="device-health">Device Health<small>Infrastructure status</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="police-units">Police Units<small>Dispatch registry</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="police-stations">Police Stations<small>Station registry</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="camera-ai">Camera &amp; AI<small>Connections and configuration</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="sla-escalation">SLA &amp; Escalation<small>Current response policy</small></button>
+              <button class="settings-nav-item" type="button" data-settings-section="system">System<small>Audit and integrations</small></button>
+            </nav>
+            <div class="settings-content">
+            <section class="panel security-settings" data-settings-panel="security" aria-labelledby="settingsSecurityTitle">
               <div class="panel-head">
-                <div><span class="eyebrow">Account Security</span><h2>Change Admin Password</h2></div>
+                <div><span class="eyebrow">Account Security</span><h2 id="settingsSecurityTitle">Administrator Credentials</h2><p>Update the password protecting this command-center account.</p></div>
                 <span class="chip">Admin only</span>
               </div>
-              <p class="settings-copy">Use a unique password with at least 10 characters, uppercase, lowercase, and a number. You will be signed out after the change.</p>
+              <div class="security-settings-layout">
               <form id="changePasswordForm" class="password-change-form">
                 <label>Current password
                   <span class="password-field">
@@ -517,36 +581,63 @@
                   <span id="changePasswordStatus" class="form-status" role="status"></span>
                 </div>
               </form>
+              <aside class="security-policy-card" aria-label="Password policy"><span class="eyebrow">Security Policy</span><strong>Password requirements</strong><ul><li>At least 10 characters</li><li>Uppercase and lowercase letters</li><li>At least one number</li><li>Current password verification</li></ul><p>Changing the password securely ends the current session.</p></aside>
+              </div>
             </section>
-            <section class="panel settings-device-panel"><div class="panel-head"><div><span class="eyebrow">Infrastructure</span><h2>Device Health</h2></div></div><div id="deviceList" class="device-health-list"></div></section>
-            <section class="panel unit-registry-panel">
-              <div class="panel-head"><div><span class="eyebrow">Dispatch Registry</span><h2>Police Unit Registry</h2></div><span class="chip">Admin only</span></div>
+            <section class="panel settings-device-panel" data-settings-panel="device-health" hidden><div class="panel-head"><div><span class="eyebrow">Infrastructure</span><h2>Device Health</h2><p>Live operational status for registered command-center devices.</p></div><span class="chip">Live telemetry</span></div><div id="deviceList" class="device-health-list"></div></section>
+            <section class="panel unit-registry-panel" data-settings-panel="police-units" hidden>
+              <div class="panel-head"><div><span class="eyebrow">Dispatch Registry</span><h2>Police Unit Registry</h2><p>Manage operational response units and station assignments.</p></div><div class="settings-page-actions"><span id="unitRegistryCount" class="chip">0 units</span><button id="addUnitRegistry" class="primary" type="button">+ Add Unit</button></div></div>
+              <div class="registry-filters" aria-label="Unit registry filters">
+                <label>Search<input id="unitRegistrySearch" type="search" placeholder="Unit, officer, station, beat" /></label>
+                <label>Status<select id="unitRegistryStatusFilter"><option value="all">All statuses</option><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option></select></label>
+                <label>Station<select id="unitRegistryStationFilter"><option value="all">All stations</option></select></label>
+                <label>Availability<select id="unitRegistryAvailabilityFilter"><option value="all">All availability</option><option value="available">Available</option><option value="busy">Busy</option><option value="unavailable">Unavailable</option></select></label>
+              </div>
+              <div id="unitRegistryDialog" class="settings-form-dialog" hidden>
+                <button class="settings-form-backdrop" type="button" data-close-unit-form aria-label="Close unit form"></button>
+                <section class="settings-form-modal" role="dialog" aria-modal="true" aria-labelledby="unitRegistryDialogTitle">
+                  <div class="settings-form-modal-head"><div><span class="eyebrow">Dispatch Registry</span><h3 id="unitRegistryDialogTitle">Add Police Unit</h3></div><button class="icon-button" type="button" data-close-unit-form aria-label="Close">&times;</button></div>
               <form id="unitRegistryForm" class="unit-registry-form">
                 <input type="hidden" name="id" />
                 <label>Unit ID<input name="unitId" placeholder="P-21" required /></label>
                 <label>Unit Name<input name="unitName" placeholder="Patancheru Patrol" required /></label>
                 <label>Unit Type<select name="unitType"><option value="police_patrol">Police Patrol</option><option value="police_station">Police Station</option><option value="traffic">Traffic</option><option value="medical">Medical</option><option value="fire">Fire</option><option value="backup">Backup</option></select></label>
                 <label>Source<select name="source"><option value="admin_registry">Admin Registry</option><option value="live_gps">Live GPS</option><option value="station_registry">Station Fallback</option><option value="demo_seed">Demo Seed</option></select></label>
-                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option></select></label>
+                <label>Status<select name="status"><option value="available">Available</option><option value="assigned">Assigned</option><option value="busy">Busy</option><option value="offline">Offline</option><option value="maintenance">Maintenance</option><option value="decommissioned">Decommissioned</option></select></label>
                 <label>Officer / Team<input name="officerName" placeholder="Officer or team" /></label>
                 <label>Linked Station<select name="linkedStationId" id="unitStationSelect"><option value="">No station link</option></select></label>
                 <label>Station<input name="stationName" placeholder="Station name" /></label>
                 <label>Beat / Sector<input name="beat" placeholder="Beat / sector" /></label>
                 <label>Jurisdiction<input name="jurisdiction" placeholder="Jurisdiction" /></label>
+                <label>Duty Status<select name="dutyStatus"><option value="on_duty">On Duty</option><option value="off_duty">Off Duty</option><option value="leave">Leave</option></select></label>
+                <label>Availability<select name="availabilityStatus"><option value="available">Available</option><option value="busy">Busy</option><option value="unavailable">Unavailable</option></select></label>
                 <label>Latitude<input name="lat" type="number" step="any" placeholder="17.5285" /></label>
                 <label>Longitude<input name="lng" type="number" step="any" placeholder="78.2636" /></label>
                 <label>Address<input name="address" placeholder="Current/base address" /></label>
                 <label class="unit-operational-toggle"><input name="operational" type="checkbox" checked /> Operational</label>
                 <div class="unit-registry-actions">
                   <button class="primary" type="submit">Save Unit</button>
-                  <button class="ghost" type="button" id="resetUnitRegistryForm">Clear</button>
+                  <button class="ghost" type="button" id="resetUnitRegistryForm">Cancel</button>
                   <span id="unitRegistryStatus" class="form-status" role="status"></span>
                 </div>
               </form>
+                </section>
+              </div>
+              <p id="unitRegistryPageStatus" class="form-status registry-page-status" role="status"></p>
+              <div class="registry-list-head"><div><span class="eyebrow">Operational Directory</span><strong>Registered Units</strong></div><small>Demo resources remain clearly identified.</small></div>
               <div id="unitRegistryList" class="unit-registry-list"></div>
             </section>
-            <section class="panel station-registry-panel">
-              <div class="panel-head"><div><span class="eyebrow">Station Registry</span><h2>Police Station Registry</h2></div><span class="chip">Admin only</span></div>
+            <section class="panel station-registry-panel" data-settings-panel="police-stations" hidden>
+              <div class="panel-head"><div><span class="eyebrow">Station Registry</span><h2>Police Station Registry</h2><p>Manage station coverage, jurisdictions, and operational status.</p></div><div class="settings-page-actions"><span id="stationRegistryCount" class="chip">0 stations</span><button id="addStationRegistry" class="primary" type="button">+ Add Station</button></div></div>
+              <div class="registry-filters" aria-label="Station registry filters">
+                <label>Search<input id="stationRegistrySearch" type="search" placeholder="Station, jurisdiction, beat" /></label>
+                <label>Jurisdiction<select id="stationRegistryJurisdictionFilter"><option value="all">All jurisdictions</option></select></label>
+                <label>Operational<select id="stationRegistryOperationalFilter"><option value="all">All</option><option value="true">Operational</option><option value="false">Inactive</option></select></label>
+              </div>
+              <div id="stationRegistryDialog" class="settings-form-dialog" hidden>
+                <button class="settings-form-backdrop" type="button" data-close-station-form aria-label="Close station form"></button>
+                <section class="settings-form-modal" role="dialog" aria-modal="true" aria-labelledby="stationRegistryDialogTitle">
+                  <div class="settings-form-modal-head"><div><span class="eyebrow">Station Registry</span><h3 id="stationRegistryDialogTitle">Add Police Station</h3></div><button class="icon-button" type="button" data-close-station-form aria-label="Close">&times;</button></div>
               <form id="stationRegistryForm" class="unit-registry-form">
                 <input type="hidden" name="id" />
                 <label>Station ID<input name="stationId" placeholder="PS-PATANCHERU" required /></label>
@@ -560,30 +651,82 @@
                 <label class="field-wide">Address<input name="address" placeholder="Station/base address" /></label>
                 <div class="unit-registry-actions">
                   <button class="primary" type="submit">Save Station</button>
-                  <button class="ghost" type="button" id="resetStationRegistryForm">Clear</button>
+                  <button class="ghost" type="button" id="resetStationRegistryForm">Cancel</button>
                   <span id="stationRegistryStatus" class="form-status" role="status"></span>
                 </div>
               </form>
+                </section>
+              </div>
+              <p id="stationRegistryPageStatus" class="form-status registry-page-status" role="status"></p>
+              <div class="registry-list-head"><div><span class="eyebrow">Coverage Directory</span><strong>Registered Stations</strong></div><small>Operational and demo sources are labelled separately.</small></div>
               <div id="stationRegistryList" class="unit-registry-list"></div>
             </section>
+            <section class="settings-section-stack" data-settings-panel="camera-ai" hidden>
+              <section class="panel">
+                <div class="panel-head"><div><span class="eyebrow">Camera &amp; AI</span><h2>Service &amp; Connection Status</h2><p>Verify configuration separately from real service connectivity.</p></div><div class="settings-page-actions"><span class="chip">Secure config</span><button id="showCameraConfig" class="primary" type="button">+ Add Camera</button></div></div>
+                <p class="settings-copy">Operational states come from the existing camera registry and AI health service. Demo feeds are identified separately from configured production cameras.</p>
+                <div id="cameraAiStatus" class="settings-status-grid" aria-live="polite"></div>
+                <section class="cctv-summary-grid" id="cameraSummary"></section>
+              </section>
+              <section class="panel cctv-management-panel" id="cameraConfigPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">Admin Only</span><h2>Secure Camera Configuration</h2></div></div>
+                <form id="cameraConfigForm" class="form camera-config-form" autocomplete="off">
+                  <input type="hidden" name="cameraId" />
+                  <div class="camera-config-note"><strong>Backend-only secrets</strong><span>Stream credentials are stored backend-side and never exposed to frontend.</span></div>
+                  <label class="camera-field field-half">Camera name<input name="name" placeholder="Gate A NVR Camera 01" required /></label>
+                  <label class="camera-field field-half">Location<input name="location" placeholder="Gate A / Sector 7" required /></label>
+                  <label class="camera-field field-half">Source type<select name="sourceType"><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option></select></label>
+                  <label class="camera-field field-half">Status<select name="status"><option value="unknown">Unknown</option><option value="online">Online</option><option value="offline">Offline</option></select></label>
+                  <label class="camera-field field-half">Criticality<select name="criticality"><option value="NORMAL">Normal</option><option value="IMPORTANT">Important</option><option value="CRITICAL">Critical</option></select></label>
+                  <label class="camera-field field-half">Expected FPS<input name="expectedFps" type="number" min="1" max="120" value="25" /></label>
+                  <label class="camera-field field-full">Stream URL<input name="streamUrl" placeholder="rtsp://&lt;user&gt;:&lt;password&gt;@&lt;camera-host&gt;/&lt;path&gt;" /></label>
+                  <label class="camera-field field-half">Username<input name="username" autocomplete="off" placeholder="Optional backend credential" /></label>
+                  <label class="camera-field field-half">Password<input name="password" type="password" autocomplete="new-password" placeholder="Optional backend credential" /></label>
+                  <label class="camera-field field-quarter">AI enabled<select name="aiEnabled"><option value="false">No</option><option value="true">Yes</option></select></label>
+                  <label class="camera-field field-quarter">Stream processing<select name="streamEnabled"><option value="false">Disabled</option><option value="true">Enabled</option></select></label>
+                  <label class="camera-field field-quarter">Health monitoring<select name="healthEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                  <label class="camera-field field-quarter">AI sample interval<input name="samplingIntervalMs" type="number" min="250" max="60000" step="250" value="1000" /><small>Milliseconds; stale samples are dropped.</small></label>
+                  <div class="form-actions camera-form-actions"><button class="primary" type="submit">Save Camera</button><button id="cancelCameraConfig" class="ghost" type="button">Cancel</button></div>
+                  <p id="cameraConfigStatus" class="form-status" aria-live="polite"></p>
+                </form>
+              </section>
+            </section>
+            <section class="panel" data-settings-panel="sla-escalation" hidden>
+              <div class="panel-head"><div><span class="eyebrow">Response Governance</span><h2>SLA &amp; Escalation</h2><p>Configure response deadlines, warnings, escalation stages, and investigation inactivity.</p></div><span id="slaPolicyStatus" class="chip">Current policy</span></div>
+              <form id="slaConfigForm">
+                <div id="slaConfigList" class="sla-config-list"></div>
+                <div class="sla-form-actions">
+                  <button class="primary" type="submit">Save Changes</button>
+                  <button id="resetSlaChanges" class="ghost" type="button">Reset Unsaved Changes</button>
+                  <button id="restoreSlaDefaults" class="ghost" type="button">Restore Defaults</button>
+                  <span id="slaSaveStatus" class="form-status" role="status"></span>
+                </div>
+              </form>
+              <div class="sla-alert-summary"><strong id="activeEscalationCount">0 active escalations</strong><span>Operational acknowledgement and resolution remain in Incident Command.</span></div>
+            </section>
+            <div class="settings-section-stack" data-settings-panel="system" hidden>
+            <section class="panel settings-system-overview"><div class="panel-head"><div><span class="eyebrow">System Administration</span><h2>Services &amp; Governance</h2><p>Review protected integrations and immutable administrative activity.</p></div><span class="chip">Admin only</span></div><div class="system-control-strip"><article><span>Access</span><strong>Role protected</strong></article><article><span>Audit</span><strong>Read-only trail</strong></article><article><span>Credentials</span><strong>Backend protected</strong></article></div></section>
+            <section class="panel settings-integration-panel"><div class="panel-head"><div><span class="eyebrow">Production Readiness</span><h2>Integrations &amp; Services</h2><p>Configuration state and connectivity without exposing credentials.</p></div></div><div id="integrationList" class="integration-list"></div></section>
             <section class="panel settings-audit-panel">
-              <div class="panel-head"><div><span class="eyebrow">Governance</span><h2>Audit Trail</h2></div></div>
+              <div class="panel-head"><div><span class="eyebrow">Governance</span><h2>Audit Trail</h2><p>Immutable security and workflow activity recorded by the platform.</p></div><span class="chip">Read only</span></div>
               <div id="auditFilters" class="audit-filters" aria-label="Audit log filters"></div>
               <div id="auditList" class="audit-list"></div>
             </section>
-            <section class="panel settings-integration-panel"><div class="panel-head"><div><span class="eyebrow">Production Readiness</span><h2>Real Service Integrations</h2></div></div><div id="integrationList" class="integration-list"></div></section>
+            </div>
+            </div>
           </div>
         </section>
         <section class="view" data-panel="police-management">
           <div class="police-management-page">
             <div class="page-intro">
-              <div><span class="eyebrow">Staff Access Control</span><h2>Police Management</h2><p>Create and manage police officer accounts, unit assignments, and access status.</p></div>
+              <div><span class="eyebrow">Staff Access Control</span><h2>Officer Registry</h2><p>Search and manage police accounts, assignments, duty state, and access status.</p></div>
+              <button id="addPoliceUserBtn" class="primary" type="button">+ Add Police Officer</button>
             </div>
             <div id="policeManagementKpis" class="police-management-kpis" aria-label="Police account summary"></div>
-            <section class="panel police-management-panel">
+            <section id="policeCreateDialog" class="panel police-management-panel police-create-dialog" role="dialog" aria-modal="true" aria-labelledby="policeCreateTitle" hidden>
               <div class="panel-head">
-                <div><span class="eyebrow">Create Account</span><h2>Create Police Account</h2></div>
-                <span class="chip">Admin only</span>
+                <div><span class="eyebrow">Create Account</span><h2 id="policeCreateTitle">Add Police Officer</h2><p>Create role-protected access for an authorized staff member.</p></div>
+                <button id="closePoliceUserDialog" class="ghost modal-close-control" type="button" aria-label="Close add police officer dialog">Close</button>
               </div>
               <form id="policeUserForm" class="police-user-form">
                 <label>Officer Name<input name="name" placeholder="Inspector Kavya Rao" required /></label>
@@ -606,6 +749,108 @@
                 <span id="policeUserCount" class="chip">-- accounts</span>
               </div>
               <div id="policeUserList" class="police-user-list"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-call-taker">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Emergency Intake</span><h2>112 Emergency Call Taker</h2><p>Live call intake, caller details, incident location verification, and triage.</p></div>
+            <button id="refreshErssCallTaker" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-call-taker-workspace">
+            <section class="panel call-intake-panel">
+              <div class="panel-head"><div><span class="eyebrow">Active Call</span><h2>112 Emergency Call</h2></div></div>
+              <div id="erssCallInfo" class="erss-call-info"></div>
+            </section>
+            <section class="panel caller-details-panel">
+              <div class="panel-head"><div><span class="eyebrow">Caller Information</span><h2>Caller Details</h2></div></div>
+              <div id="callerDetails" class="caller-details"></div>
+            </section>
+            <section class="panel incident-location-panel">
+              <div class="panel-head"><div><span class="eyebrow">Incident Location</span><h2>Location Verification</h2></div></div>
+              <div id="incidentLocationForm" class="incident-location-form"></div>
+            </section>
+            <section class="panel triage-panel">
+              <div class="panel-head"><div><span class="eyebrow">Triage Assessment</span><h2>Emergency Triage</h2></div></div>
+              <div id="triageForm" class="triage-form"></div>
+              <div id="aiSuggestions" class="ai-suggestions"></div>
+            </section>
+            <section class="panel live-notes-panel">
+              <div class="panel-head"><div><span class="eyebrow">Live Notes</span><h2>Call Notes & Transcript</h2></div></div>
+              <div id="liveNotes" class="live-notes"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-dispatcher">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Dispatch Operations</span><h2>112 Dispatcher Workspace</h2><p>Review actionable events, approve dispatch recommendations, monitor unit response.</p></div>
+            <button id="refreshErssDispatcher" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-dispatcher-workspace">
+            <section class="panel dispatcher-queue-panel">
+              <div class="panel-head"><div><span class="eyebrow">Actionable Events</span><h2>Events Requiring Dispatch</h2></div></div>
+              <div id="dispatcherQueue" class="dispatcher-queue"></div>
+            </section>
+            <section class="panel dispatch-recommendation-panel">
+              <div class="panel-head"><div><span class="eyebrow">System Recommendation</span><h2>Recommended Response</h2></div></div>
+              <div id="dispatchRecommendation" class="dispatch-recommendation"></div>
+              <div id="dispatchActions" class="dispatch-actions"></div>
+            </section>
+            <section class="panel unit-monitoring-panel">
+              <div class="panel-head"><div><span class="eyebrow">Unit Response</span><h2>Unit ACK & Response Monitoring</h2></div></div>
+              <div id="unitMonitoring" class="unit-monitoring"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-assistance">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Inter-Station Support</span><h2>Inter-Station Assistance</h2><p>Request and manage support from neighboring stations.</p></div>
+            <button id="refreshErssAssistance" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-assistance-workspace">
+            <section class="panel assistance-requests-panel">
+              <div class="panel-head"><div><span class="eyebrow">Active Requests</span><h2>Assistance Requests</h2></div></div>
+              <div id="assistanceRequests" class="assistance-requests"></div>
+            </section>
+            <section class="panel create-assistance-panel">
+              <div class="panel-head"><div><span class="eyebrow">New Request</span><h2>Request Station Support</h2></div></div>
+              <div id="createAssistanceForm" class="create-assistance-form"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-supervisor">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Supervisor Operations</span><h2>Supervisor Queue</h2><p>Monitor critical exceptions, timeouts, and escalations.</p></div>
+            <button id="refreshErssSupervisor" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-supervisor-workspace">
+            <section class="panel supervisor-critical-panel">
+              <div class="panel-head"><div><span class="eyebrow">Critical Exceptions</span><h2>Critical Events Without Response</h2></div></div>
+              <div id="supervisorCritical" class="supervisor-critical"></div>
+            </section>
+            <section class="panel supervisor-timeouts-panel">
+              <div class="panel-head"><div><span class="eyebrow">Timeouts</span><h2>Unit & Assistance Timeouts</h2></div></div>
+              <div id="supervisorTimeouts" class="supervisor-timeouts"></div>
+            </section>
+            <section class="panel supervisor-disputes-panel">
+              <div class="panel-head"><div><span class="eyebrow">Disputes</span><h2>Jurisdiction & Ownership Disputes</h2></div></div>
+              <div id="supervisorDisputes" class="supervisor-disputes"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-field">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Field Operations</span><h2>My Emergency Assignments</h2><p>View and respond to assigned emergency incidents.</p></div>
+            <button id="refreshErssField" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-field-workspace">
+            <section class="panel field-assignments-panel">
+              <div class="panel-head"><div><span class="eyebrow">Assigned Incidents</span><h2>My Assignments</h2></div></div>
+              <div id="fieldAssignments" class="field-assignments"></div>
+            </section>
+            <section class="panel field-incident-detail-panel">
+              <div class="panel-head"><div><span class="eyebrow">Incident Details</span><h2>Selected Assignment</h2></div></div>
+              <div id="fieldIncidentDetail" class="field-incident-detail"></div>
             </section>
           </div>
         </section>

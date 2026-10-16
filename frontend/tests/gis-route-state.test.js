@@ -77,3 +77,13 @@ test("approximate fallback disables full navigation while a real OSRM route enab
   assert.equal(gisRouteButtonStates({ ...points, route: approximate }).external.disabled, true);
   assert.equal(gisRouteButtonStates({ ...points, route: realRoutes[0] }).external.disabled, false);
 });
+
+test("continuous GPS tracking has explicit start and stop states", () => {
+  const stopped = gisRouteButtonStates();
+  assert.equal(stopped.tracking.label, "Start GPS Tracking");
+  assert.equal(stopped.tracking.pressed, false);
+  const active = gisRouteButtonStates({ locationTracking: true });
+  assert.equal(active.tracking.label, "Stop GPS Tracking");
+  assert.equal(active.tracking.pressed, true);
+  assert.equal(active.location.disabled, true);
+});

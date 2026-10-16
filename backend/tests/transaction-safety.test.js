@@ -108,6 +108,28 @@ test("response and session cookie are sent only after the outer commit", async (
   assert.deepEqual(events, ["BEGIN", "INSERT", "COMMIT", "RELEASE", "HEADERS", "RESPONSE"]);
 });
 
+test("concurrent repository reads are serialized on the ambient transaction client", async () => {
+  const events = [];
+  let activeQueries = 0;
+  let maximumConcurrency = 0;
+  const client = {
+    async query(sql) {
+      activeQueries += 1;
+      maximumConcurrency = Math.max(maximumConcurrency, activeQueries);
+      events.push(sql);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeQueries -= 1;
+      return { rows: [], command: sql };
+    },
+    release() { events.push("RELEASE"); }
+  };
+  await withTransaction(async () => {
+    await Promise.all([query("SELECT one"), query("SELECT two"), query("SELECT three")]);
+  }, { connect: async () => client });
+  assert.equal(maximumConcurrency, 1);
+  assert.deepEqual(events, ["BEGIN", "SELECT one", "SELECT two", "SELECT three", "COMMIT", "RELEASE"]);
+});
+
 test("commit failure discards prepared success and cookie and runs outer cleanup", async () => {
   const error = Object.assign(new Error("deferred constraint"), { code: "23503" });
   const { pool } = database({ commitError: error });

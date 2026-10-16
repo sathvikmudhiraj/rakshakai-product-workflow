@@ -11,6 +11,9 @@ module.exports = createRepository({
     { name: "beat", value: (item) => item.beat || null },
     { name: "jurisdiction", value: (item) => item.jurisdiction || "" },
     { name: "active", value: (item) => item.active !== undefined ? Boolean(item.active) : true },
+    { name: "duty_status", value: (item) => item.dutyStatus || item.duty_status || "on_duty" },
+    { name: "availability_status", value: (item) => item.availabilityStatus || item.availability_status || "available" },
+    { name: "assigned_incident_id", value: (item) => item.assignedIncidentId || item.assigned_incident_id || null },
     { name: "created_at", value: (item) => dateValue(item.createdAt) },
     { name: "updated_at", value: (item) => dateValue(item.updatedAt || item.lastUpdated) }
   ],
@@ -30,6 +33,9 @@ module.exports = createRepository({
     beat: row.data?.beat || row.beat || null,
     jurisdiction: row.data?.jurisdiction || row.jurisdiction || "",
     active: row.data?.active ?? row.active ?? true,
+    dutyStatus: row.data?.duty_status || row.duty_status || "on_duty",
+    availabilityStatus: row.data?.availability_status || row.availability_status || "available",
+    assignedIncidentId: row.data?.assigned_incident_id || row.assigned_incident_id || null,
     createdAt: row.data?.createdAt || row.created_at || null,
     updatedAt: row.data?.updatedAt || row.updated_at || null,
     lastUpdated: row.data?.lastUpdated || row.updated_at || null
