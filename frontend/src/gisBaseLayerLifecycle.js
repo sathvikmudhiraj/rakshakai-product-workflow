@@ -24,6 +24,10 @@ export function streetTileLoadOutcome(hasUsableTile) {
   return hasUsableTile ? "ready" : "unavailable";
 }
 
+export function baseLayerReady(hasUsableTile, failedCompletely) {
+  return Boolean(hasUsableTile && !failedCompletely);
+}
+
 export function preserveLeafletViewport(map, action) {
   const center = map.getCenter();
   const zoom = map.getZoom();

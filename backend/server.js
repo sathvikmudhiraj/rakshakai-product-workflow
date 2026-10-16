@@ -19,6 +19,7 @@ const copilotRoutes = require("./routes/copilot.routes");
 const notificationRoutes = require("./routes/notifications.routes");
 const aiObservationsRoutes = require("./routes/aiObservations.routes");
 const mediaGatewayRoutes = require("./routes/mediaGateway.routes");
+const erssRoutes = require("./routes/erss.routes");
 const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
@@ -133,6 +134,14 @@ function initializeSocketIO(httpServer) {
   for (const [event, handler] of trackingHandlers) realtimeEvents.on(event, handler);
   httpServer.once("close", () => {
     for (const [event, handler] of trackingHandlers) realtimeEvents.off(event, handler);
+  });
+
+  const { ERSS_REALTIME_EVENT_NAMES } = require("./services/erssRealtimeEvents.service");
+  const erssEvents = ERSS_REALTIME_EVENT_NAMES;
+  const erssHandlers = new Map(erssEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of erssHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of erssHandlers) realtimeEvents.off(event, handler);
   });
 
   return io;
@@ -642,6 +651,7 @@ app.get("/api/maps/health", async (req, res, next) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/copilot", copilotRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/erss", erssRoutes);
 app.get("/api/me", legacyHandler("/api/me"));
 app.post("/api/login", authLimiter, legacyHandler("/api/login"));
 app.post("/api/register", legacyHandler("/api/register"));

@@ -48,6 +48,14 @@ const trackingVerificationsRepository = require("../repositories/trackingVerific
 const cameraAdjacencyRepository = require("../repositories/cameraAdjacency.repository");
 const trackingScoreConfigRepository = require("../repositories/trackingScoreConfig.repository");
 const aiObservationsRepository = require("../repositories/aiObservations.repository");
+const erssEventsRepository = require("../repositories/erssEvents.repository");
+const erssCallsRepository = require("../repositories/erssCalls.repository");
+const erssTriageRepository = require("../repositories/erssTriage.repository");
+const erssDispatchRequestsRepository = require("../repositories/erssDispatchRequests.repository");
+const erssUnitRequestsRepository = require("../repositories/erssUnitRequests.repository");
+const erssAssistanceRequestsRepository = require("../repositories/erssAssistanceRequests.repository");
+const erssJurisdictionHistoryRepository = require("../repositories/erssJurisdictionHistory.repository");
+const erssOwnershipTransfersRepository = require("../repositories/erssOwnershipTransfers.repository");
 
 const { respondAfterCommit } = require("./committedResponse.service");
 const {
@@ -132,7 +140,15 @@ const repositories = [
   trackingVerificationsRepository,
   cameraAdjacencyRepository,
   trackingScoreConfigRepository,
-  aiObservationsRepository
+  aiObservationsRepository,
+  erssEventsRepository,
+  erssCallsRepository,
+  erssTriageRepository,
+  erssDispatchRequestsRepository,
+  erssUnitRequestsRepository,
+  erssAssistanceRequestsRepository,
+  erssJurisdictionHistoryRepository,
+  erssOwnershipTransfersRepository
 ];
 const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
 
@@ -148,9 +164,11 @@ function seedDb() {
   const t = now();
   return {
     users: [
-      { id: "u_police", name: "Inspector Kavya Rao", email: "police@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH },
-      { id: "u_admin", name: "Admin Control Room", email: "admin@rakshakai.local", role: "Admin", passwordHash: DEMO_PASSWORD_HASH },
-      { id: "u_citizen", name: "Citizen Reporter", email: "citizen@rakshakai.local", role: "Citizen", passwordHash: DEMO_PASSWORD_HASH }
+      { id: "u_police", name: "Inspector Kavya Rao", email: "police@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "DISPATCHER" } },
+      { id: "u_admin", name: "Admin Control Room", email: "admin@rakshakai.local", role: "Admin", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "SUPERVISOR" } },
+      { id: "u_citizen", name: "Citizen Reporter", email: "citizen@rakshakai.local", role: "Citizen", passwordHash: DEMO_PASSWORD_HASH },
+      { id: "u_calltaker", name: "Call Taker Priya", email: "calltaker@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "CALL_TAKER" } },
+      { id: "u_field", name: "Field Officer Rajesh", email: "field@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "FIELD_OFFICER" } }
     ],
     cameras: [
       { id: "cam_c19", cameraId: "C-19", name: "C-19 Red Zone", zone: "Red Zone", health: "online", aiStatus: "Demo AI sample: possible person", density: 68, scene: "cctv-red-zone.svg", sourceType: "demo_seed", isDemo: true, aiEnabled: false },
@@ -201,6 +219,14 @@ function seedDb() {
     aiObservations: [],
     notifications: [],
     notificationReceipts: [],
+    erssEvents: [],
+    erssCalls: [],
+    erssTriage: [],
+    erssDispatchRequests: [],
+    erssUnitRequests: [],
+    erssAssistanceRequests: [],
+    erssJurisdictionHistory: [],
+    erssOwnershipTransfers: [],
     devices: [
       { id: "d1", name: "Camera C-19", type: "CCTV", status: "online", zone: "Red Zone", latencyMs: 210 },
       { id: "d2", name: "Drone D-03", type: "Drone", status: "warning", zone: "Transit Hub", latencyMs: 380 },
@@ -352,7 +378,15 @@ async function readDatabase() {
     trackingVerifications,
     cameraAdjacency,
     trackingScoreConfig,
-    aiObservations
+    aiObservations,
+    erssEvents,
+    erssCalls,
+    erssTriage,
+    erssDispatchRequests,
+    erssUnitRequests,
+    erssAssistanceRequests,
+    erssJurisdictionHistory,
+    erssOwnershipTransfers
   ] = await Promise.all([
     usersRepository.list(defaults),
     incidentsRepository.list(defaults),
@@ -386,7 +420,15 @@ async function readDatabase() {
     trackingVerificationsRepository.list(defaults),
     cameraAdjacencyRepository.list(defaults),
     trackingScoreConfigRepository.list(defaults),
-    aiObservationsRepository.list(defaults)
+    aiObservationsRepository.list(defaults),
+    erssEventsRepository.list(defaults),
+    erssCallsRepository.list(defaults),
+    erssTriageRepository.list(defaults),
+    erssDispatchRequestsRepository.list(defaults),
+    erssUnitRequestsRepository.list(defaults),
+    erssAssistanceRequestsRepository.list(defaults),
+    erssJurisdictionHistoryRepository.list(defaults),
+    erssOwnershipTransfersRepository.list(defaults)
   ]);
   const state = stateResult.rows[0]?.data || {};
   const custodyByEvidence = new Map();
@@ -433,7 +475,15 @@ async function readDatabase() {
     trackingVerifications,
     cameraAdjacency,
     trackingScoreConfig,
-    aiObservations
+    aiObservations,
+    erssEvents,
+    erssCalls,
+    erssTriage,
+    erssDispatchRequests,
+    erssUnitRequests,
+    erssAssistanceRequests,
+    erssJurisdictionHistory,
+    erssOwnershipTransfers
   });
 }
 
@@ -482,7 +532,15 @@ async function writeDatabase(db) {
       [trackingVerificationsRepository, db.trackingVerifications || []],
       [cameraAdjacencyRepository, db.cameraAdjacency || []],
       [trackingScoreConfigRepository, db.trackingScoreConfig || []],
-      [aiObservationsRepository, db.aiObservations || []]
+      [aiObservationsRepository, db.aiObservations || []],
+      [erssEventsRepository, db.erssEvents || []],
+      [erssCallsRepository, db.erssCalls || []],
+      [erssTriageRepository, db.erssTriage || []],
+      [erssDispatchRequestsRepository, db.erssDispatchRequests || []],
+      [erssUnitRequestsRepository, db.erssUnitRequests || []],
+      [erssAssistanceRequestsRepository, db.erssAssistanceRequests || []],
+      [erssJurisdictionHistoryRepository, db.erssJurisdictionHistory || []],
+      [erssOwnershipTransfersRepository, db.erssOwnershipTransfers || []]
     ];
     for (const [repository, records] of recordsByRepository) {
       for (const record of records) await repository.upsert(record, client);
@@ -515,7 +573,15 @@ async function writeDatabase(db) {
       [trackingSessionsRepository, db.trackingSessions || []],
       [cameraAdjacencyRepository, db.cameraAdjacency || []],
       [trackingScoreConfigRepository, db.trackingScoreConfig || []],
-      [aiObservationsRepository, db.aiObservations || []]
+      [aiObservationsRepository, db.aiObservations || []],
+      [erssOwnershipTransfersRepository, db.erssOwnershipTransfers || []],
+      [erssJurisdictionHistoryRepository, db.erssJurisdictionHistory || []],
+      [erssAssistanceRequestsRepository, db.erssAssistanceRequests || []],
+      [erssUnitRequestsRepository, db.erssUnitRequests || []],
+      [erssDispatchRequestsRepository, db.erssDispatchRequests || []],
+      [erssTriageRepository, db.erssTriage || []],
+      [erssCallsRepository, db.erssCalls || []],
+      [erssEventsRepository, db.erssEvents || []]
     ];
     for (const [repository, records] of recordsByDeleteOrder) {
       const ids = records.map((record) => record.id);
@@ -6763,6 +6829,7 @@ module.exports = {
   writeDatabase,
   writeSelectedRecords,
   addAuditLog,
+  uid,
   repairLegacyPersistedData,
   seedDb,
   ensureProductShape,
@@ -6782,6 +6849,7 @@ module.exports = {
   runEscalationSweep,
   runSlaEscalationSweep,
   calculateSlaDeadlinesForIncident,
+  createIncidentRecord,
   getRecommendedSeverity,
   routeBetween,
   routeUrl,

@@ -2148,7 +2148,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tracking-session-modal .modal-content { max-height: min(760px, calc(100dvh - 32px)); overflow-y: auto; }
 .tracking-session-modal .form-group small { display: block; margin-top: 5px; color: #73868e; font-size: .62rem; }
 
-@media (max-width: 1000px) {
+@media (max-width: 1200px) {
   .tracking-layout { grid-template-columns: 1fr; }
   .tracking-sidebar { position: static; top: auto; }
   .sessions-list { max-height: 340px; }
@@ -2556,4 +2556,18 @@ body.notification-center-mounted .copilot-launcher { display: grid; }
 @media (max-width: 640px) {
   .tracking-recommendation-card { grid-template-columns: minmax(0, 1fr); }
   .tracking-recommendation-card button { grid-column: 1; grid-row: auto; width: 100%; }
+}
+
+/* ERSS-112 operational workspaces retain the command-center card system. */
+.erss-call-taker-workspace, .erss-dispatcher-workspace, .erss-assistance-workspace,
+.erss-supervisor-workspace, .erss-field-workspace { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.erss-call-taker-workspace .call-intake-panel, .erss-dispatcher-workspace .dispatcher-queue-panel,
+.erss-supervisor-workspace .supervisor-critical-panel, .erss-field-workspace .field-assignments-panel { grid-column: span 2; }
+.erss-event-card, .supervisor-alert, .field-assignment-card { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--border, #d8e1e7); border-radius: 12px; background: #f8fbfc; margin-block: 10px; }
+.supervisor-alert.critical { border-inline-start: 4px solid #c73737; background: #fff8f8; }
+.supervisor-alert.timeout { border-inline-start: 4px solid #c47a12; background: #fffaf2; }
+.erss-event-card button, .field-assignment-card button { justify-self: start; }
+@media (max-width: 900px) {
+  .erss-call-taker-workspace, .erss-dispatcher-workspace, .erss-assistance-workspace, .erss-supervisor-workspace, .erss-field-workspace { grid-template-columns: minmax(0, 1fr); }
+  .erss-call-taker-workspace .call-intake-panel, .erss-dispatcher-workspace .dispatcher-queue-panel, .erss-supervisor-workspace .supervisor-critical-panel, .erss-field-workspace .field-assignments-panel { grid-column: auto; }
 }

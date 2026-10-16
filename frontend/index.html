@@ -119,6 +119,14 @@
           <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
           <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
         </nav>
+        <span class="nav-label">ERSS-112</span>
+        <nav class="navigation">
+          <button class="nav-item" data-view="erss-call-taker" data-roles="Police Officer,Admin">Call Taker</button>
+          <button class="nav-item" data-view="erss-dispatcher" data-roles="Police Officer,Admin">Dispatcher</button>
+          <button class="nav-item" data-view="erss-assistance" data-roles="Police Officer,Admin">Inter-Station Assistance</button>
+          <button class="nav-item" data-view="erss-supervisor" data-roles="Admin">Supervisor Queue</button>
+          <button class="nav-item" data-view="erss-field" data-roles="Police Officer,Admin">Field Assignments</button>
+        </nav>
         <div class="role-box">Active role: <strong id="currentUser">Connecting...</strong></div>
       </aside>
       <main class="workspace">
@@ -741,6 +749,108 @@
                 <span id="policeUserCount" class="chip">-- accounts</span>
               </div>
               <div id="policeUserList" class="police-user-list"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-call-taker">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Emergency Intake</span><h2>112 Emergency Call Taker</h2><p>Live call intake, caller details, incident location verification, and triage.</p></div>
+            <button id="refreshErssCallTaker" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-call-taker-workspace">
+            <section class="panel call-intake-panel">
+              <div class="panel-head"><div><span class="eyebrow">Active Call</span><h2>112 Emergency Call</h2></div></div>
+              <div id="erssCallInfo" class="erss-call-info"></div>
+            </section>
+            <section class="panel caller-details-panel">
+              <div class="panel-head"><div><span class="eyebrow">Caller Information</span><h2>Caller Details</h2></div></div>
+              <div id="callerDetails" class="caller-details"></div>
+            </section>
+            <section class="panel incident-location-panel">
+              <div class="panel-head"><div><span class="eyebrow">Incident Location</span><h2>Location Verification</h2></div></div>
+              <div id="incidentLocationForm" class="incident-location-form"></div>
+            </section>
+            <section class="panel triage-panel">
+              <div class="panel-head"><div><span class="eyebrow">Triage Assessment</span><h2>Emergency Triage</h2></div></div>
+              <div id="triageForm" class="triage-form"></div>
+              <div id="aiSuggestions" class="ai-suggestions"></div>
+            </section>
+            <section class="panel live-notes-panel">
+              <div class="panel-head"><div><span class="eyebrow">Live Notes</span><h2>Call Notes & Transcript</h2></div></div>
+              <div id="liveNotes" class="live-notes"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-dispatcher">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Dispatch Operations</span><h2>112 Dispatcher Workspace</h2><p>Review actionable events, approve dispatch recommendations, monitor unit response.</p></div>
+            <button id="refreshErssDispatcher" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-dispatcher-workspace">
+            <section class="panel dispatcher-queue-panel">
+              <div class="panel-head"><div><span class="eyebrow">Actionable Events</span><h2>Events Requiring Dispatch</h2></div></div>
+              <div id="dispatcherQueue" class="dispatcher-queue"></div>
+            </section>
+            <section class="panel dispatch-recommendation-panel">
+              <div class="panel-head"><div><span class="eyebrow">System Recommendation</span><h2>Recommended Response</h2></div></div>
+              <div id="dispatchRecommendation" class="dispatch-recommendation"></div>
+              <div id="dispatchActions" class="dispatch-actions"></div>
+            </section>
+            <section class="panel unit-monitoring-panel">
+              <div class="panel-head"><div><span class="eyebrow">Unit Response</span><h2>Unit ACK & Response Monitoring</h2></div></div>
+              <div id="unitMonitoring" class="unit-monitoring"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-assistance">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Inter-Station Support</span><h2>Inter-Station Assistance</h2><p>Request and manage support from neighboring stations.</p></div>
+            <button id="refreshErssAssistance" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-assistance-workspace">
+            <section class="panel assistance-requests-panel">
+              <div class="panel-head"><div><span class="eyebrow">Active Requests</span><h2>Assistance Requests</h2></div></div>
+              <div id="assistanceRequests" class="assistance-requests"></div>
+            </section>
+            <section class="panel create-assistance-panel">
+              <div class="panel-head"><div><span class="eyebrow">New Request</span><h2>Request Station Support</h2></div></div>
+              <div id="createAssistanceForm" class="create-assistance-form"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-supervisor">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Supervisor Operations</span><h2>Supervisor Queue</h2><p>Monitor critical exceptions, timeouts, and escalations.</p></div>
+            <button id="refreshErssSupervisor" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-supervisor-workspace">
+            <section class="panel supervisor-critical-panel">
+              <div class="panel-head"><div><span class="eyebrow">Critical Exceptions</span><h2>Critical Events Without Response</h2></div></div>
+              <div id="supervisorCritical" class="supervisor-critical"></div>
+            </section>
+            <section class="panel supervisor-timeouts-panel">
+              <div class="panel-head"><div><span class="eyebrow">Timeouts</span><h2>Unit & Assistance Timeouts</h2></div></div>
+              <div id="supervisorTimeouts" class="supervisor-timeouts"></div>
+            </section>
+            <section class="panel supervisor-disputes-panel">
+              <div class="panel-head"><div><span class="eyebrow">Disputes</span><h2>Jurisdiction & Ownership Disputes</h2></div></div>
+              <div id="supervisorDisputes" class="supervisor-disputes"></div>
+            </section>
+          </div>
+        </section>
+        <section class="view" data-panel="erss-field">
+          <div class="command-page-head">
+            <div><span class="eyebrow">ERSS-112 Field Operations</span><h2>My Emergency Assignments</h2><p>View and respond to assigned emergency incidents.</p></div>
+            <button id="refreshErssField" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="erss-field-workspace">
+            <section class="panel field-assignments-panel">
+              <div class="panel-head"><div><span class="eyebrow">Assigned Incidents</span><h2>My Assignments</h2></div></div>
+              <div id="fieldAssignments" class="field-assignments"></div>
+            </section>
+            <section class="panel field-incident-detail-panel">
+              <div class="panel-head"><div><span class="eyebrow">Incident Details</span><h2>Selected Assignment</h2></div></div>
+              <div id="fieldIncidentDetail" class="field-incident-detail"></div>
             </section>
           </div>
         </section>

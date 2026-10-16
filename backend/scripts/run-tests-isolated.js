@@ -65,7 +65,17 @@ async function main() {
   } finally {
     if (scopedPool) await scopedPool.end().catch(() => {});
     if (/^rakshakai_test_[a-z0-9_]+$/.test(schema)) {
-      await adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      const dropScopedSchema = () => adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      try {
+        await dropScopedSchema();
+      } catch (error) {
+        // The test child may close its final database socket at the same instant
+        // PostgreSQL retires the parent's idle cleanup connection. Retrying this
+        // idempotent teardown once prevents a successful suite from being marked
+        // failed solely because of that transport race.
+        if (error?.code !== "ECONNRESET") throw error;
+        await dropScopedSchema();
+      }
     }
     await adminPool.end();
   }

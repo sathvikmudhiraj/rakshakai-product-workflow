@@ -4466,7 +4466,7 @@ test("frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safel
   assert.match(appSource, /function scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /window\.setTimeout\(\(\) => \{[\s\S]*!hasVisibleUsableLeafletTiles\(instance, "satellite"\)[\s\S]*fallbackSatelliteToStreet\(instance\)/);
   assert.match(appSource, /const hasVisibleTiles = hasVisibleUsableLeafletTiles\(instance, instance\.baseLayer\)/);
-  assert.match(appSource, /if \(tileState\.loaded > 0 && hasVisibleTiles && !tileState\.failedCompletely\) \{[\s\S]*instance\.status\.textContent = `\$\{source\.label\} tiles - zoom/);
+  assert.match(appSource, /if \(baseLayerReady\(hasVisibleTiles, tileState\.failedCompletely\)\) \{[\s\S]*instance\.status\.textContent = `\$\{source\.label\} tiles - zoom/);
   assert.match(appSource, /if \(instance\.baseLayer === "satellite" && tileState\.loaded > 0 && !hasVisibleTiles\) \{[\s\S]*scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /instance\.status\.textContent = message \|\| `Loading \$\{source\.label\} imagery - zoom/);
   assert.match(appSource, /function fallbackSatelliteToStreet\(instance, reason = "Satellite imagery unavailable"\)/);
@@ -4478,7 +4478,7 @@ test("frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safel
   assert.match(appSource, /if \(key === "satellite" && tileState\.failedCompletely\) \{[\s\S]*fallbackSatelliteToStreet\(instance\)/);
   assert.match(appSource, /if \(key === "satellite" && tileState\.loaded > 0 && !hasVisibleUsableLeafletTiles\(instance, "satellite"\)\) \{[\s\S]*scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /updateNavigationPanel\(`Loading \$\{TILE_SOURCES\[instance\.baseLayer\]\.label\} imagery\.\.\.`\)/);
-  assert.match(appSource, /if \(tileState\.loaded > 0 && hasVisibleTiles && !tileState\.failedCompletely\) \{[\s\S]*instance\.activeBaseLayer = instance\.baseLayer;[\s\S]*syncLayerButtons\(instance\)/);
+  assert.match(appSource, /if \(baseLayerReady\(hasVisibleTiles, tileState\.failedCompletely\)\) \{[\s\S]*instance\.activeBaseLayer = instance\.baseLayer;[\s\S]*syncLayerButtons\(instance\)/);
   assert.match(appSource, /function syncLayerButtons\(instance\) \{[\s\S]*const activeLayer = instance\.activeBaseLayer \|\| null/);
   assert.match(appSource, /if \(instance\.baseLayer === "satellite"\) scheduleSatelliteVisibilityFallback\(instance\)/);
 

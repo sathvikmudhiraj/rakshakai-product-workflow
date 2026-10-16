@@ -33,7 +33,9 @@ const ROUTES = {
   "/api/maps/route": "/maps/route",
   "/api/tracking/sessions": "/tracking/sessions",
   "/api/tracking/camera-adjacency": "/tracking/camera-adjacency",
-  "/api/tracking/score-config": "/tracking/score-config"
+  "/api/tracking/score-config": "/tracking/score-config",
+  "/api/erss/events": "/erss/events",
+  "/api/erss/events/simulate": "/erss/events/simulate"
 };
 
 function normalizeApiPath(path) {
@@ -146,4 +148,49 @@ export const trackingApi = {
   createCameraAdjacency: (data) => api("/api/tracking/camera-adjacency", { method: "POST", body: data }),
   getScoreConfig: (trackType) => api(`/api/tracking/score-config${trackType ? `?trackType=${trackType}` : ""}`),
   updateScoreConfig: (data) => api("/api/tracking/score-config", { method: "POST", body: data })
+};
+
+export const erssApi = {
+  listEvents: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return api(`/api/erss/events${query ? `?${query}` : ""}`);
+  },
+  createEvent: (data) => api("/api/erss/events", { method: "POST", body: data }),
+  simulateEvent: (data) => api("/api/erss/events/simulate", { method: "POST", body: data }),
+  getEvent: (id) => api(`/api/erss/events/${id}`),
+  updateEvent: (id, data) => api(`/api/erss/events/${id}`, { method: "PATCH", body: data }),
+  updateLocation: (id, data) => api(`/api/erss/events/${id}/location`, { method: "POST", body: data }),
+  updateJurisdiction: (id, data) => api(`/api/erss/events/${id}/jurisdiction`, { method: "POST", body: data }),
+  listCalls: (eventId) => api(`/api/erss/events/${eventId}/calls`),
+  createCall: (eventId, data) => api(`/api/erss/events/${eventId}/calls`, { method: "POST", body: data }),
+  updateCall: (callId, data) => api(`/api/erss/calls/${callId}`, { method: "PATCH", body: data }),
+  endCall: (callId, data) => api(`/api/erss/calls/${callId}/end`, { method: "POST", body: data }),
+  createTriage: (eventId, data) => api(`/api/erss/events/${eventId}/triage`, { method: "POST", body: data }),
+  getTriage: (eventId) => api(`/api/erss/events/${eventId}/triage`),
+  createDispatchRequest: (eventId, data) => api(`/api/erss/events/${eventId}/dispatch-request`, { method: "POST", body: data }),
+  getDispatchRequest: (eventId) => api(`/api/erss/events/${eventId}/dispatch-request`),
+  approveDispatchRequest: (requestId, data) => api(`/api/erss/dispatch-requests/${requestId}/approve`, { method: "POST", body: data }),
+  rejectDispatchRequest: (requestId, data) => api(`/api/erss/dispatch-requests/${requestId}/reject`, { method: "POST", body: data }),
+  createUnitRequest: (dispatchRequestId, data) => api(`/api/erss/dispatch-requests/${dispatchRequestId}/unit-requests`, { method: "POST", body: data }),
+  listUnitRequests: (dispatchRequestId) => api(`/api/erss/dispatch-requests/${dispatchRequestId}/unit-requests`),
+  acknowledgeUnitRequest: (requestId, data) => api(`/api/erss/unit-requests/${requestId}/acknowledge`, { method: "POST", body: data }),
+  acceptUnitRequest: (requestId, data) => api(`/api/erss/unit-requests/${requestId}/accept`, { method: "POST", body: data }),
+  declineUnitRequest: (requestId, data) => api(`/api/erss/unit-requests/${requestId}/decline`, { method: "POST", body: data }),
+  timeoutUnitRequest: (requestId) => api(`/api/erss/unit-requests/${requestId}/timeout`, { method: "POST" }),
+  recommendFallbackUnit: (eventId, data) => api(`/api/erss/events/${eventId}/fallback-unit`, { method: "POST", body: data }),
+  createAssistanceRequest: (eventId, data) => api(`/api/erss/events/${eventId}/assistance-requests`, { method: "POST", body: data }),
+  listAssistanceRequests: (eventId) => api(`/api/erss/events/${eventId}/assistance-requests`),
+  acknowledgeAssistanceRequest: (requestId, data) => api(`/api/erss/assistance-requests/${requestId}/acknowledge`, { method: "POST", body: data }),
+  acceptAssistanceRequest: (requestId, data) => api(`/api/erss/assistance-requests/${requestId}/accept`, { method: "POST", body: data }),
+  declineAssistanceRequest: (requestId, data) => api(`/api/erss/assistance-requests/${requestId}/decline`, { method: "POST", body: data }),
+  timeoutAssistanceRequest: (requestId) => api(`/api/erss/assistance-requests/${requestId}/timeout`, { method: "POST" }),
+  createOwnershipTransfer: (eventId, data) => api(`/api/erss/events/${eventId}/ownership-transfer`, { method: "POST", body: data }),
+  listOwnershipTransfers: (eventId) => api(`/api/erss/events/${eventId}/ownership-transfers`),
+  acknowledgeOwnershipTransfer: (transferId, data) => api(`/api/erss/ownership-transfers/${transferId}/acknowledge`, { method: "POST", body: data }),
+  completeOwnershipTransfer: (transferId, data) => api(`/api/erss/ownership-transfers/${transferId}/complete`, { method: "POST", body: data }),
+  getJurisdictionHistory: (eventId) => api(`/api/erss/jurisdiction-history/${eventId}`),
+  getDispatcherWorkload: (dispatcherId) => api(`/api/erss/dispatcher/${dispatcherId}/workload`),
+  getSupervisorQueue: () => api("/api/erss/supervisor/queue"),
+  getRecommendations: (eventId) => api(`/api/erss/events/${eventId}/recommendations`),
+  refreshRecommendations: (eventId) => api(`/api/erss/events/${eventId}/recommendations/refresh`, { method: "POST" })
 };

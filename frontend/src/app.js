@@ -1,7 +1,7 @@
 import "./styles.css";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { api } from "./services/api.js";
+import { api, erssApi } from "./services/api.js";
 import { gisRouteButtonStates } from "./gisButtonState.js";
 import {
   applyRouteResponse,
@@ -21,6 +21,7 @@ import {
 } from "./gisVisibleInitialization.js";
 import {
   STREET_TILE_LOAD_TIMEOUT_MS,
+  baseLayerReady,
   beginBaseLayerSwitch,
   isCurrentBaseLayerSwitch,
   preserveLeafletViewport,
@@ -28,7 +29,7 @@ import {
 } from "./gisBaseLayerLifecycle.js";
 import { renderDetectionBoxes } from "./liveVisionOverlay.js";
 import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveillanceSeverity } from "./liveVisionPolicy.js";
-import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess } from "./roleAccess.js";
+import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess, canAccessErssPage, getOperationalRole } from "./roleAccess.js";
 import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } from "./browserGeolocation.js";
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
@@ -50,7 +51,12 @@ const VIEW_TITLES = {
   history: "Incident History",
   "police-management": "Police Management",
   settings: "System Settings",
-  "multi-camera-tracking": "Multi-Camera Tracking"
+  "multi-camera-tracking": "Multi-Camera Tracking",
+  "erss-call-taker": "ERSS-112 Call Taker",
+  "erss-dispatcher": "ERSS-112 Dispatcher",
+  "erss-assistance": "ERSS-112 Inter-Station Assistance",
+  "erss-supervisor": "ERSS-112 Supervisor Queue",
+  "erss-field": "ERSS-112 Field Assignments"
 };
 
 const SETTINGS_SECTIONS = new Set([
@@ -120,7 +126,16 @@ const state = {
   liveVisionLastFrame: null,
   mapNavigation: emptyRouteNavigationState(),
   mapLayers: { incidents: true, responseUnits: true, dangerZones: false, heatOverlay: false, policeStations: false, labels: false },
-  sosLiveVisionAllowed: location.pathname === "/rakshak/live-vision"
+  sosLiveVisionAllowed: location.pathname === "/rakshak/live-vision",
+  erssEvents: [],
+  erssCalls: [],
+  erssTriage: [],
+  erssDispatchRequests: [],
+  erssUnitRequests: [],
+  erssAssistanceRequests: [],
+  erssJurisdictionHistory: [],
+  erssOwnershipTransfers: [],
+  selectedErssEventId: null
 };
 
 configureTracking({ cameraSources: () => state.cameraSources || [] });
@@ -308,7 +323,7 @@ function setView(view, options = {}) {
   if (document.body.dataset.view === "multi-camera-tracking" && view !== "multi-camera-tracking") cleanupTracking();
   const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
   if (nav?.hidden) landingForRole(state.user?.role);
-  view = resolveViewAccess({ view, role: state.user?.role, document, viewTitles: VIEW_TITLES });
+  view = resolveViewAccess({ view, role: state.user?.role, user: state.user, document, viewTitles: VIEW_TITLES });
   if (view === "missing" && state.user?.role === "Citizen") setText("#viewTitle", "My Reports & Public Safety Help");
   if (view === "settings") {
     setSettingsSection(settingsSectionFromLocation(), { updateUrl: true, focus: false });
@@ -341,6 +356,11 @@ function setView(view, options = {}) {
   if (view === "incident-command") renderIncidentCommand();
   if (view === "unit-assignment") renderUnitAssignment();
   if (view === "multi-camera-tracking") renderTrackingPage();
+  if (view === "erss-call-taker") renderErssCallTaker();
+  if (view === "erss-dispatcher") renderErssDispatcher();
+  if (view === "erss-assistance") renderErssAssistance();
+  if (view === "erss-supervisor") renderErssSupervisor();
+  if (view === "erss-field") renderErssField();
   requestAnimationFrame(renderSatelliteMaps);
 }
 
@@ -409,8 +429,14 @@ function landingForRole(role) {
 
 function applyRoleAccess() {
   const role = state.user?.role;
+  const opRole = getOperationalRole(state.user);
   $$(".nav-item").forEach((button) => {
-    button.hidden = !canSee(button, role);
+    const view = button.dataset.view;
+    if (view && view.startsWith("erss-")) {
+      button.hidden = !canAccessErssPage(view, state.user);
+    } else {
+      button.hidden = !canSee(button, role);
+    }
   });
   $("#runAiScan").classList.toggle("restricted-hidden", !isOperatorRole());
   $("#assignIncident").classList.toggle("restricted-hidden", !isOperatorRole());
@@ -440,6 +466,7 @@ function applyRoleAccess() {
     ? "Police review and linked-incident updates appear here."
     : "Human review is required before a report becomes an operational incident.");
   document.body.dataset.role = role || "guest";
+  document.body.dataset.operationalRole = opRole || "";
 }
 
 function setAuthMode(mode = "login", message = "") {
@@ -518,6 +545,12 @@ function initializeRealtimeAlerts() {
   ["camera_stream_state_changed", "camera_health_updated", "camera_reconnected", "ai_service_unavailable", "observation_created", "observation_reviewed", "alert_created_from_observation"].forEach((eventName) => {
     realtimeUnsubscribers.push(onRealtime(eventName, () => {
       refresh().catch((error) => console.warn("Could not refresh media gateway data:", error.message));
+    }));
+  });
+  const erssEvents = ["erss_event_received", "erss_event_updated", "erss_actionable", "erss_dispatch_required", "erss_dispatch_approved", "erss_recommendation_updated", "erss_unit_requested", "erss_unit_acknowledged", "erss_unit_accepted", "erss_unit_timeout", "erss_fallback_recommended", "erss_assistance_requested", "erss_assistance_acknowledged", "erss_assistance_accepted", "erss_assistance_declined", "erss_assistance_timeout", "erss_jurisdiction_changed", "erss_ownership_transfer_requested", "erss_ownership_transfer_acknowledged", "erss_ownership_transferred", "erss_supervisor_escalated", "erss_call_started", "erss_call_ended", "erss_triage_completed"];
+  erssEvents.forEach((eventName) => {
+    realtimeUnsubscribers.push(onRealtime(eventName, () => {
+      refresh().catch((error) => console.warn("Could not refresh ERSS data:", error.message));
     }));
   });
 }
@@ -1023,7 +1056,7 @@ function updateLeafletLayerStatus(instance, message = "") {
   const hasVisibleTiles = hasVisibleUsableLeafletTiles(instance, instance.baseLayer);
   tileState.visibleLoaded = visibleLeafletTileReport(instance, instance.baseLayer).usableTiles.length;
   instance.map.dataset.baseLayer = instance.baseLayer;
-  if (tileState.loaded > 0 && hasVisibleTiles && !tileState.failedCompletely) {
+  if (baseLayerReady(hasVisibleTiles, tileState.failedCompletely)) {
     clearSatelliteVisibilityTimer(instance);
     clearBaseLayerLoadTimer(instance);
     instance.activeBaseLayer = instance.baseLayer;
@@ -5725,7 +5758,7 @@ async function refresh() {
   const operator = isOperatorRole();
   const admin = isAdminRole();
   const aiVision = loadAiVisionData({ role: state.user?.role, api });
-  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, sla, { cameras, sources, videoEvidence, aiHealth, aiObservations }] = await Promise.all([
+  const [dashboard, reports, zones, incidents, alerts, units, stations, devices, audits, integrations, policeUsers, history, escalations, sla, { cameras, sources, videoEvidence, aiHealth, aiObservations }, erssData] = await Promise.all([
     operator ? api("/api/dashboard") : Promise.resolve({ summary: {} }),
     api("/api/reports"),
     operator ? api("/api/zones") : Promise.resolve({ zones: [] }),
@@ -5740,7 +5773,8 @@ async function refresh() {
     operator ? api("/api/incidents/history") : Promise.resolve({ incidents: [] }),
     operator ? api("/api/escalation/alerts?active=true&limit=100") : Promise.resolve({ alerts: [] }),
     admin ? api("/api/sla/config") : Promise.resolve({ config: [] }),
-    aiVision
+    aiVision,
+    operator ? erssApi.listEvents() : Promise.resolve({ events: [] })
   ]);
   document.body.classList.remove("ui-loading");
   const aiConnected = aiHealth.status === "connected";
@@ -5781,6 +5815,14 @@ async function refresh() {
   state.policeStations = stations.stations || [];
   state.mapDefaultCenter = stations.defaultCenter || DEFAULT_MAP_CENTER;
   state.zones = zones.zones;
+  state.erssEvents = erssData.events || [];
+  state.erssCalls = erssData.calls || [];
+  state.erssTriage = erssData.triage || [];
+  state.erssDispatchRequests = erssData.dispatchRequests || [];
+  state.erssUnitRequests = erssData.unitRequests || [];
+  state.erssAssistanceRequests = erssData.assistanceRequests || [];
+  state.erssJurisdictionHistory = erssData.jurisdictionHistory || [];
+  state.erssOwnershipTransfers = erssData.ownershipTransfers || [];
   renderDashboardKpiDetails();
   renderDispatchPanels();
   renderUnitRegistry(units.units);
@@ -6984,6 +7026,222 @@ function handleBrowserNavigationRestore(message = "GIS route state reset after n
   requestAnimationFrame(() => {
     browserNavigationRestoreInProgress = false;
   });
+}
+
+function renderErssCallTaker() {
+  const panel = $("[data-panel='erss-call-taker']");
+  if (!panel) return;
+  const db = state.erssEvents || [];
+  const activeEvents = db.filter(e => e.callStatus === "IN_PROGRESS" && !["CLOSED", "DISPATCHED"].includes(e.triageStatus));
+  const callInfo = $("#erssCallInfo");
+  if (callInfo) {
+    callInfo.textContent = "";
+    if (activeEvents.length === 0) {
+      callInfo.append(node("div", "empty-state", "No active 112 calls. Waiting for incoming emergency events."));
+    } else {
+      activeEvents.forEach(event => {
+        const card = node("article", "erss-event-card");
+        card.append(
+          node("strong", "", `Event: ${event.externalEventId || event.id}`),
+          node("span", "status-badge " + statusClass(event.triageStatus), displayValue(event.triageStatus)),
+          node("small", "", `Channel: ${event.channel} ${event.simulated ? "(SIMULATED)" : ""}`),
+          node("small", "", `Priority: ${event.priority} | Type: ${event.emergencyType}`),
+          node("small", "", `Caller: ${event.callerLocationText || "Unknown"} | Incident: ${event.incidentLocationText || "Unknown"}`),
+          node("small", "", `Jurisdiction: ${event.jurisdictionId || "Not determined"}`)
+        );
+        callInfo.append(card);
+      });
+    }
+  }
+}
+
+function renderErssDispatcher() {
+  const panel = $("[data-panel='erss-dispatcher']");
+  if (!panel) return;
+  const db = state.erssEvents || [];
+  const actionableEvents = db.filter(e => ["ACTIONABLE", "DISPATCH_RECOMMENDED", "DISPATCHED"].includes(e.triageStatus));
+  const queue = $("#dispatcherQueue");
+  if (queue) {
+    queue.textContent = "";
+    if (actionableEvents.length === 0) {
+      queue.append(node("div", "empty-state", "No actionable events requiring dispatch."));
+    } else {
+      actionableEvents.forEach(event => {
+        const card = node("article", "erss-event-card");
+        card.append(
+          node("strong", "", `Event: ${event.externalEventId || event.id}`),
+          node("span", "status-badge " + statusClass(event.triageStatus), displayValue(event.triageStatus)),
+          node("small", "", `Priority: ${event.priority} | Type: ${event.emergencyType}`),
+          node("small", "", `Location: ${event.incidentLocationText || "Unknown"}`),
+          node("small", "", `Jurisdiction: ${event.jurisdictionId || "Not determined"}`)
+        );
+        const selectBtn = node("button", "ghost", "Review & Dispatch");
+        selectBtn.type = "button";
+        selectBtn.addEventListener("click", () => {
+          state.selectedErssEventId = event.id;
+          renderDispatchRecommendation(event.id);
+        });
+        card.append(selectBtn);
+        queue.append(card);
+      });
+    }
+  }
+}
+
+function renderDispatchRecommendation(eventId) {
+  const panel = $("#dispatchRecommendation");
+  if (!panel) return;
+  panel.textContent = "";
+  const event = (state.erssEvents || []).find(e => e.id === eventId);
+  const dispatchRequest = (state.erssDispatchRequests || []).find(r => r.erssEventId === eventId);
+  if (!event) {
+    panel.append(node("div", "empty-state", "Event not found."));
+    return;
+  }
+  if (!dispatchRequest || !dispatchRequest.primaryRecommendation) {
+    panel.append(node("div", "empty-state", "No dispatch recommendation available. Create one first."));
+    return;
+  }
+  const primary = dispatchRequest.primaryRecommendation;
+  const fallback = dispatchRequest.fallbackRecommendations || [];
+  panel.append(
+    node("strong", "eyebrow", "Primary Recommendation"),
+    node("div", "recommendation-card primary",
+      node("strong", "", `${primary.unitCode || primary.unitId} - ${primary.stationName || primary.stationCode}`),
+      node("small", "", `Service: ${primary.serviceType} | ETA: ${primary.etaMinutes} min | Distance: ${primary.distanceKm} km`),
+      node("small", "", `Reason: ${primary.selectionReason || "Nearest available unit"}`)
+    )
+  );
+  if (fallback.length) {
+    panel.append(node("strong", "eyebrow", "Fallback Units"));
+    fallback.forEach(fb => {
+      panel.append(
+        node("div", "recommendation-card fallback",
+          node("strong", "", `${fb.unitCode || fb.unitId} - ${fb.stationName || fb.stationCode}`),
+          node("small", "", `Service: ${fb.serviceType} | ETA: ${fb.etaMinutes} min | Distance: ${fb.distanceKm} km`)
+        )
+      );
+    });
+  }
+  const actions = $("#dispatchActions");
+  if (actions) {
+    actions.textContent = "";
+    if (dispatchRequest.status === "PENDING") {
+      const approveBtn = node("button", "primary", "Approve & Dispatch");
+      approveBtn.type = "button";
+      approveBtn.addEventListener("click", async () => {
+        try {
+          await api(`/api/erss/dispatch-requests/${dispatchRequest.id}/approve`, {
+            method: "POST",
+            body: {}
+          });
+          await refresh();
+          setText("#dispatchActions", "Dispatch approved and units notified.");
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+      const modifyBtn = node("button", "ghost", "Change Unit");
+      modifyBtn.type = "button";
+      actions.append(approveBtn, modifyBtn);
+    }
+  }
+}
+
+function renderErssAssistance() {
+  const panel = $("[data-panel='erss-assistance']");
+  if (!panel) return;
+  const requests = state.erssAssistanceRequests || [];
+  const list = $("#assistanceRequests");
+  if (list) {
+    list.textContent = "";
+    if (requests.length === 0) {
+      list.append(node("div", "empty-state", "No active assistance requests."));
+    } else {
+      requests.forEach(req => {
+        const card = node("article", "assistance-request-card");
+        card.append(
+          node("strong", "", `Request: ${req.id}`),
+          node("span", "status-badge " + statusClass(req.status), displayValue(req.status)),
+          node("small", "", `From: ${req.requestingStationId} → To: ${req.requestedStationId}`),
+          node("small", "", `Priority: ${req.priority} | Reason: ${req.reason}`),
+          node("small", "", `Status: ${req.status}`)
+        );
+        list.append(card);
+      });
+    }
+  }
+}
+
+function renderErssSupervisor() {
+  const panel = $("[data-panel='erss-supervisor']");
+  if (!panel) return;
+  const criticalEvents = (state.erssEvents || []).filter(e => e.priority === "CRITICAL" && !["DISPATCHED", "CLOSED"].includes(e.triageStatus));
+  const unitTimeouts = (state.erssUnitRequests || []).filter(r => r.status === "TIMEOUT");
+  const assistTimeouts = (state.erssAssistanceRequests || []).filter(r => r.status === "TIMEOUT");
+
+  const critical = $("#supervisorCritical");
+  if (critical) {
+    critical.textContent = "";
+    if (criticalEvents.length === 0) {
+      critical.append(node("div", "empty-state", "No critical events without response."));
+    } else {
+      criticalEvents.forEach(event => {
+        critical.append(
+          node("article", "supervisor-alert critical",
+            node("strong", "", `CRITICAL: ${event.externalEventId || event.id}`),
+            node("small", "", `Type: ${event.emergencyType} | Location: ${event.incidentLocationText || "Unknown"}`),
+            node("small", "", `Triage: ${event.triageStatus} | Since: ${event.createdAt}`)
+          )
+        );
+      });
+    }
+  }
+
+  const timeouts = $("#supervisorTimeouts");
+  if (timeouts) {
+    timeouts.textContent = "";
+    [...unitTimeouts, ...assistTimeouts].forEach(req => {
+      timeouts.append(
+        node("article", "supervisor-alert timeout",
+          node("strong", "", `${req.status} - ${req.erssEventId}`),
+          node("small", "", `Unit: ${req.unitId || req.requestedStationId} | Since: ${req.timeoutAt || req.requestedAt}`)
+        )
+      );
+    });
+    if (!unitTimeouts.length && !assistTimeouts.length) {
+      timeouts.append(node("div", "empty-state", "No active timeouts."));
+    }
+  }
+}
+
+function renderErssField() {
+  const panel = $("[data-panel='erss-field']");
+  if (!panel) return;
+  const user = state.user;
+  const assignments = (state.erssUnitRequests || []).filter(r =>
+    ["ACKNOWLEDGED", "ACCEPTED", "DISPATCHED"].includes(r.status) && r.unitId
+  );
+  const list = $("#fieldAssignments");
+  if (list) {
+    list.textContent = "";
+    if (assignments.length === 0) {
+      list.append(node("div", "empty-state", "No active assignments."));
+    } else {
+      assignments.forEach(req => {
+        const event = (state.erssEvents || []).find(e => e.id === req.erssEventId);
+        const card = node("article", "field-assignment-card");
+        card.append(
+          node("strong", "", `Incident: ${event?.externalEventId || req.erssEventId}`),
+          node("span", "status-badge " + statusClass(req.status), displayValue(req.status)),
+          node("small", "", `Type: ${event?.emergencyType || "Unknown"} | Priority: ${event?.priority || "Unknown"}`),
+          node("small", "", `Location: ${event?.incidentLocationText || "Unknown"}`),
+          node("small", "", `Unit: ${req.unitId} | Service: ${req.serviceType}`)
+        );
+        list.append(card);
+      });
+    }
+  }
 }
 
 window.addEventListener("pageshow", (event) => {

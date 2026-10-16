@@ -61,7 +61,7 @@ test("tracking CSS uses natural-height responsive panels without the legacy forc
   assert.match(professionalBlock, /grid-template-columns:\s*minmax\(280px, 320px\) minmax\(0, 1fr\)/);
   assert.match(professionalBlock, /min-height:\s*0/);
   assert.match(professionalBlock, /height:\s*fit-content/);
-  assert.match(professionalBlock, /@media \(max-width: 1000px\)[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(professionalBlock, /@media \(max-width: 1200px\)[\s\S]*grid-template-columns:\s*1fr/);
   assert.match(professionalBlock, /\.tracking-sidebar \{ position: static; top: auto; \}/);
   assert.doesNotMatch(professionalBlock, /min-height:\s*600px/);
 });

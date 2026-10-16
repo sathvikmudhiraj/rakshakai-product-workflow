@@ -43,7 +43,7 @@ async function waitForUsableMapLayer(page, key, host) {
       && map.classList.contains("tiles-ready")
       && button?.getAttribute("aria-pressed") === "true"
       && usable.length > 0;
-  }, { key, host }, { timeout: 15000 });
+  }, { key, host }, { timeout: 30000 });
   const report = await page.locator("#gisMap").evaluate((map, { key, host }) => {
     const layers = [...map.querySelectorAll(".leaflet-tile-pane > .leaflet-layer")]
       .filter((layer) => getComputedStyle(layer).display !== "none" && Number.parseFloat(getComputedStyle(layer).opacity || "1") > 0.01);
@@ -138,13 +138,19 @@ async function checkEvidenceUpload(page, role, width, browserName) {
     name: `acceptance-${role.replaceAll(" ", "-")}-${width}.${media.mimeType.includes("mp4") ? "mp4" : "webm"}`,
     mimeType: media.mimeType.split(";")[0], buffer: Buffer.from(media.bytes)
   });
-  const upload = page.waitForResponse((response) => response.url().endsWith("/api/video-evidence") && response.request().method() === "POST");
+  // WebKit's multipart bridge can take longer than the default UI timeout on
+  // a freshly-built container; evidence persistence is intentionally checked
+  // rather than treated as a fast UI interaction.
+  const upload = page.waitForResponse(
+    (response) => response.url().endsWith("/api/video-evidence") && response.request().method() === "POST",
+    { timeout: 60000 }
+  );
   await page.locator('#videoEvidenceForm button[type="submit"]').click();
   const response = await upload;
   assert.equal(response.status(), 201, "Evidence upload must persist successfully");
   const { evidence } = await response.json();
   if (browserName === "webkit") {
-    await page.waitForFunction((id) => document.querySelector("#videoReviewSplit video")?.src.includes(id), evidence.id);
+    await page.waitForFunction((id) => document.querySelector("#videoReviewSplit video")?.src.includes(id), evidence.id, { timeout: 60000 });
     const preview = await page.locator("#videoReviewSplit video").evaluate(async (video) => {
       const response = await fetch(video.src);
       return { status: response.status, size: (await response.arrayBuffer()).byteLength };
@@ -157,7 +163,7 @@ async function checkEvidenceUpload(page, role, width, browserName) {
   await page.waitForFunction((id) => {
     const video = document.querySelector("#videoReviewSplit video");
     return video?.src.includes(id) && video.videoWidth > 0 && video.readyState >= 2;
-  }, evidence.id);
+  }, evidence.id, { timeout: 60000 });
   const preview = page.locator("#videoReviewSplit video");
   await preview.evaluate(async (video) => { video.muted = true; await video.play(); });
   await page.waitForFunction(() => document.querySelector("#videoReviewSplit video").currentTime > 0);
@@ -166,6 +172,54 @@ async function checkEvidenceUpload(page, role, width, browserName) {
 }
 
 async function checkTrackingLayout(page, viewport, screenshots, browserName, role) {
+  const now = "2026-10-13T20:00:00.000Z";
+  const entityStates = [
+    { id: "visual-person", trackType: "PERSON", candidateStatus: "PENDING_REVIEW", sessionStatus: "HUMAN_REVIEW", label: "Person" },
+    { id: "visual-vehicle", trackType: "VEHICLE", candidateStatus: "CONFIRMED", sessionStatus: "CONFIRMED", label: "Vehicle", confirmed: true },
+    { id: "visual-object", trackType: "OBJECT", candidateStatus: "REJECTED", sessionStatus: "REJECTED", label: "Object" },
+    { id: "visual-animal", trackType: "ANIMAL", candidateStatus: "UNCERTAIN", sessionStatus: "HUMAN_REVIEW", label: "Animal" }
+  ];
+  const sessions = entityStates.map((state, index) => ({
+    id: state.id, trackType: state.trackType, status: state.sessionStatus,
+    verificationStatus: state.confirmed ? "CONFIRMED" : "PENDING",
+    referenceDetectionId: `reference-${state.id}`, referenceCameraId: "cam_c19",
+    referenceTimestamp: now, referenceObservationId: `reference-observation-${state.id}`,
+    createdAt: now, updatedAt: now, pendingCandidateCount: state.candidateStatus === "PENDING_REVIEW" ? 1 : 0,
+    lastSeenCameraId: state.confirmed ? "cam_c12" : null, lastSeenAt: state.confirmed ? "2026-10-13T20:04:00.000Z" : null
+  }));
+  const details = Object.fromEntries(entityStates.map((state) => {
+    const reference = {
+      id: `reference-observation-${state.id}`, sessionId: state.id, detectionId: `reference-${state.id}`,
+      cameraId: "cam_c19", detectedAt: now, trackType: state.trackType, detectionConfidence: .96,
+      upperClothingColor: state.trackType === "PERSON" ? "navy" : undefined,
+      lowerClothingColor: state.trackType === "PERSON" ? "black" : undefined,
+      plateText: state.trackType === "VEHICLE" ? "TS09AB1234" : undefined,
+      vehicleColor: state.trackType === "VEHICLE" ? "white" : undefined,
+      vehicleType: state.trackType === "VEHICLE" ? "SUV" : undefined,
+      objectClass: state.trackType === "OBJECT" ? "backpack" : undefined,
+      animalSpecies: state.trackType === "ANIMAL" ? "dog" : undefined,
+      primaryColor: ["OBJECT", "ANIMAL"].includes(state.trackType) ? "black" : undefined,
+      sizeClass: ["OBJECT", "ANIMAL"].includes(state.trackType) ? "medium" : undefined
+    };
+    const observation = { ...reference, id: `candidate-observation-${state.id}`, detectionId: `candidate-${state.id}`, cameraId: "cam_c12", detectedAt: "2026-10-13T20:04:00.000Z" };
+    const candidate = {
+      id: `candidate-${state.id}`, sessionId: state.id, observationId: observation.id,
+      cameraId: observation.cameraId, detectedAt: observation.detectedAt, status: state.candidateStatus,
+      overallConfidence: .91, appearanceSimilarity: .9, spatialConsistency: .88, timingConsistency: .86,
+      directionConsistency: .82, activityConsistency: .8, plateSimilarity: .95, colorSimilarity: .9,
+      vehicleTypeSimilarity: .9, routeConsistency: .87, classSimilarity: .94, speciesSimilarity: .93,
+      sizeSimilarity: .88, markingsSimilarity: .84, humanVerificationRequired: true
+    };
+    return [state.id, { session: sessions.find((session) => session.id === state.id), observations: [reference, observation], candidates: [candidate], verifications: state.confirmed ? [{ id: `verification-${state.id}`, sessionId: state.id, candidateId: candidate.id, decision: "CONFIRM_MATCH", actorId: "release-admin", aiConfidence: .91, createdAt: observation.detectedAt }] : [] }];
+  }));
+  await page.route("**/api/tracking/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== "GET") return route.continue();
+    if (url.pathname === "/api/tracking/sessions") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions, total: sessions.length, offset: 0, limit: 50 }) });
+    const sessionId = decodeURIComponent(url.pathname.split("/").at(-1));
+    if (details[sessionId]) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(details[sessionId]) });
+    return route.continue();
+  });
   await page.locator('.nav-item[data-view="multi-camera-tracking"]').click();
   const panel = page.locator('[data-panel="multi-camera-tracking"]');
   await panel.locator(".tracking-header h1").waitFor({ state: "visible" });
@@ -182,6 +236,30 @@ async function checkTrackingLayout(page, viewport, screenshots, browserName, rol
   assert.equal(layout.heading, "Tracking Operations");
   assert.equal(layout.createVisible, true, "Tracking session action must remain visible");
   assert.equal(layout.workspaceVisible, true, "Tracking workspace must remain visible");
+
+  assert.deepEqual(await panel.locator(".session-type").allInnerTexts(), entityStates.map((state) => state.label));
+  for (const state of entityStates) {
+    await panel.locator(`.session-card[data-session-id="${state.id}"]`).click();
+    await panel.locator(".tracking-session-identity h2").filter({ hasText: state.id }).waitFor({ state: "visible" });
+    assert.match(await panel.locator(".tracking-session-meta-grid").innerText(), new RegExp(`Entity Type\\s+${state.label}`, "i"));
+    await panel.locator('.tab-btn[data-tab="candidates"]').click();
+    const candidate = panel.locator(`[data-candidate-id="candidate-${state.id}"]`);
+    await candidate.waitFor({ state: "visible" });
+    assert.match(await candidate.locator(".candidate-status").innerText(), new RegExp(state.candidateStatus.replaceAll("_", " "), "i"));
+    assert.match(await candidate.innerText(), /Possible match/i, "Candidate cards must remain explicitly advisory");
+    if (state.candidateStatus === "PENDING_REVIEW") {
+      assert.match(await candidate.innerText(), /Human verification required/i);
+      await candidate.getByRole("button", { name: "Side-by-Side" }).click();
+      assert.match(await panel.locator(".comparison-container").innerText(), /Human Verification Required/i);
+      assert.match(await panel.locator(".comparison-container").innerText(), /do not establish identity/i);
+    }
+    if (state.confirmed) {
+      assert.match(await panel.locator(".tracking-session-overview").innerText(), /Confirmed/i);
+      assert.equal(await panel.getByRole("button", { name: "Response Options" }).isVisible(), true);
+    }
+    const stateLayout = await panel.evaluate((element) => ({ panel: element.scrollWidth > element.clientWidth + 1, document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 }));
+    assert.deepEqual(stateLayout, { panel: false, document: false }, `${state.trackType} tracking detail must not overflow horizontally`);
+  }
 
   await page.locator("#createTrackingBtn").click();
   const dialog = page.locator('.tracking-session-modal [role="dialog"]');
@@ -274,10 +352,20 @@ async function runBrowserChecks({ baseUrl, password }) {
           assert.notEqual(await page.locator("body").evaluate((element) => getComputedStyle(element).fontFamily), '"Times New Roman"');
           await page.locator('#loginForm input[name="email"]').fill(users.find((user) => user.role === role).email);
           await page.locator('#loginForm input[name="password"]').fill(password);
-          const loginResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/auth/login" && response.request().method() === "POST");
           await page.locator('#loginForm button[type="submit"]').click();
-          assert.equal((await loginResponse).status(), 200, "Browser login must succeed");
+          try {
+            await page.locator("#appShell:not(.app-hidden)").waitFor({ state: "visible" });
+          } catch (error) {
+            const loginError = await page.locator("#loginError").innerText().catch(() => "");
+            throw new Error(`Authenticated application shell did not become visible: ${loginError || "no login error shown"}`, { cause: error });
+          }
           await page.locator("#logoutButton").waitFor({ state: "visible" });
+          const authenticatedSession = await page.evaluate(async () => {
+            const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+            return { status: response.status, body: await response.json() };
+          });
+          assert.equal(authenticatedSession.status, 200, "Browser login must establish an authenticated session");
+          assert.equal(authenticatedSession.body?.user?.role, role, "Authenticated browser role must match the release scenario");
           assert.equal(requests.filter((route) => route === "/api/auth/login").length, 1);
           if (role === "Citizen") {
             await page.waitForLoadState("networkidle");
@@ -314,6 +402,7 @@ async function runBrowserChecks({ baseUrl, password }) {
             assert.equal((await routeResponse).status(), 200);
             await page.waitForFunction(() => !document.querySelector("#recalculateRoute").disabled);
             await page.locator("#clearMapRoute").click();
+            await page.waitForFunction(() => document.querySelector("#navigateMap").disabled && document.querySelector("#clearMapRoute").disabled);
             assert.equal(await page.locator("#navigateMap").isDisabled(), true);
             assert.equal(await page.locator("#clearMapRoute").isDisabled(), true);
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
