@@ -85,6 +85,17 @@ test("ERSS migration is versioned after prior releases and creates all workflow 
   assert.match(migration, /TIMESTAMPTZ/);
 });
 
+test("ERSS triage schema and forward migration accept the application workflow vocabulary", () => {
+  const schema = fs.readFileSync(path.join(__dirname, "../database/schema.sql"), "utf8");
+  const migration = fs.readFileSync(path.join(__dirname, "../database/migrations/023_align_erss_triage_constraints.sql"), "utf8");
+  for (const value of ["ASSESSING", "MARK_ACTIONABLE", "ESCALATE_TO_SUPERVISOR"]) {
+    assert.match(schema, new RegExp(`'${value}'`));
+    assert.match(migration, new RegExp(`'${value}'`));
+  }
+  assert.match(migration, /ESCALATE_SUPERVISOR/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS erss_triage_action_taken_check/);
+});
+
 test("ERSS controller resolves the established authenticated session helper", () => {
   const controller = fs.readFileSync(path.join(__dirname, "../controllers/erss.controller.js"), "utf8");
   assert.match(controller, /userFromReq/);
