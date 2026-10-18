@@ -4,6 +4,9 @@ module.exports = createRepository({
   table: "police_officers",
   jsonKey: "policeOfficers",
   columns: [
+    // The table retains user_id as its non-null legacy primary key while the
+    // repository uses id for generic upserts. Persist both identities.
+    { name: "user_id", value: (item) => item.userId || item.user_id || item.id || "" },
     { name: "badge_id", value: (item) => item.badgeId || item.badge_id || null },
     { name: "station_id", value: (item) => item.stationId || item.station_id || "" },
     { name: "beat_id", value: (item) => item.beatId || item.beat_id || null },

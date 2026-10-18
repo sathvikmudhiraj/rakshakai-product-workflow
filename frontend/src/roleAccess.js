@@ -5,6 +5,7 @@ const VIEW_TITLES = {
   cctv: "CCTV Monitoring",
   "live-vision": "Rakshak Live Vision",
   "video-evidence": "Video Evidence Upload",
+  cctns: "CCTNS Search",
   missing: "Missing & Found Report Center",
   alerts: "Emergency Alert Center",
   history: "Incident History",

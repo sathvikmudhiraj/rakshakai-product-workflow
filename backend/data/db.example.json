@@ -12,6 +12,7 @@
       "name": "Demo Officer",
       "email": "officer@example.test",
       "role": "Police Officer",
+      "data": { "stationId": "PS-PATANCHERU" },
       "passwordHash": "$2a$10$7EqJtq98hPqEX7fNZaFWoOZ9IHe7kycxtMxC3iOSDdCUdthSIYdtS"
     },
     {

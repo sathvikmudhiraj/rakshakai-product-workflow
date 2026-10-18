@@ -2,6 +2,8 @@ import "./styles.css";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api, erssApi } from "./services/api.js";
+import { cctnsApi } from "./services/api.js";
+import { googleWorkspaceSignInUrl } from "./services/api.js";
 import { gisRouteButtonStates } from "./gisButtonState.js";
 import {
   applyRouteResponse,
@@ -33,10 +35,12 @@ import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveVi
 import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } from "./browserGeolocation.js";
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
-import { createCriticalModal, createGlobalBanner, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
+import { createCriticalModal, syncCriticalAttention, clearCriticalAttention, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 import { configureTracking, renderTrackingPage, cleanupTracking, createTrackingSessionModal } from "./components/MultiCameraTracking.js";
 import { configureCopilot, mountCopilot, openCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
 import { mountNotificationCenter, unmountNotificationCenter } from "./components/NotificationCenter.js";
+import { configureCctns, renderCctnsWorkspace, resetCctnsWorkspace } from "./components/CctnsWorkspace.js";
+import { openAccountSessions, closeAccountSessions } from "./components/AccountSessions.js";
 
 const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
@@ -52,6 +56,7 @@ const VIEW_TITLES = {
   "police-management": "Police Management",
   settings: "System Settings",
   "multi-camera-tracking": "Multi-Camera Tracking",
+  cctns: "CCTNS Search",
   "erss-call-taker": "ERSS-112 Call Taker",
   "erss-dispatcher": "ERSS-112 Dispatcher",
   "erss-assistance": "ERSS-112 Inter-Station Assistance",
@@ -139,6 +144,10 @@ const state = {
 };
 
 configureTracking({ cameraSources: () => state.cameraSources || [] });
+configureCctns({
+  api: cctnsApi,
+  getContext: () => ({ user: state.user, incidents: state.incidents || [], stations: state.policeStations || [] })
+});
 configureCopilot({ context: () => {
   const page = document.body.dataset.view || "dashboard";
   const entityId = page === "incident-command" || page === "investigations" || page === "escalations"
@@ -152,6 +161,7 @@ configureCopilot({ context: () => {
 } });
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
+let criticalAttentionSnapshotUserId = null;
 let realtimeUnsubscribers = [];
 let registerSubmissionInFlight = false;
 let browserNavigationRestoreInProgress = false;
@@ -315,6 +325,14 @@ function dispatchErrorMessage(error) {
   return message;
 }
 
+function openCctnsSearch(type = "all", query = "") {
+  const params = new URLSearchParams();
+  if (type && type !== "all") params.set("type", type);
+  if (String(query || "").trim()) params.set("query", String(query).trim());
+  history.pushState(history.state, "", `/cctns${params.size ? `?${params.toString()}` : ""}`);
+  setView("cctns");
+}
+
 function setView(view, options = {}) {
   const previousView = document.body.dataset.view;
   if (previousView === "settings" && view !== "settings" && state.slaDirty && !window.confirm("You have unsaved SLA changes. Discard them and leave Settings?")) return;
@@ -324,6 +342,12 @@ function setView(view, options = {}) {
   const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
   if (nav?.hidden) landingForRole(state.user?.role);
   view = resolveViewAccess({ view, role: state.user?.role, user: state.user, document, viewTitles: VIEW_TITLES });
+  renderCriticalAttention(view);
+  if (view === "cctns" && location.pathname !== "/cctns") {
+    history.replaceState(history.state, "", `/cctns${location.search}`);
+  } else if (view !== "cctns" && location.pathname === "/cctns") {
+    history.replaceState(history.state, "", "/");
+  }
   if (view === "missing" && state.user?.role === "Citizen") setText("#viewTitle", "My Reports & Public Safety Help");
   if (view === "settings") {
     setSettingsSection(settingsSectionFromLocation(), { updateUrl: true, focus: false });
@@ -356,6 +380,7 @@ function setView(view, options = {}) {
   if (view === "incident-command") renderIncidentCommand();
   if (view === "unit-assignment") renderUnitAssignment();
   if (view === "multi-camera-tracking") renderTrackingPage();
+  if (view === "cctns") renderCctnsWorkspace();
   if (view === "erss-call-taker") renderErssCallTaker();
   if (view === "erss-dispatcher") renderErssDispatcher();
   if (view === "erss-assistance") renderErssAssistance();
@@ -427,6 +452,12 @@ function landingForRole(role) {
   return "dashboard";
 }
 
+function requestedPortalView() {
+  if (location.pathname === "/cctns") return "cctns";
+  if (location.pathname === "/rakshak/live-vision") return "live-vision";
+  return state.user?.role === "Admin" && location.hash.startsWith("#settings/") ? "settings" : landingForRole(state.user?.role);
+}
+
 function applyRoleAccess() {
   const role = state.user?.role;
   const opRole = getOperationalRole(state.user);
@@ -481,6 +512,10 @@ function setAuthMode(mode = "login", message = "") {
 }
 
 function showPortal(message = "", mode = "login") {
+  if (state.user?.id) clearCriticalAttention(state.user.id);
+  criticalAttentionSnapshotUserId = null;
+  closeAccountSessions();
+  resetCctnsWorkspace();
   unmountNotificationCenter();
   unmountCopilot();
   stopUnitTelemetryPolling();
@@ -505,11 +540,17 @@ async function acknowledgeEscalation(alertId) {
   await loadPersistentEscalations();
 }
 
+function renderCriticalAttention(page = document.body.dataset.view) {
+  if (!isOperatorRole()) { removeGlobalBanner(); return; }
+  // Do not overwrite session seen IDs with the empty/stale snapshot before refresh completes.
+  if (criticalAttentionSnapshotUserId !== state.user?.id) { removeGlobalBanner(); return; }
+  syncCriticalAttention({ userId: state.user?.id, incidents: state.incidents, alerts: state.escalationAlerts, page, onView: () => setView("incident-command") });
+}
+
 function renderPersistentEscalations(modalAlert = null) {
   if (!isOperatorRole()) return;
   const active = state.escalationAlerts.filter((alert) => alert.active);
-  const criticalCount = active.filter((alert) => String(alert.severity).toUpperCase() === "CRITICAL").length;
-  createGlobalBanner(criticalCount, () => setView("incident-command"));
+  renderCriticalAttention();
   const panel = createRequiresAttentionPanel(active, openEscalationIncident, acknowledgeEscalation);
   const host = document.querySelector("[data-panel='dashboard'] .dashboard-lower-left") || document.querySelector("[data-panel='incident-command'] .incident-command-rail");
   if (host && !panel.isConnected) host.prepend(panel);
@@ -3424,6 +3465,15 @@ function renderAiObservationQueue(observations = state.aiObservations) {
       });
       body.append(actions);
     } else if (observation.alertId) body.append(node("small", "ai-observation-link", `Linked alert: ${observation.alertId}`));
+    if (observation.status === "CONFIRMED") {
+      const labels = (observation.detections || []).map((detection) => String(detection.label || "").toLowerCase());
+      const type = labels.some((label) => /vehicle|motorcycle|car|plate/.test(label)) ? "vehicle"
+        : labels.some((label) => /person/.test(label)) ? "person" : "property";
+      const cctns = node("button", "ghost", type === "vehicle" ? "Search CCTNS Vehicle" : type === "person" ? "Search CCTNS Person" : "Search CCTNS Property");
+      cctns.type = "button";
+      cctns.addEventListener("click", () => openCctnsSearch(type, observation.plateText || observation.serialNumber || observation.message || ""));
+      const actions = node("div", "ai-observation-actions"); actions.append(cctns); body.append(actions);
+    }
     card.append(media, body); container.append(card);
   });
 }
@@ -4011,6 +4061,12 @@ function renderVideoReviewPanel() {
       startTracking.dataset.observationTrack = observation.id;
       startTracking.dataset.evidenceId = evidence.id;
       actions.append(startTracking);
+      if (status === "verified") {
+        const cctns = node("button", "ghost", "Search CCTNS");
+        cctns.type = "button";
+        cctns.addEventListener("click", () => openCctnsSearch("property", observation.serialNumber || observation.plateText || observation.message || ""));
+        actions.append(cctns);
+      }
       card.append(notes, actions);
       right.append(card);
     });
@@ -5806,6 +5862,7 @@ async function refresh() {
   renderIncidents(incidents.incidents);
   state.reports = reports.reports;
   state.incidents = incidents.incidents;
+  criticalAttentionSnapshotUserId = state.user.id;
   state.alerts = alerts.alerts;
   state.escalationAlerts = escalations.alerts || [];
   state.slaConfig = sla.config || [];
@@ -6569,9 +6626,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     state.user = login.user;
     applyRoleAccess();
     showApp();
-    setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
-      ? "settings"
-      : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+    setView(requestedPortalView());
     await refresh();
   } catch (error) {
     showPortal(error.message);
@@ -6611,9 +6666,7 @@ $("#registerForm").addEventListener("submit", async (event) => {
     state.user = created.user;
     showApp();
     await refresh();
-    setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
-      ? "settings"
-      : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+    setView(requestedPortalView());
   } catch (error) {
     showPortal(error.message, "register");
   } finally {
@@ -7008,8 +7061,24 @@ $$("[data-password-toggle]").forEach((button) => {
   });
 });
 
+$("#accountSessionsButton").addEventListener("click", () => openAccountSessions({
+  api,
+  onSessionRotated: () => { disconnectSocket(); if (isOperatorRole()) initializeSocket(state.user); },
+  onSignedOut: () => { state.user = null; applyRoleAccess(); showPortal("Your session ended. Please sign in again."); }
+}));
+
+$("#googleWorkspaceLogin").addEventListener("click", () => { location.assign(googleWorkspaceSignInUrl()); });
+api("/api/auth/google/status").then((status) => {
+  $("#googleWorkspaceLogin").hidden = !status.enabled;
+}).catch(() => {});
+if (new URLSearchParams(location.search).get("authError") === "google_sign_in_failed") {
+  setAuthMode("login", "Google sign-in was not completed. Use an approved Workspace account or contact your administrator.");
+  const clean = new URL(location.href); clean.searchParams.delete("authError"); history.replaceState(history.state, "", clean.pathname + clean.search + clean.hash);
+}
+
 $("#logoutButton").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
+  resetCctnsWorkspace();
   resetGisNavigationState("Logged out. GIS route markers cleared.");
   state.user = null;
   applyRoleAccess();
@@ -7108,7 +7177,7 @@ function renderDispatchRecommendation(eventId) {
     node("strong", "eyebrow", "Primary Recommendation"),
     node("div", "recommendation-card primary",
       node("strong", "", `${primary.unitCode || primary.unitId} - ${primary.stationName || primary.stationCode}`),
-      node("small", "", `Service: ${primary.serviceType} | ETA: ${primary.etaMinutes} min | Distance: ${primary.distanceKm} km`),
+      node("small", "", `Service: ${primary.serviceType || "POLICE"} | ETA: ${primary.etaMinutes == null ? "Unavailable" : `${primary.etaMinutes} min`} | Distance: ${primary.distanceKm} km`),
       node("small", "", `Reason: ${primary.selectionReason || "Nearest available unit"}`)
     )
   );
@@ -7118,7 +7187,7 @@ function renderDispatchRecommendation(eventId) {
       panel.append(
         node("div", "recommendation-card fallback",
           node("strong", "", `${fb.unitCode || fb.unitId} - ${fb.stationName || fb.stationCode}`),
-          node("small", "", `Service: ${fb.serviceType} | ETA: ${fb.etaMinutes} min | Distance: ${fb.distanceKm} km`)
+          node("small", "", `Service: ${fb.serviceType || "POLICE"} | ETA: ${fb.etaMinutes == null ? "Unavailable" : `${fb.etaMinutes} min`} | Distance: ${fb.distanceKm} km`)
         )
       );
     });
@@ -7259,9 +7328,7 @@ checkSession()
   .then(async (hasSession) => {
     if (hasSession) {
       await refresh();
-      setView(state.user.role === "Admin" && location.hash.startsWith("#settings/")
-        ? "settings"
-        : location.pathname === "/rakshak/live-vision" ? "live-vision" : landingForRole(state.user.role));
+      setView(requestedPortalView());
     }
   })
   .catch((error) => {

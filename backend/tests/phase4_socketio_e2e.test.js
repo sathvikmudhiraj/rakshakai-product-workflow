@@ -61,7 +61,9 @@ test("authenticated Socket.IO carries critical and SLA events and REST restores 
 
   const server = await start(0);
   const port = server.address().port;
+  let socket;
   t.after(async () => {
+    socket?.close();
     await new Promise((resolve) => server.close(resolve));
     await closePool();
   });
@@ -86,7 +88,7 @@ test("authenticated Socket.IO carries critical and SLA events and REST restores 
   assert.match(unauthorizedError.message, /Authentication/);
   unauthenticated.close();
 
-  const socket = createClient(`http://127.0.0.1:${port}`, {
+  socket = createClient(`http://127.0.0.1:${port}`, {
     transports: ["websocket"], reconnection: true,
     extraHeaders: { Cookie: cookie }
   });

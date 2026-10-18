@@ -81,3 +81,44 @@ test("missing entities and absent fields are explicit rather than invented", () 
   const source = db(); delete source.policeOfficers[0].stationId;
   assert.match(answer(source, "Show PO-204").answer, /No station assignment recorded/);
 });
+
+test("incident counts and lists override selection and conversation context without mutation", () => {
+  const source = db();
+  source.incidents.push(
+    { id: "INC-1043", title: "Second critical", severity: "critical", status: "Verified" },
+    { id: "INC-1044", title: "High priority", severity: "HIGH", status: "Verified" },
+    { id: "INC-1045", title: "Medium priority", severity: "medium", status: "New" }
+  );
+  const before = JSON.stringify(source);
+  const options = { pageContext: { page: "incident-command", entityId: "INC-1045" }, priorEntities: [{ type: "incident", id: "INC-1044" }] };
+  for (const message of ["how many critical incidents?", "critical and high incident counts", "list all critical incidents", "tell me total and details", "total how many critical incidents and high incidents tell me number and details"]) {
+    const response = answer(source, message, options);
+    assert.equal(response.intent, "incident_search", message);
+    assert.match(response.answer, /Critical incidents: 2/, message);
+    assert.match(response.answer, /Second critical/, message);
+    if (/high|total and details/.test(message)) assert.match(response.answer, /High incidents: 1/);
+  }
+  const selected = answer(source, "selected incident status", options);
+  assert.equal(selected.intent, "incident_lookup");
+  assert.match(selected.answer, /INC-1045/);
+  assert.doesNotMatch(selected.answer, /INC-104[234]/);
+  assert.equal(answer(source, "list details for incident INC-1044", options).intent, "incident_lookup");
+  assert.match(answer(source, "high incidents", options).answer, /High incidents: 1/);
+  assert.match(answer(source, "medium incidents", options).answer, /Medium incidents: 1/);
+  assert.match(answer(source, "unassigned incidents", options).answer, /Matching active incidents: 3/);
+  assert.equal(answer(source, "list critical incidents and close them", options).blockedWriteRequest, true);
+  assert.equal(JSON.stringify(source), before);
+});
+
+test("aggregate and selected incident answers share server actor scope; totals are not truncated", () => {
+  const source = db();
+  source.incidents = Array.from({ length: 25 }, (_, index) => ({ id: `INC-SCOPE-${index}`, title: `Scoped ${index}`, severity: "critical", status: "Verified", stationId: "allowed" }));
+  source.incidents.push({ id: "INC-SECRET", title: "Outside scope", severity: "critical", status: "Verified", stationId: "other" });
+  const options = { actor: { id: "officer", role: "Police Officer", stationId: "allowed" }, pageContext: { page: "incident-command", entityId: "INC-SECRET" } };
+  const response = answer(source, "how many critical incidents?", options);
+  assert.match(response.answer, /Critical incidents: 25/);
+  assert.match(response.answer, /Showing 20 of 25/);
+  assert.doesNotMatch(JSON.stringify(response), /Outside scope|INC-SECRET/);
+  assert.match(answer(source, "selected incident status", options).answer, /No incident/);
+  assert.match(answer(source, "how many critical incidents?", { actor: { role: "Admin" } }).answer, /Critical incidents: 26/);
+});

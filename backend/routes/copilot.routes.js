@@ -20,7 +20,7 @@ router.post("/query", limiter, async (req, res, next) => {
     const conversation = conversations.open(user.id, req.body?.conversationId);
     let result;
     try {
-      result = copilot.answer(db, message, { pageContext, priorEntities: conversation.entities, priorLanguage: conversation.language, selectedLanguage: req.body?.selectedLanguage });
+      result = copilot.answer(db, message, { actor: user, pageContext, priorEntities: conversation.entities, priorLanguage: conversation.language, selectedLanguage: req.body?.selectedLanguage });
     } catch (error) {
       const audit = addAuditLog(db, "copilot_query", user, null, JSON.stringify({ page: pageContext.page, intent: "failure", entities: [], success: false }));
       await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);

@@ -232,8 +232,8 @@ process.env.API_RATE_LIMIT = "10000";
 process.env.AUTH_RATE_LIMIT = "3";
 process.env.FRONTEND_ORIGINS = "https://ops.rakshak.example.com";
 
-const { start } = require("../server");
-const { readDatabase, writeDatabase, repairLegacyPersistedData } = require("../services/core.service");
+const { start, getIO } = require("../server");
+const { readDatabase, writeDatabase, repairLegacyPersistedData, withCctnsState, writeErssChanges, completeGoogleLogin, addAuditLog } = require("../services/core.service");
 const { decryptSecret } = require("../services/cameraSecrets.service");
 
 let server;
@@ -611,6 +611,77 @@ test("more than 100 logouts cannot resurrect an unexpired revoked session", () =
   revokeAuthenticatedSession(user, { jti: "next", exp: expiresAt });
   assert.equal(user.revokedSessionIds.includes("test-session-1"), false);
   assert.equal(userHasRevokedSession(user, { jti: "test-session-0" }), true);
+});
+
+test("session inventory is private, supports remote revocation and rotates the current session", async () => {
+  const original = await readDatabase();
+  try {
+    const a = await login("Admin"); const b = await login("Admin"); const citizen = await login("Citizen");
+    assert.equal((await request("/api/auth/sessions")).status, 401);
+    const listing = await (await request("/api/auth/sessions", { headers: { Cookie: b.cookie } })).json();
+    const current = listing.sessions.find((session) => session.current);
+    assert.ok(current);
+    assert.ok(listing.sessions.length >= 2);
+    assert.equal("token" in current, false); assert.equal("sessionVersion" in current, false);
+    assert.equal((await request(`/api/auth/sessions/${current.id}`, { method: "DELETE", headers: { Cookie: citizen.cookie } })).status, 404);
+    assert.equal((await request(`/api/auth/sessions/${current.id}`, { method: "DELETE", headers: { Cookie: a.cookie } })).status, 200);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: b.cookie } })).json()).user, null);
+    const rotation = await request("/api/auth/sessions/revoke-others", { method: "POST", headers: { Cookie: a.cookie } });
+    assert.equal(rotation.status, 200);
+    const renewed = cookieFrom(rotation).cookie;
+    assert.ok(renewed); assert.notEqual(renewed, a.cookie);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: a.cookie } })).json()).user, null);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: renewed } })).json()).user.role, "Admin");
+    const onlyCurrent = await (await request("/api/auth/sessions", { headers: { Cookie: renewed } })).json();
+    assert.equal(onlyCurrent.sessions.length, 1); assert.equal(onlyCurrent.sessions[0].current, true);
+  } finally { await writeDatabase(original); }
+});
+
+test("Google sign-in preserves approved roles, pins subjects, and can enforce Workspace-only operator access", async () => {
+  const original = await readDatabase(); const policy = process.env.GOOGLE_REQUIRE_WORKSPACE_SSO;
+  try {
+    assert.equal((await (await request("/api/auth/google/status")).json()).enabled, false);
+    const admin = original.users.find((user) => user.role === "Admin");
+    const result = await completeGoogleLogin({ sub: "verified-google-subject", email: admin.email }, { headers: { "user-agent": "Test Workspace device" } });
+    assert.equal(result.user.role, "Admin");
+    assert.equal(result.user.id, admin.id);
+    assert.equal("googleSubject" in result.user, false);
+    const cookie = result.cookies[0].split(";")[0];
+    await assert.rejects(completeGoogleLogin({ sub: "different-subject", email: admin.email }, { headers: {} }), { status: 403 });
+    await assert.rejects(completeGoogleLogin({ sub: "unapproved", email: "unapproved@example.test" }, { headers: {} }), { status: 403 });
+    process.env.GOOGLE_REQUIRE_WORKSPACE_SSO = "true";
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: cookie } })).json()).user.role, "Admin");
+    // Exercise the actual backend policy without consuming the shared HTTP
+    // limiter budget reserved for the existing password/rate-limit tests.
+    let deniedStatus;
+    await require("../services/core.service").api({ method: "POST", headers: {}, body: { email: admin.email, password: TEST_PASSWORD } },
+      { writeHead(status) { deniedStatus = status; }, end() {} }, new URL("http://localhost/api/login"));
+    assert.equal(deniedStatus, 403);
+    assert.equal((await login("Citizen")).response.status, 200);
+  } finally {
+    if (policy === undefined) delete process.env.GOOGLE_REQUIRE_WORKSPACE_SSO; else process.env.GOOGLE_REQUIRE_WORKSPACE_SSO = policy;
+    await writeDatabase(original);
+  }
+});
+
+test("live dashboard sockets disconnect after their session is revoked", async () => {
+  const { io: connect } = require("socket.io-client");
+  const { once } = require("node:events");
+  const session = await login("Admin");
+  const socket = connect(baseUrl, { transports: ["websocket"], reconnection: false, extraHeaders: { Cookie: session.cookie } });
+  try {
+    await once(socket, "connect", { signal: AbortSignal.timeout(5000) });
+    await request("/api/auth/logout", { method: "POST", headers: { Cookie: session.cookie } });
+    const disconnected = once(socket, "disconnect", { signal: AbortSignal.timeout(5000) });
+    await getIO().revalidateSessions();
+    await disconnected;
+    assert.equal(socket.connected, false);
+  } finally { socket.close(); }
+});
+
+test("malformed cookie encoding is treated as an invalid session instead of an exception", async () => {
+  const response = await request("/api/auth/me", { headers: { Cookie: "rakshakai_session=%E0%A4%A" } });
+  assert.equal(response.status, 200); assert.equal((await response.json()).user, null);
 });
 
 test("Public registration always creates Citizen accounts only", async () => {
@@ -1002,6 +1073,64 @@ test("Admin and Police can access operational routes", async () => {
       assert.equal(response.status, 200, `${role}: ${route}`);
     }
   }
+});
+
+test("CCTNS search APIs enforce authenticated operational access and expose only simulator data", async () => {
+  assert.equal((await request("/api/cctns/search?q=TS09%20AB%201234")).status, 401);
+  assert.equal((await request("/api/cctns/search?q=TS09%20AB%201234", { headers: authHeaders("Citizen") })).status, 403);
+  const search = await request("/api/cctns/search?q=TS09%20AB%201234", { headers: authHeaders("Admin") });
+  assert.equal(search.status, 200);
+  const payload = await search.json();
+  assert.equal(payload.adapter.provider, "Simulator");
+  assert.equal(payload.records[0].id, "CCTNS-VEH-2026-4587");
+  assert.equal(payload.records[0].simulated, true);
+  const detail = await request("/api/cctns/records/CCTNS-VEH-2026-4587", { headers: authHeaders("Admin") });
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).record.registrationNumber, "TS09 AB 1234");
+  const rejected = await request("/api/cctns/links", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json" },
+    body: JSON.stringify({ cctnsRecordId: "CCTNS-VEH-2026-4587", incidentId: "not-needed", humanConfirmed: false })
+  });
+  assert.equal(rejected.status, 409);
+  const auditLogs = (await readDatabase()).auditLogs;
+  assert.ok(auditLogs.some((entry) => entry.action === "cctns_link_rejected" && /human_confirmation_required/.test(entry.details)));
+});
+
+test("CCTNS audit persistence does not overwrite unrelated JSON operational records", async () => {
+  const before = (await readDatabase()).incidents.map((incident) => incident.id);
+  await withCctnsState((db) => {
+    db.incidents = [];
+    addAuditLog(db, "cctns_search_performed", { id: "test", role: "Admin" }, null, "safe test metadata");
+  });
+  assert.deepEqual((await readDatabase()).incidents.map((incident) => incident.id), before);
+});
+
+test("ERSS saves preserve concurrent unrelated changes and reject stale record edits", async () => {
+  const original = await readDatabase();
+  try {
+    const initial = structuredClone(original);
+    const targetId = "erss_save_isolation_test";
+    initial.incidents.push({ id: targetId, title: "Original", status: "New", severity: "MEDIUM" });
+    await writeDatabase(initial);
+    const baseline = await readDatabase();
+    const pending = structuredClone(baseline);
+    pending.incidents.find((item) => item.id === targetId).title = "ERSS changed title";
+    const concurrent = await readDatabase();
+    concurrent.users[0].name = "Concurrent account update";
+    await writeDatabase(concurrent);
+    await writeErssChanges(pending, baseline);
+    const saved = await readDatabase();
+    assert.equal(saved.users[0].name, "Concurrent account update");
+    assert.equal(saved.incidents.find((item) => item.id === targetId).title, "ERSS changed title");
+    const stale = structuredClone(saved);
+    const staleBaseline = structuredClone(saved);
+    stale.incidents.find((item) => item.id === targetId).title = "Stale title";
+    saved.incidents.find((item) => item.id === targetId).title = "Newer title";
+    await writeDatabase(saved);
+    await assert.rejects(writeErssChanges(stale, staleBaseline), { status: 409 });
+    assert.equal((await readDatabase()).incidents.find((item) => item.id === targetId).title, "Newer title");
+  } finally { await writeDatabase(original); }
 });
 
 test("response unit registry exposes source-safe unit metadata and marks demo units", async () => {
@@ -3874,14 +4003,15 @@ test("frontend CSS assets load statically and render paths preserve document hea
   assert.equal(/serviceWorker|caches\.open|navigator\.serviceWorker/.test(html + appSource + assetHealth), false);
 });
 
-test("frontend production build emits a stylesheet bundle", () => {
+test("frontend production build emits a stylesheet bundle", async () => {
   const frontendRoot = path.join(__dirname, "..", "..", "frontend");
   const buildOut = path.join(testDirectory, "frontend-dist-css");
   fs.rmSync(buildOut, { recursive: true, force: true });
-  childProcess.execFileSync(process.execPath, [path.join(frontendRoot, "node_modules", "vite", "bin", "vite.js"), "build", "--outDir", buildOut, "--emptyOutDir"], {
-    cwd: frontendRoot,
-    env: { ...process.env, FORCE_COLOR: "0" },
-    stdio: "pipe"
+  await new Promise((resolve, reject) => {
+    childProcess.execFile(process.execPath, [path.join(frontendRoot, "node_modules", "vite", "bin", "vite.js"), "build", "--outDir", buildOut, "--emptyOutDir"], {
+      cwd: frontendRoot,
+      env: { ...process.env, FORCE_COLOR: "0" }
+    }, (error) => error ? reject(error) : resolve());
   });
 
   const distHtml = fs.readFileSync(path.join(buildOut, "index.html"), "utf8");

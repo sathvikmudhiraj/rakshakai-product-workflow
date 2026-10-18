@@ -77,6 +77,15 @@ export function mountCopilot() {
     finally { status.classList.remove("loading"); send.disabled = false; input.disabled = false; input.focus(); }
   };
 
+  let composing = false;
+  input.addEventListener("compositionstart", () => { composing = true; });
+  input.addEventListener("compositionend", () => { composing = false; });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || composing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!event.repeat) form.requestSubmit();
+  });
+
   const onPointerDown = (event) => { if (root.classList.contains("docked") || (event.button !== undefined && event.button !== 0)) return; const rect = launcher.getBoundingClientRect(); drag = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top, sx: event.clientX, sy: event.clientY, moved: false }; launcher.setPointerCapture?.(event.pointerId); launcher.classList.add("dragging"); };
   const onPointerMove = (event) => { if (!drag || drag.id !== event.pointerId) return; if (Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy) > 5) drag.moved = true; if (drag.moved) { event.preventDefault(); position({ left: event.clientX - drag.x, top: event.clientY - drag.y }); } };
   const onPointerUp = (event) => { if (!drag || drag.id !== event.pointerId) return; suppressClick = drag.moved; if (drag.moved) position({ left: event.clientX - drag.x, top: event.clientY - drag.y }, true); launcher.releasePointerCapture?.(event.pointerId); launcher.classList.remove("dragging"); drag = null; };

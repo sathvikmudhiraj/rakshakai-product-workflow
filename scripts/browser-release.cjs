@@ -171,6 +171,60 @@ async function checkEvidenceUpload(page, role, width, browserName) {
   assert.match(await page.locator("#videoReviewSplit").innerText(), /Human verification is required/i);
 }
 
+async function checkCctnsWorkspace(page, viewport, screenshots, browserName, role) {
+  const nav = page.locator('.nav-item[data-view="cctns"]');
+  await nav.waitFor({ state: "visible" });
+  await nav.click();
+  const workspace = page.locator("#cctnsWorkspace");
+  await workspace.locator("h2", { hasText: "CCTNS Search" }).waitFor({ state: "visible" });
+  assert.match(await workspace.innerText(), /SIMULATED CCTNS RECORDS/i);
+
+  const search = workspace.locator('[data-cctns-search]');
+  await search.fill("TS09 AB 1234");
+  const vehicle = workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]');
+  await vehicle.waitFor({ state: "visible" });
+  await vehicle.click();
+  await workspace.locator(".cctns-detail-title", { hasText: "TS09 AB 1234" }).waitFor({ state: "visible" });
+  await workspace.locator('[data-cctns-record="CCTNS-CASE-2026-0456"]').last().click();
+  await workspace.locator(".cctns-detail-title", { hasText: "CASE-2026-0456" }).waitFor({ state: "visible" });
+
+  await search.fill("Smuggling");
+  await workspace.locator('[data-cctns-category="crime"]').click();
+  if (viewport.width <= 700) await workspace.locator('[data-cctns-toggle-filters]').click();
+  await workspace.locator('[data-cctns-filter="crimeType"]').selectOption("Smuggling");
+  await workspace.getByText(/Possible Match.*Human verification required/i).waitFor({ state: "visible" });
+  const smuggling = workspace.locator('[data-cctns-record="CCTNS-CASE-2026-1042"]');
+  await smuggling.waitFor({ state: "visible" });
+  await smuggling.click();
+  await workspace.locator(".cctns-detail-title", { hasText: "CASE-2026-1042" }).waitFor({ state: "visible" });
+  const layout = await workspace.evaluate((element) => ({
+    workspace: element.scrollWidth > element.clientWidth + 1,
+    document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+  }));
+  assert.deepEqual(layout, { workspace: false, document: false }, "CCTNS workspace must not overflow horizontally");
+
+  // Exercise the complete authorized officer workflow in every supported browser.
+  if (role === "Police Officer" && viewport.width === 1920) {
+    await page.goto(`${new URL(page.url()).origin}/cctns?type=vehicle&query=TS09%20AB%201234`, { waitUntil: "networkidle" });
+    await workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]').click();
+    await workspace.getByRole("button", { name: "LINK TO INCIDENT" }).click();
+    const dialog = page.locator("#cctnsLinkDialog");
+    await dialog.waitFor({ state: "visible" });
+    const incident = dialog.locator('select[name="incidentId"]');
+    await incident.selectOption("fixture_incident_active");
+    const linkedIncidentId = await incident.inputValue();
+    await dialog.locator('textarea[name="verificationReason"]').fill("Vehicle record and linked FIR reviewed by an authorized operator.");
+    await dialog.locator('input[name="humanConfirmed"]').check();
+    await dialog.getByRole("button", { name: "Confirm Link" }).click();
+    await workspace.getByText("Incident link confirmed and audited.").waitFor({ state: "visible" });
+    await page.reload({ waitUntil: "networkidle" });
+    await workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]').click();
+    await workspace.getByText(/Linked RakshakAI Incidents/i).waitFor({ state: "visible" });
+    assert.ok((await workspace.innerText()).includes(linkedIncidentId), "Confirmed CCTNS incident link must persist after refresh");
+  }
+  await page.screenshot({ path: path.join(screenshots, `cctns-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
+}
+
 async function checkTrackingLayout(page, viewport, screenshots, browserName, role) {
   const now = "2026-10-13T20:00:00.000Z";
   const entityStates = [
@@ -256,6 +310,7 @@ async function checkTrackingLayout(page, viewport, screenshots, browserName, rol
     if (state.confirmed) {
       assert.match(await panel.locator(".tracking-session-overview").innerText(), /Confirmed/i);
       assert.equal(await panel.getByRole("button", { name: "Response Options" }).isVisible(), true);
+      assert.equal(await candidate.getByRole("button", { name: "Search CCTNS Vehicle" }).isVisible(), true);
     }
     const stateLayout = await panel.evaluate((element) => ({ panel: element.scrollWidth > element.clientWidth + 1, document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 }));
     assert.deepEqual(stateLayout, { panel: false, document: false }, `${state.trackType} tracking detail must not overflow horizontally`);
@@ -442,6 +497,7 @@ async function runBrowserChecks({ baseUrl, password }) {
             )), [], "No application CSP violations before rendering native media controls");
             await checkEvidenceUpload(page, role, viewport.width, browserName);
             await checkTrackingLayout(page, viewport, screenshots, browserName, role);
+            await checkCctnsWorkspace(page, viewport, screenshots, browserName, role);
           }
           assert.deepEqual(errors, [], "No uncaught browser errors");
           const cspViolations = await page.evaluate(() => window.releaseCspViolations);

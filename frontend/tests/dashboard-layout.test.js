@@ -40,6 +40,16 @@ test("critical banner drives exact sticky offsets for header and sidebar", () =>
   assert.match(alerts, /ResizeObserver/);
 });
 
+test("queue navigation marks critical attention seen only after this user's snapshot loads", () => {
+  assert.match(app, /resolveViewAccess\([\s\S]*?renderCriticalAttention\(view\)/);
+  assert.match(app, /criticalAttentionSnapshotUserId !== state\.user\?\.id/);
+  assert.match(app, /state\.incidents = incidents\.incidents;\s*criticalAttentionSnapshotUserId = state\.user\.id/);
+  assert.match(app, /clearCriticalAttention\(state\.user\.id\)/);
+  assert.equal(document.querySelector('[data-panel="incident-command"] #command-critical-summary')?.tagName, "SECTION");
+  assert.match(css, /\.critical-queue-summary \{[^}]*display: flex/);
+  assert.match(css, /\.topbar \{ position: sticky; top: var\(--critical-banner-height\); min-height: 68px/);
+});
+
 test("responsive dashboard stacks Attention, Live Incidents, then Timeline", () => {
   assert.match(css, /@media \(max-width: 1000px\)[^{]*\{[^}]*[\s\S]*?\.dashboard-lower-left \{ display: contents; \}/);
   assert.match(css, /\.requires-attention-panel \{ order: 1; \}/);

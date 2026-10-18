@@ -1,4 +1,49 @@
 let criticalBannerResizeObserver = null;
+const criticalSeen = new Map();
+const criticalSeenKey = (userId) => `rakshakai:critical-seen:${encodeURIComponent(userId)}`;
+
+export function clearCriticalAttention(userId) {
+  criticalSeen.delete(String(userId));
+  try { document.defaultView.sessionStorage.removeItem(criticalSeenKey(userId)); } catch { /* Memory-only when storage is blocked. */ }
+  removeGlobalBanner();
+}
+
+export function syncCriticalAttention({ userId, incidents = [], alerts = [], page, onView }) {
+  if (!userId) { removeGlobalBanner(); return; }
+  const closed = new Set(["closed", "resolved", "rejected", "cancelled", "completed"]);
+  const records = new Map(incidents.map((item) => [item.id, item]));
+  const ids = new Set(incidents.filter((item) => String(item.severity).toLowerCase() === "critical" && !closed.has(String(item.status).toLowerCase())).map((item) => item.id));
+  // Alerts can arrive before the refreshed incident snapshot. Count incidents, not alert rows.
+  for (const alert of alerts) {
+    if (alert.active && !alert.resolved && String(alert.severity).toLowerCase() === "critical" && alert.incidentId && !records.has(alert.incidentId)) ids.add(alert.incidentId);
+  }
+  const key = String(userId);
+  let seen = criticalSeen.get(key);
+  if (!seen) {
+    try {
+      const stored = JSON.parse(document.defaultView.sessionStorage.getItem(criticalSeenKey(key)) || "[]");
+      seen = new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string") : []);
+    } catch { seen = new Set(); }
+  }
+  seen = new Set([...seen].filter((id) => ids.has(id)));
+  const bannerHadFocus = document.getElementById("global-critical-banner")?.contains(document.activeElement);
+  if (page === "incident-command") ids.forEach((id) => seen.add(id));
+  criticalSeen.set(key, seen);
+  try { document.defaultView.sessionStorage.setItem(criticalSeenKey(key), JSON.stringify([...seen])); } catch { /* In-memory fallback stays user-scoped. */ }
+  const unseen = [...ids].filter((id) => !seen.has(id)).length;
+  if (page === "incident-command" || !unseen) removeGlobalBanner();
+  else createGlobalBanner(ids.size, onView);
+  const summary = document.getElementById("command-critical-summary");
+  if (summary) {
+    summary.hidden = ids.size === 0;
+    summary.querySelector("[data-critical-count]").textContent = `${ids.size} incident${ids.size === 1 ? "" : "s"} require${ids.size === 1 ? "s" : ""} attention`;
+  }
+  if (bannerHadFocus && page === "incident-command") {
+    const heading = document.getElementById("viewTitle");
+    heading?.setAttribute("tabindex", "-1");
+    heading?.focus({ preventScroll: true });
+  }
+}
 
 function syncCriticalBannerOffset(banner) {
   const height = banner && !banner.hidden ? Math.ceil(banner.getBoundingClientRect().height) : 0;
@@ -56,14 +101,17 @@ export function createGlobalBanner(activeCriticalCount, onClick) {
     document.body.insertBefore(banner, document.body.firstChild);
   }
 
-  if (activeCriticalCount > 0) {
+  if (!banner.querySelector(".banner-action")) {
     banner.innerHTML = `
-      <span class="banner-icon" aria-hidden="true">🚨</span>
-      <span class="banner-text">${activeCriticalCount} CRITICAL INCIDENT${activeCriticalCount !== 1 ? "S" : ""} REQUIRE ACTION</span>
-      <button type="button" class="banner-action" aria-label="View critical incidents">VIEW QUEUE</button>
+      <span class="banner-icon" aria-hidden="true">!</span>
+      <span class="banner-text"><strong>Critical attention required</strong><span class="banner-count"></span></span>
+      <button type="button" class="banner-action" aria-label="View critical incidents">View queue</button>
     `;
+  }
+  if (activeCriticalCount > 0) {
+    banner.querySelector(".banner-count").textContent = `${activeCriticalCount} incident${activeCriticalCount === 1 ? " needs" : "s need"} review`;
     banner.hidden = false;
-    banner.querySelector(".banner-action").addEventListener("click", onClick);
+    banner.querySelector(".banner-action").onclick = onClick;
   } else {
     banner.hidden = true;
   }

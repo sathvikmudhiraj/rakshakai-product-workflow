@@ -10,6 +10,7 @@
     "check": "node scripts/check-syntax.cjs",
     "test": "npm --prefix backend test && node --test frontend/tests/*.test.js",
     "test:security": "npm --prefix backend run test:security",
+    "test:critical-ux": "node scripts/test-critical-ux.cjs",
     "test:release": "node scripts/test-release.cjs",
     "reset:demo-users": "npm --prefix backend run reset:demo-users",
     "docker:config": "docker compose --env-file .env.docker config",

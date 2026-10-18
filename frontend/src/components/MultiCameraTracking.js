@@ -22,6 +22,11 @@ function statusClass(value) {
   return `status-${String(value || "unknown").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
+function openCctnsContext(type, query) {
+  const params = new URLSearchParams({ type, query: String(query || "").trim() });
+  window.location.assign(`/cctns?${params.toString()}`);
+}
+
 let getCameraSources = () => window.state?.cameraSources || [];
 
 export function configureTracking({ cameraSources } = {}) {
@@ -257,6 +262,26 @@ function renderCandidateCard(candidate, session, observation) {
     handleSideBySide(session, candidate, observation);
   });
   actions.append(compareBtn);
+
+  // CCTNS lookup is intentionally available only after a human-confirmed
+  // candidate. It opens a scoped simulator search and never asserts identity.
+  if (candidate.status === "CONFIRMED" && session.trackType === "VEHICLE") {
+    const search = node("button", "btn btn-info btn-sm", "Search CCTNS Vehicle");
+    search.addEventListener("click", (event) => { event.stopPropagation(); openCctnsContext("vehicle", observation?.plateText || candidate.plateText || ""); });
+    actions.append(search);
+  }
+  if (candidate.status === "CONFIRMED" && session.trackType === "PERSON") {
+    for (const [type, label] of [["person", "Search CCTNS Person"], ["missing_person", "Search CCTNS Missing Person"]]) {
+      const search = node("button", "btn btn-info btn-sm", label);
+      search.addEventListener("click", (event) => { event.stopPropagation(); openCctnsContext(type, observation?.personName || ""); });
+      actions.append(search);
+    }
+  }
+  if (candidate.status === "CONFIRMED" && session.trackType === "OBJECT") {
+    const search = node("button", "btn btn-info btn-sm", "Search CCTNS Property");
+    search.addEventListener("click", (event) => { event.stopPropagation(); openCctnsContext("property", observation?.serialNumber || observation?.objectClass || ""); });
+    actions.append(search);
+  }
 
   card.append(header, breakdown);
   if (advisory) card.append(advisory);

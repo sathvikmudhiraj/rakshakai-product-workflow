@@ -54,3 +54,54 @@ test("drawer is accessible, page-aware, conversational, and sends no role", asyn
     globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; dom.window.close();
   }
 });
+
+test("Enter sends once, Shift+Enter and IME preserve text, and pending/empty messages do not send", async () => {
+  const dom = new JSDOM('<body></body>', { url: "http://localhost:3000" });
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  const requests = [];
+  let finish;
+  globalThis.fetch = (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Promise((resolve) => { finish = () => resolve(new Response(JSON.stringify({ answer: "Read-only answer", readOnly: true }), { status: 200, headers: { "content-type": "application/json" } })); });
+  };
+  const module = await import(`../src/components/RakshakCopilot.js?keyboard=${Date.now()}`);
+  try {
+    module.mountCopilot(); module.openCopilot();
+    const input = document.querySelector("#copilotQuestion");
+    const enter = (options = {}) => {
+      const event = new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...options });
+      input.dispatchEvent(event); return event;
+    };
+    input.value = "   ";
+    assert.equal(enter().defaultPrevented, true);
+    assert.equal(requests.length, 0);
+    input.value = "How many units are there?";
+    assert.equal(enter({ shiftKey: true }).defaultPrevented, false);
+    assert.equal(enter({ isComposing: true }).defaultPrevented, false);
+    assert.equal(enter({ keyCode: 229 }).defaultPrevented, false);
+    input.dispatchEvent(new dom.window.CompositionEvent("compositionstart"));
+    assert.equal(enter().defaultPrevented, false);
+    input.dispatchEvent(new dom.window.CompositionEvent("compositionend"));
+    assert.equal(requests.length, 0);
+    assert.equal(enter().defaultPrevented, true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].message, "How many units are there?");
+    assert.equal(input.value, "");
+    assert.equal(input.disabled, true);
+    enter({ repeat: true }); enter();
+    assert.equal(requests.length, 1);
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(input.disabled, false);
+    assert.equal(document.activeElement, input);
+    assert.match(document.querySelector(".copilot-messages").textContent, /Read-only answer/);
+    input.value = "A new question";
+    enter({ repeat: true });
+    assert.equal(requests.length, 1);
+  } finally {
+    module.unmountCopilot();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch;
+    dom.window.close();
+  }
+});

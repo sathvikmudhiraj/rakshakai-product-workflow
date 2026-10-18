@@ -51,6 +51,14 @@ node --test backend/integration/operational-load.test.cjs
 
 The GitHub `verify` job runs these gates and must remain required on `main`.
 
+The `verify` job also depends on `ai-service-checks`, which installs the pinned
+CPU AI dependencies on Python 3.11, runs `pip check` and the Python tests, and
+audits all installed distributions with `scripts/audit-ai-dependencies.py`.
+Run that script using the AI environment's Python with `pip-audit` installed in
+the validation environment (or pass `--auditor-python` for an isolated audit
+tool environment). Official PyTorch `+cpu` wheel versions are audited as the
+matching upstream release; unknown local builds fail the strict advisory gate.
+
 ## Required production services
 
 Provision these outside this repository before deployment:

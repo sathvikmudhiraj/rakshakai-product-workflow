@@ -124,6 +124,8 @@ export async function api(path, options = {}) {
   return data;
 }
 
+export function googleWorkspaceSignInUrl() { return normalizeApiPath("/api/auth/google/start"); }
+
 export const trackingApi = {
   createSession: (data) => api("/api/tracking/sessions", { method: "POST", body: data }),
   listSessions: (params = {}) => {
@@ -193,4 +195,20 @@ export const erssApi = {
   getSupervisorQueue: () => api("/api/erss/supervisor/queue"),
   getRecommendations: (eventId) => api(`/api/erss/events/${eventId}/recommendations`),
   refreshRecommendations: (eventId) => api(`/api/erss/events/${eventId}/recommendations/refresh`, { method: "POST" })
+};
+
+export const cctnsApi = {
+  status: () => api("/api/cctns/status"),
+  search: (params = {}) => {
+    const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")).toString();
+    return api(`/api/cctns/search${query ? `?${query}` : ""}`);
+  },
+  searchVehicles: (params = {}) => cctnsApi.search({ ...params, type: "vehicle" }),
+  searchPersons: (params = {}) => cctnsApi.search({ ...params, type: "person" }),
+  searchMissingPersons: (params = {}) => cctnsApi.search({ ...params, type: "missing_person" }),
+  searchCases: (params = {}) => cctnsApi.search({ ...params, type: "case" }),
+  searchProperty: (params = {}) => cctnsApi.search({ ...params, type: "property" }),
+  getRecord: (id) => api(`/api/cctns/records/${encodeURIComponent(id)}`),
+  createLink: (data) => api("/api/cctns/links", { method: "POST", body: data }),
+  removeLink: (id) => api(`/api/cctns/links/${encodeURIComponent(id)}`, { method: "DELETE" })
 };

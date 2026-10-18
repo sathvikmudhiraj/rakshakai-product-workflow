@@ -1,4 +1,7 @@
-const { readDatabase, writeDatabase, hasRole, userFromReq } = require("../services/core.service");
+const { readDatabase, writeErssChanges, hasRole, userFromReq } = require("../services/core.service");
+const snapshots = new WeakMap();
+const realtimeEvents = require("../services/realtimeEvents.service");
+async function writeDatabase(db) { return writeErssChanges(db, snapshots.get(db)); }
 const {
   createErssEvent,
   updateErssEvent,
@@ -49,6 +52,7 @@ const {
 
 async function requireErssRole(req, allowedRoles) {
   const db = await readDatabase();
+  snapshots.set(db, structuredClone(db));
   const user = userFromReq(req, db);
   if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
   if (!hasRole(user, ["Admin", "Police Officer"])) {
@@ -658,3 +662,14 @@ exports.refreshRecommendations = async (req, res, next) => {
     next(error);
   }
 };
+
+// Publish workflow events only after their save succeeds. A rejected concurrent
+// edit or failed transaction must not announce a dispatch that never persisted.
+for (const [name, handler] of Object.entries(exports)) {
+  exports[name] = async (req, res, next) => {
+    if (["GET", "HEAD"].includes(req.method)) return handler(req, res, next);
+    try {
+      return await realtimeEvents.withDeferredEvents(() => handler(req, res, (error) => { throw error; }));
+    } catch (error) { next(error); }
+  };
+}

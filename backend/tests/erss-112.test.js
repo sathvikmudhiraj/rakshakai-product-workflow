@@ -6,6 +6,8 @@ const {
   approveDispatchRequest,
   createUnitRequest,
   acceptUnitRequest,
+  determineJurisdiction,
+  calculateUnitRecommendations,
   TRIAGE_STATUS_BY_ACTION
 } = require("../services/erss.service");
 const { ERSS_REALTIME_EVENT_NAMES } = require("../services/erssRealtimeEvents.service");
@@ -45,6 +47,7 @@ test("ERSS dispatch creates one canonical incident and never writes an ERSS id i
   assert.notEqual(incidentId, event.id);
 
   const request = await createUnitRequest(db, "dispatch_test_request", event.id, unit.id, "POLICE", 60, actor);
+  unit.status = "idle";
   await acceptUnitRequest(db, request.id, unit.id, actor);
   assert.equal(unit.assignedIncidentId, incidentId);
   assert.equal(unit.currentIncidentId, incidentId);
@@ -53,6 +56,9 @@ test("ERSS dispatch creates one canonical incident and never writes an ERSS id i
 
 test("ERSS triage actions map to valid workflow statuses and forwarding requires human confirmation", async () => {
   const { db, actor, event } = erssFixture();
+  for (const humanConfirmed of ["false", "true", 1, {}]) {
+    await assert.rejects(createTriage(db, event.id, actor.id, { actionTaken: "FORWARD_TO_DISPATCH", humanConfirmed }), { status: 409 });
+  }
   await assert.rejects(
     createTriage(db, event.id, actor.id, { emergencyType: "POLICE", priority: "HIGH", actionTaken: "FORWARD_TO_DISPATCH", humanConfirmed: false }),
     /Human confirmation/
@@ -63,6 +69,57 @@ test("ERSS triage actions map to valid workflow statuses and forwarding requires
   assert.equal(triage.actionTaken, "FORWARD_TO_DISPATCH");
   assert.equal(event.triageStatus, TRIAGE_STATUS_BY_ACTION.FORWARD_TO_DISPATCH);
   assert.ok(db.auditLogs.some((entry) => entry.action === "erss_triage_completed"));
+});
+
+test("ERSS cannot reassign a unit committed to another incident", async () => {
+  const { db, actor, unit, event } = erssFixture();
+  await approveDispatchRequest(db, "dispatch_test_request", actor);
+  const request = await createUnitRequest(db, "dispatch_test_request", event.id, unit.id, "POLICE", 60, actor);
+  unit.status = "busy"; unit.assignedIncidentId = "another_incident";
+  await assert.rejects(acceptUnitRequest(db, request.id, unit.id, actor), { status: 409 });
+  assert.equal(unit.assignedIncidentId, "another_incident");
+  assert.equal(request.status, "REQUESTED");
+});
+
+test("ERSS jurisdiction and unit recommendations use real routing helpers without fabricated fallback ETA", async () => {
+  const { db, unit, event } = erssFixture();
+  db.policeStations = [{ id: unit.stationId, name: "Test station", lat: 17.53, lng: 78.26, operational: true }];
+  const jurisdiction = await determineJurisdiction(db, event.incidentLatitude, event.incidentLongitude);
+  assert.equal(jurisdiction.station.id, unit.stationId);
+  const previous = { OSRM_BASE_URL: process.env.OSRM_BASE_URL, PUBLIC_OSRM_FALLBACK: process.env.PUBLIC_OSRM_FALLBACK, GIS_ROUTING_PROVIDER: process.env.GIS_ROUTING_PROVIDER };
+  try {
+    process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
+    process.env.PUBLIC_OSRM_FALLBACK = "false";
+    process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+    const result = await calculateUnitRecommendations(db, event, {});
+    assert.equal(result.primary.unitId, unit.id);
+    assert.equal(result.primary.etaMinutes, null);
+    assert.equal(result.primary.route.approximate, true);
+    assert.match(result.primary.selectionReason, /ETA: unavailable/);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test("ERSS deferred realtime events publish after success and disappear on save failure", async () => {
+  const events = require("../services/realtimeEvents.service");
+  const received = [];
+  const listener = (payload) => received.push(payload);
+  events.on("erss_test_commit", listener);
+  try {
+    await assert.rejects(events.withDeferredEvents(async () => {
+      events.emit("erss_test_commit", { status: "not committed" });
+      throw new Error("Save failed");
+    }), /Save failed/);
+    assert.deepEqual(received, []);
+    await events.withDeferredEvents(async () => {
+      const payload = { status: "committed" };
+      events.emit("erss_test_commit", payload);
+      payload.status = "modified after emission";
+      assert.deepEqual(received, []);
+    });
+    assert.deepEqual(received, [{ status: "committed" }]);
+  } finally { events.off("erss_test_commit", listener); }
 });
 
 test("ERSS realtime server and browser contracts include every emitted workflow event", () => {

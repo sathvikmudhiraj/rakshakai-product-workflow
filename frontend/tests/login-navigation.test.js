@@ -22,7 +22,7 @@ test("login refresh cannot overwrite navigation or allow duplicate login submiss
   const form = dom.window.document.querySelector("form");
   const context = vm.createContext({
     loginSubmissionInFlight: false, state: {}, FormData: dom.window.FormData,
-    location: { pathname: "/" },
+    location: { pathname: "/", hash: "" },
     $: (selector) => selector === "#loginForm"
       ? { addEventListener: (_event, handler) => { submit = handler; } }
       : dom.window.document.querySelector(selector),
@@ -34,6 +34,10 @@ test("login refresh cannot overwrite navigation or allow duplicate login submiss
     refresh: () => { enteredRefresh(); return pending; },
     showPortal(message) { assert.fail(message); }
   });
+  const routeBegin = source.indexOf("function requestedPortalView() {");
+  const routeEnd = source.indexOf("function applyRoleAccess()", routeBegin);
+  assert.ok(routeBegin >= 0 && routeEnd > routeBegin);
+  vm.runInContext(source.slice(routeBegin, routeEnd), context);
   vm.runInContext(source.slice(begin, end), context);
   try {
     const event = { preventDefault() {}, currentTarget: form };

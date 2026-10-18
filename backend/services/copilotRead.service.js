@@ -242,18 +242,77 @@ function recommendationAnswer(db, incidentId) {
   return result(available.length ? `No current dispatch recommendation is recorded for ${incident.id}. ${available.length} unit(s) are marked available. Open Unit Assignment to calculate an authoritative route-based recommendation.` : `No available unit is currently recorded for ${incident.id}.`, [{ type: "incident", id: incident.id }], { navigation: navigation("unit-assignment", incident.id) });
 }
 
+function incidentCollectionQuery(text, page = {}, prior = []) {
+  if (/\b(?:sla|breach|breached|escalation|investigation|evidence)\b/i.test(text)) return false;
+  if (extractReferences(text).incident.length && !/\bincidents\b/i.test(text)) return false;
+  if (/\b(?:this|selected|current|that) incident\b/i.test(text) && !/\bincidents\b/i.test(text)) return false;
+  const aggregate = /\b(?:total|counts?|how many|list|show all)\b/i.test(text);
+  if (/\bincidents?\b/i.test(text)) return aggregate || /\b(?:critical|high|medium|low|unassigned|open|active) incidents\b/i.test(text);
+  return aggregate && (page.page === "incident-command" || prior[0]?.type === "incident")
+    && !/\b(?:camera|officer|unit|track|evidence|investigation)s?\b/i.test(text);
+}
+
+// Match the existing station/ownership incident-access policy, without importing writes.
+function scopedIncidents(db, actor) {
+  if (!actor) return db; // Internal trusted adapters/tests may supply an already scoped snapshot.
+  if (actor.role === "Admin") return db;
+  const stations = new Set([actor.stationId, actor.data?.stationId].filter(Boolean));
+  for (const officer of list(db, "policeOfficers")) {
+    if (same(officer.userId || officer.officerUserId, actor.id)) stations.add(officer.stationId);
+  }
+  for (const member of list(db, "responseUnitMembers")) {
+    if (same(member.officerUserId, actor.id)) stations.add(findUnit(db, member.unitId)?.stationId);
+  }
+  return { ...db, incidents: actor.role !== "Police Officer" ? [] : list(db, "incidents").filter((item) => {
+    const station = valueFrom(item, "stationId", "station_id", "jurisdictionId", "jurisdiction_id");
+    return station ? stations.has(station) : same(item.createdBy, actor.id) || same(item.reportedBy, actor.id);
+  }) };
+}
+
+function incidentCollectionAnswer(db, text, now) {
+  let records = list(db, "incidents");
+  const activeOnly = /\b(?:open|active|unassigned)\b|needs? (?:a )?unit/i.test(text);
+  if (activeOnly) records = records.filter((item) => !CLOSED.has(lower(item.status)));
+  if (/unassigned|needs? (?:a )?unit/i.test(text)) records = records.filter((item) => !valueFrom(item, "assignedUnitId", "assigned_unit_id"));
+  const severities = ["critical", "high", "medium", "low"].filter((severity) => new RegExp(`\\b${severity}\\b`, "i").test(text));
+  if (severities.length) records = records.filter((item) => severities.includes(lower(item.severity)));
+  if (/\btoday\b/i.test(text)) records = records.filter((item) => String(valueFrom(item, "createdAt", "updatedAt") || "").slice(0, 10) === new Date(now).toISOString().slice(0, 10));
+  const groups = severities.length ? severities : [...new Set(["critical", "high", "medium", "low", ...records.map((item) => lower(item.severity) || "unknown")])];
+  const lines = [`${activeOnly ? "Matching active incidents" : "Matching incidents"}: ${records.length}`];
+  const entities = [];
+  for (const severity of groups) {
+    const matches = records.filter((item) => (lower(item.severity) || "unknown") === severity);
+    const label = severity[0].toUpperCase() + severity.slice(1);
+    lines.push(`${label} incidents: ${matches.length}`);
+  }
+  for (const severity of groups) {
+    const matches = records.filter((item) => (lower(item.severity) || "unknown") === severity);
+    if (!matches.length) continue;
+    lines.push("", `${severity[0].toUpperCase() + severity.slice(1)} incidents:`);
+    matches.slice(0, 20).forEach((item, index) => {
+      lines.push(`${index + 1}. ${display(valueFrom(item, "title", "type", "category"), "Incident")} (${item.id}) — ${display(item.status)} — ${display(valueFrom(item, "assignedUnitId", "assigned_unit_id"), "Unassigned")}`);
+      entities.push({ type: "incident", id: item.id });
+    });
+    if (matches.length > 20) lines.push(`Showing 20 of ${matches.length}; open Incident Command for the full queue.`);
+  }
+  return result(lines.join("\n"), entities, { navigation: navigation("incident-command") });
+}
+
 function contextualReferences(message, page, prior = []) {
   const refs = extractReferences(message);
   const referential = /\b(?:this|it|its|current|selected|that|the incident|the camera|the unit|the officer|the track|which unit|assigned unit|who is responding|what is pending|how much sla|status|why is (?:it|this))\b/i.test(message);
   if (Object.values(refs).some((items) => items.length) || (!referential && !page.entityId)) return refs;
-  const entityId = prior[0]?.id || page.entityId, type = prior[0]?.type || (page.page.includes("incident") ? "incident" : page.page.includes("camera") || page.page === "cctv" ? "camera" : page.page.includes("unit") ? "unit" : page.page.includes("tracking") ? "track" : null);
+  const selected = /\bselected\b/i.test(message) && page.entityId;
+  const pageType = page.page.includes("incident") ? "incident" : page.page.includes("camera") || page.page === "cctv" ? "camera" : page.page.includes("unit") ? "unit" : page.page.includes("tracking") ? "track" : null;
+  const entityId = selected ? page.entityId : prior[0]?.id || page.entityId, type = selected ? pageType : prior[0]?.type || pageType;
   if (entityId && type && refs[type]) refs[type].push(String(entityId).toUpperCase());
   return refs;
 }
 
-function classify(text, refs) {
+function classify(text, refs, collection = false) {
   if (WRITE_REQUEST_PATTERN.test(text) || MULTILINGUAL_WRITE_PATTERN.test(text)) return "blocked_write";
   if (/compare/i.test(text)) return "compare";
+  if (collection || incidentCollectionQuery(text)) return "incident_search";
   if (/investigations?.+assigned/i.test(text)) return "investigation_search";
   if (refs.officer.length) return "officer_lookup";
   if (refs.track.length) return "tracking_lookup";
@@ -285,13 +344,16 @@ function sourceMetadata(db, entities) {
 }
 
 function answer(db, message, options = {}) {
+  db = scopedIncidents(db, options.actor);
   const originalText = String(message || "").trim();
   const detected = detectLanguage(originalText, options.priorLanguage);
   const language = responseLanguage(options.selectedLanguage, detected.language);
   const text = normalizeQuery(originalText);
-  const now = Number(options.currentTime) || Date.now(), page = sanitizePageContext(options.pageContext), refs = contextualReferences(text, page, options.priorEntities || []);
+  const now = Number(options.currentTime) || Date.now(), page = sanitizePageContext(options.pageContext);
+  const collection = incidentCollectionQuery(text, page, options.priorEntities || []);
+  const refs = collection ? extractReferences(text) : contextualReferences(text, page, options.priorEntities || []);
   const safetyIntent = SENSITIVE_REQUEST_PATTERN.test(originalText) ? "blocked_sensitive" : INJECTION_PATTERN.test(originalText) ? "blocked_safety" : null;
-  const intent = safetyIntent || classify(text, refs);
+  const intent = safetyIntent || classify(text, refs, collection);
   let response;
   if (intent === "blocked_sensitive") response = result("I can't provide passwords, tokens, credentials, private URLs, or other protected configuration.", [], { blockedSensitiveRequest: true });
   else if (intent === "blocked_safety") response = result("I can only use approved read-only RakshakAI information tools. I cannot bypass safety rules, execute SQL, or write to operational data.", [], { blockedSafetyRequest: true });
@@ -306,11 +368,7 @@ function answer(db, message, options = {}) {
   else if (intent === "incident_lookup") response = incidentAnswer(db, refs.incident[0], now, text);
   else if (intent === "sla_search") { const records = listSlaBreaches(db, now); response = listAnswer("Incidents at or beyond SLA breach:", records, "incident", (item) => `${item.id}: ${upper(item.severity)} · ${getEscalationLevel(item, list(db, "slaConfig"), now)}`, "No current SLA breaches are recorded."); }
   else if (intent === "incident_search") {
-    let records = list(db, "incidents").filter((item) => !CLOSED.has(lower(item.status)));
-    if (/unassigned|need(?:s)? (?:a )?unit/i.test(text)) records = records.filter((item) => !valueFrom(item, "assignedUnitId", "assigned_unit_id"));
-    if (/critical/i.test(text)) records = records.filter((item) => upper(item.severity) === "CRITICAL");
-    if (/today/i.test(text)) { const day = new Date(now).toISOString().slice(0, 10); records = records.filter((item) => String(valueFrom(item, "createdAt", "updatedAt") || "").slice(0, 10) === day); }
-    response = listAnswer("Matching active incidents:", records, "incident", (item) => `${item.id}: ${upper(item.severity || "UNKNOWN")} · ${display(item.status)} · ${display(valueFrom(item, "assignedUnitId", "assigned_unit_id"), "Unassigned")}`, "No matching active incidents were found.");
+    response = incidentCollectionAnswer(db, text, now);
   }
   else if (intent === "investigation_search") {
     const officerRef = refs.officer[0];

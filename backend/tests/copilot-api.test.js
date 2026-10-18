@@ -13,10 +13,14 @@ const passwordHash = bcrypt.hashSync(password, 4);
 const database = {
   users: [
     { id: "admin", name: "Admin", email: "admin@copilot.test", role: "Admin", passwordHash },
-    { id: "police", name: "Officer", email: "police@copilot.test", role: "Police Officer", passwordHash },
+    { id: "police", name: "Officer", email: "police@copilot.test", role: "Police Officer", stationId: "allowed", passwordHash },
     { id: "citizen", name: "Citizen", email: "citizen@copilot.test", role: "Citizen", passwordHash }
   ],
-  incidents: [{ id: "INC-API-1", title: "API fixture", severity: "HIGH", status: "Verified" }],
+  incidents: [
+    { id: "INC-API-1", title: "API fixture", severity: "HIGH", status: "Verified", stationId: "allowed" },
+    { id: "INC-API-2", title: "Critical fixture", severity: "CRITICAL", status: "Verified", stationId: "allowed" },
+    { id: "INC-API-3", title: "Other station", severity: "HIGH", status: "Verified", stationId: "other" }
+  ],
   responseUnits: [], cameraSources: [], auditLogs: [], reports: [], alerts: [], policeStations: [], policeOfficers: [], responseUnitMembers: []
 };
 fs.writeFileSync(databaseFile, JSON.stringify(database));
@@ -72,6 +76,23 @@ test("fake frontend role is ignored and write prompts do not mutate operational 
   const audit = persisted.auditLogs.find((entry) => entry.action === "copilot_query");
   assert.ok(audit);
   assert.doesNotMatch(audit.details, /Close INC-API-1/);
+});
+
+test("API collection queries ignore selected context but never trust client scope or role", async () => {
+  for (const [email, highCount] of [["admin@copilot.test", 2], ["police@copilot.test", 1]]) {
+    const cookie = await login(email);
+    const response = await query(cookie, { message: "critical and high incident counts", role: "Admin", stationId: "other", pageContext: { page: "incident-command", entityId: "INC-API-1" } });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.readOnly, true);
+    assert.match(body.answer, /Critical incidents: 1/);
+    assert.match(body.answer, new RegExp(`High incidents: ${highCount}`));
+    if (highCount === 1) assert.doesNotMatch(JSON.stringify(body), /Other station|INC-API-3/);
+    const selected = await (await query(cookie, { message: "selected incident status", conversationId: body.conversationId, pageContext: { page: "incident-command", entityId: "INC-API-1" } })).json();
+    assert.equal(selected.intent, "incident_lookup");
+    assert.match(selected.answer, /INC-API-1/);
+    assert.doesNotMatch(selected.answer, /INC-API-2|INC-API-3/);
+  }
 });
 
 test("API localizes output, preserves Auto conversation language, and audits language metadata without prompts", async () => {

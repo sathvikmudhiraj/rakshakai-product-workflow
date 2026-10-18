@@ -20,13 +20,15 @@ const notificationRoutes = require("./routes/notifications.routes");
 const aiObservationsRoutes = require("./routes/aiObservations.routes");
 const mediaGatewayRoutes = require("./routes/mediaGateway.routes");
 const erssRoutes = require("./routes/erss.routes");
+const cctnsRoutes = require("./routes/cctns.routes");
 const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
 const { aiFrameLimiter } = require("./middleware/aiFrameLimiter.middleware");
-const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData, runEscalationSweep, runSlaEscalationSweep } = require("./services/core.service");
+const { readDatabase, userFromReq, userFromReqForSession, hasRole, repairLegacyPersistedData, runEscalationSweep, runSlaEscalationSweep } = require("./services/core.service");
+const { installSocketSessionGuard } = require("./services/socketSession.service");
 const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
@@ -70,7 +72,15 @@ function initializeSocketIO(httpServer) {
     }
   });
 
+  const sessionGuard = installSocketSessionGuard(io, { resolveUser: userFromReqForSession, intervalMs: Number(process.env.SOCKET_SESSION_CHECK_MS || 30000) });
+  io.revalidateSessions = sessionGuard.checkAll;
+  httpServer.once("close", () => sessionGuard.stop());
+
   io.on("connection", (socket) => {
+    sessionGuard.attach(socket);
+    // The handshake already verified this role. Subscribe before the client can
+    // receive a connect event, avoiding a gap during async packet validation.
+    socket.join(`dashboard:${socket.data.user.role}`);
     console.log(`Socket.IO client connected: ${socket.id}`);
 
     socket.on("join_incident_room", (incidentId) => {
@@ -652,6 +662,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/copilot", copilotRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/erss", erssRoutes);
+app.use("/api/cctns", cctnsRoutes);
 app.get("/api/me", legacyHandler("/api/me"));
 app.post("/api/login", authLimiter, legacyHandler("/api/login"));
 app.post("/api/register", legacyHandler("/api/register"));
@@ -761,6 +772,9 @@ function validateAiServiceConfig() {
   if (!url) return null;
   const apiKey = String(process.env.AI_SERVICE_API_KEY || "").trim();
   const insecureDevelopment = String(process.env.AI_SERVICE_ALLOW_INSECURE || "").trim().toLowerCase() === "true";
+  if (insecureDevelopment && process.env.NODE_ENV === "production") {
+    throw new Error("AI_SERVICE_ALLOW_INSECURE must be disabled in production");
+  }
   if (!apiKey && !insecureDevelopment) {
     throw new Error("AI_SERVICE_API_KEY is required when AI_SERVICE_URL is configured. Set AI_SERVICE_API_KEY, or set AI_SERVICE_ALLOW_INSECURE=true only for local development without authentication.");
   }
@@ -768,6 +782,7 @@ function validateAiServiceConfig() {
 }
 
 async function start(listenPort = port) {
+  require("./services/googleWorkspace.service").config();
   validateAiServiceConfig();
   validateCameraCredentialConfig({ production: process.env.NODE_ENV === "production" });
   if (process.env.NODE_ENV === "production") {

@@ -1,9 +1,7 @@
 const { uid, now, addAuditLog, createIncidentRecord } = require("../services/core.service");
-const {
-  buildRoute,
-  haversineDistanceKm
-} = require("../services/core.service");
-const { normalized } = require("../services/hybridDispatch.service");
+const { routeBetween, routeUrl, strictPoint } = require("../services/core.service");
+const { haversineDistanceKm } = require("./routeNormalization.service");
+function normalized(value) { return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_"); }
 const realtimeEvents = require("./realtimeEvents.service");
 const { ERSS_REALTIME_EVENTS } = require("./erssRealtimeEvents.service");
 
@@ -161,13 +159,13 @@ async function calculateUnitRecommendations(db, incident, requirements, excludeU
     if (unit.status !== "available" && unit.status !== "idle") continue;
     if (unit.operational === false) continue;
 
-    const unitLat = unit.latitude;
-    const unitLng = unit.longitude;
-    if (!Number.isFinite(unitLat) || !Number.isFinite(unitLng)) continue;
+    const point = strictPoint({ lat: unit.lat ?? unit.latitude, lng: unit.lng ?? unit.longitude });
+    if (!point) continue;
+    const { lat: unitLat, lng: unitLng } = point;
 
     const distanceKm = haversineDistanceKm({ lat: incidentLat, lng: incidentLng }, { lat: unitLat, lng: unitLng });
-    const route = await buildRoute({ lat: unitLat, lng: unitLng }, { lat: incidentLat, lng: incidentLng });
-    const etaMinutes = route && route.durationSeconds ? Math.max(1, Math.round(route.durationSeconds / 60)) : Math.max(1, Math.round(distanceKm * 2));
+    const route = await routeBetween(routeUrl(point, { lat: incidentLat, lng: incidentLng }));
+    const etaMinutes = route && !route.approximate && route.durationSeconds > 0 ? Math.max(1, Math.round(route.durationSeconds / 60)) : null;
 
     const station = db.policeStations?.find(s => s.id === unit.stationId);
     const workload = (db.incidents || []).filter(i => i.assignedUnitId === unit.id && !["closed", "rejected_/_false_alarm"].includes(normalized(i.status))).length;
@@ -184,11 +182,11 @@ async function calculateUnitRecommendations(db, incident, requirements, excludeU
       route,
       workload,
       capabilityMatch: { matches: true },
-      selectionReason: `Distance: ${distanceKm.toFixed(1)} km, ETA: ${etaMinutes} min, Workload: ${workload}`
+      selectionReason: `Distance: ${distanceKm.toFixed(1)} km, ETA: ${etaMinutes === null ? "unavailable (approximate route)" : `${etaMinutes} min`}, Workload: ${workload}`
     });
   }
 
-  recommendations.sort((a, b) => a.etaMinutes - b.etaMinutes || a.distanceKm - b.distanceKm || a.workload - b.workload);
+  recommendations.sort((a, b) => (a.etaMinutes ?? Infinity) - (b.etaMinutes ?? Infinity) || a.distanceKm - b.distanceKm || a.workload - b.workload);
 
   const primary = recommendations[0] || null;
   const fallbacks = recommendations.slice(1, 4);
@@ -334,7 +332,7 @@ async function endErssCall(db, callId, transcript, aiSummary, aiSuggestions) {
 
 async function createTriage(db, erssEventId, callTakerId, data) {
   if (data.actionTaken && !TRIAGE_ACTIONS.includes(data.actionTaken)) throw new Error("Invalid triage action");
-  if (data.actionTaken === "FORWARD_TO_DISPATCH" && !data.humanConfirmed) {
+  if (data.actionTaken === "FORWARD_TO_DISPATCH" && data.humanConfirmed !== true) {
     throw Object.assign(new Error("Human confirmation is required before forwarding to dispatch"), { status: 409 });
   }
   const triage = {
@@ -350,7 +348,7 @@ async function createTriage(db, erssEventId, callTakerId, data) {
     aiEmergencyTypeSuggestion: data.aiEmergencyTypeSuggestion,
     aiPrioritySuggestion: data.aiPrioritySuggestion,
     aiJurisdictionSuggestion: data.aiJurisdictionSuggestion,
-    humanConfirmed: data.humanConfirmed || false,
+    humanConfirmed: data.humanConfirmed === true,
     actionTaken: data.actionTaken,
     createdAt: now(),
     updatedAt: now()
@@ -483,14 +481,21 @@ async function acceptUnitRequest(db, requestId, unitId, actor = null) {
     throw new Error(`Cannot accept request in status: ${request.status}`);
   }
 
+  const event = db.erssEvents?.find(e => e.id === request.erssEventId);
+  if (!event) throw new Error("ERSS event not found");
+  const unit = db.responseUnits?.find(u => u.id === unitId);
+  if (!unit) throw Object.assign(new Error("Response unit not found"), { status: 404 });
+  const assignedIncidentId = unit.assignedIncidentId || unit.currentIncidentId;
+  if ((assignedIncidentId && assignedIncidentId !== event.incidentId)
+    || (!assignedIncidentId && !["available", "idle"].includes(normalized(unit.status)))) {
+    throw Object.assign(new Error("Response unit is no longer available for this incident"), { status: 409 });
+  }
+
   request.status = "ACCEPTED";
   request.acceptedAt = now();
   request.updatedAt = now();
 
-  const event = db.erssEvents?.find(e => e.id === request.erssEventId);
-  if (!event) throw new Error("ERSS event not found");
   const incident = ensureCanonicalIncident(db, event, actor);
-  const unit = db.responseUnits?.find(u => u.id === unitId);
   if (unit) {
     unit.status = "busy";
     unit.assignedIncidentId = incident.id;

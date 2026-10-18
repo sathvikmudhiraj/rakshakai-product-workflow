@@ -173,6 +173,20 @@ test("missing required AI key configuration is detected at startup", () => {
   }
 });
 
+test("production refuses the AI authentication development bypass", () => {
+  const previous = { NODE_ENV: process.env.NODE_ENV, AI_SERVICE_URL: process.env.AI_SERVICE_URL, AI_SERVICE_ALLOW_INSECURE: process.env.AI_SERVICE_ALLOW_INSECURE };
+  try {
+    process.env.NODE_ENV = "production";
+    process.env.AI_SERVICE_URL = "http://127.0.0.1:8000";
+    process.env.AI_SERVICE_ALLOW_INSECURE = "true";
+    assert.throws(() => validateAiServiceConfig(), /must be disabled in production/);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test("AI-service timeout is handled safely", async () => {
   if (aiMockServer) {
     await new Promise((resolve) => aiMockServer.close(resolve));

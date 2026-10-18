@@ -54,6 +54,7 @@
               </span>
             </label>
             <button class="primary auth-submit" type="submit">Sign in securely <span aria-hidden="true">→</span></button>
+            <button id="googleWorkspaceLogin" class="ghost" type="button" hidden>Continue with Google Workspace</button>
             <p class="login-error" id="loginError" role="status"></p>
             <div class="auth-divider"><span>Citizen access</span></div>
             <p class="auth-switch">Need to submit a public report? <button type="button" data-auth-mode="register">Create an account</button></p>
@@ -116,6 +117,7 @@
           <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
           <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
           <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
+          <button class="nav-item" data-view="cctns" data-roles="Police Officer,Admin">CCTNS Records</button>
           <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
           <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
         </nav>
@@ -132,7 +134,7 @@
       <main class="workspace">
         <header class="topbar">
           <div><span class="eyebrow page-eyebrow">RakshakAI Operations</span><h1 id="viewTitle">Sector 7 Safety Grid</h1></div>
-          <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="logoutButton" class="ghost" type="button">Sign out</button></div>
+          <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="accountSessionsButton" class="ghost" type="button">Sessions</button><button id="logoutButton" class="ghost" type="button">Sign out</button></div>
         </header>
         <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
 
@@ -181,6 +183,9 @@
             <div><span class="eyebrow">Unified Response Workflow</span><p>Review intelligence, verify reports, dispatch units, and manage the complete response lifecycle.</p></div>
             <button id="refreshCommand" class="ghost" type="button">Refresh Command Data</button>
           </div>
+          <section id="command-critical-summary" class="critical-queue-summary" role="status" hidden>
+            <h2>Critical queue</h2><p data-critical-count></p>
+          </section>
           <div class="command-kpis">
             <article data-kpi="active" role="button" tabindex="0" aria-controls="commandKpiDetails" aria-expanded="false"><span>Active Incidents</span><strong id="commandActiveMetric">0</strong><small>Open operational cases</small></article>
             <article data-kpi="review" role="button" tabindex="0" aria-controls="commandKpiDetails" aria-expanded="false"><span>Pending Review</span><strong id="commandReviewMetric">0</strong><small>AI alerts and citizen reports</small></article>
@@ -422,6 +427,9 @@
         </section>
         <section class="view" data-panel="multi-camera-tracking">
           <div id="multiCameraTrackingPanel"></div>
+        </section>
+        <section class="view" data-panel="cctns">
+          <div id="cctnsWorkspace" aria-live="polite"></div>
         </section>
         <section class="view" data-panel="missing">
           <section class="citizen-report-intro" aria-labelledby="reportCenterHeading">
