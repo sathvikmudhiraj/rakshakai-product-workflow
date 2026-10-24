@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
 
   osrm:
-    image: osrm/osrm-backend:v5.27.1
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
     profiles: ["osrm"]
     environment:
       OSRM_DATA_PATH: ${OSRM_DATA_PATH:-/data/region.osrm}
@@ -44,9 +44,7 @@ services:
       - |
         required="$$OSRM_DATA_PATH"
         for file in \
-          "$$required" \
-          "$$required.names" \
-          "$$required.nodes" \
+          "$$required.fileIndex" \
           "$$required.edges" \
           "$$required.geometry" \
           "$$required.datasource_names" \
@@ -85,6 +83,7 @@ services:
       # Optional passthrough: required when the compose stack runs with NODE_ENV=production
       # and stores real camera credentials. Generate a 64-hex-char key; see .env.docker.example.
       CAMERA_CREDENTIAL_ENCRYPTION_KEY: ${CAMERA_CREDENTIAL_ENCRYPTION_KEY:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN in .env.docker}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env.docker}
       SEED_POLICE_PASSWORD: ${SEED_POLICE_PASSWORD:?Set SEED_POLICE_PASSWORD in .env.docker}
       SEED_CITIZEN_PASSWORD: ${SEED_CITIZEN_PASSWORD:?Set SEED_CITIZEN_PASSWORD in .env.docker}
@@ -141,6 +140,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3001}:80"
     restart: unless-stopped
 
 volumes:

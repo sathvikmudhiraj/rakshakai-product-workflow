@@ -16,6 +16,7 @@ const policeBeats = require("../repositories/policeBeats.repository");
 const officerRanks = require("../repositories/officerRanks.repository");
 const policeOfficers = require("../repositories/policeOfficers.repository");
 const responseUnitMembers = require("../repositories/responseUnitMembers.repository");
+const incidentOfficerAssignments = require("../repositories/incidentOfficerAssignments.repository");
 const unitCapabilities = require("../repositories/unitCapabilities.repository");
 const dispatchEscalationLog = require("../repositories/dispatchEscalationLog.repository");
 const dispatchEscalationRules = require("../repositories/dispatchEscalationRules.repository");
@@ -34,6 +35,7 @@ const mappings = [
   ["alerts", alerts],
   ["responseUnits", responseUnits],
   ["responseUnitMembers", responseUnitMembers],
+  ["incidentOfficerAssignments", incidentOfficerAssignments],
   ["unitCapabilities", unitCapabilities],
   ["dispatchEscalationRules", dispatchEscalationRules],
   ["dispatchEscalationLogs", dispatchEscalationLog],

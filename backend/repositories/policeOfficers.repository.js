@@ -23,7 +23,8 @@ module.exports = createRepository({
   serialize: (record) => record,
   deserialize: (row) => ({
     ...row.data,
-    user_id: row.id,
+    userId: row.user_id || row.data?.userId || row.id,
+    user_id: row.user_id || row.id,
     id: row.id,
     badgeId: row.data?.badge_id || row.badge_id || null,
     badge_id: row.data?.badge_id || row.badge_id || null,

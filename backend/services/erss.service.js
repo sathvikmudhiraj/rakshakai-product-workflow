@@ -194,6 +194,17 @@ async function calculateUnitRecommendations(db, incident, requirements, excludeU
   return { primary, fallbacks, all: recommendations };
 }
 
+const LOCATION_CONFIDENCE_VALUES = ["high", "medium", "low"];
+
+function normalizeLocationConfidence(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (!LOCATION_CONFIDENCE_VALUES.includes(normalized)) {
+    throw Object.assign(new Error(`Invalid location confidence: ${value}. Use high, medium, or low`), { status: 400 });
+  }
+  return normalized;
+}
+
 async function createErssEvent(db, data, user) {
   const {
     channel,
@@ -219,6 +230,7 @@ async function createErssEvent(db, data, user) {
   if (!isValidPriority(priority)) throw new Error(`Invalid priority: ${priority}`);
   if (!isValidCallStatus(callStatus)) throw new Error(`Invalid call status: ${callStatus}`);
   if (!isValidTriageStatus(triageStatus)) throw new Error(`Invalid triage status: ${triageStatus}`);
+  const normalizedConfidence = normalizeLocationConfidence(locationConfidence);
 
   const jurisdictionResult = await determineJurisdiction(db, incidentLatitude, incidentLongitude, callerLatitude, callerLongitude);
 
@@ -235,7 +247,7 @@ async function createErssEvent(db, data, user) {
     incidentLongitude,
     incidentLocationText,
     locationSource,
-    locationConfidence,
+    locationConfidence: normalizedConfidence,
     jurisdictionId: jurisdictionResult.station?.id || null,
     emergencyType,
     priority,
@@ -266,6 +278,9 @@ async function updateErssEvent(db, eventId, updates, user) {
 
   let jurisdictionChanged = false;
   const oldJurisdictionId = event.jurisdictionId;
+  if (updates.locationConfidence !== undefined) {
+    updates.locationConfidence = normalizeLocationConfidence(updates.locationConfidence);
+  }
 
   for (const key of allowedUpdates) {
     if (updates[key] !== undefined) {

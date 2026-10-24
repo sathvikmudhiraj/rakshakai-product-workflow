@@ -29,7 +29,9 @@ process.env.EVIDENCE_STORAGE_DIR = path.join(testDirectory, "evidence-storage");
 process.env.JWT_SECRET = "rakshakai-test-secret-that-is-longer-than-32-characters";
 process.env.AI_SERVICE_URL = "";
 process.env.AI_SERVICE_API_KEY = TEST_API_KEY;
-process.env.AI_SERVICE_TIMEOUT_MS = "500";
+// Authentication assertions must not depend on a sub-second host scheduling budget.
+// The timeout regression below separately exercises the short deadline.
+process.env.AI_SERVICE_TIMEOUT_MS = "5000";
 process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
 process.env.API_RATE_LIMIT = "10000";
 process.env.AI_FRAME_RATE_LIMIT = "300";
@@ -187,7 +189,10 @@ test("production refuses the AI authentication development bypass", () => {
   }
 });
 
-test("AI-service timeout is handled safely", async () => {
+test("AI-service timeout is handled safely", async (t) => {
+  const previousTimeout = process.env.AI_SERVICE_TIMEOUT_MS;
+  process.env.AI_SERVICE_TIMEOUT_MS = "500";
+  t.after(() => { process.env.AI_SERVICE_TIMEOUT_MS = previousTimeout; });
   if (aiMockServer) {
     await new Promise((resolve) => aiMockServer.close(resolve));
   }

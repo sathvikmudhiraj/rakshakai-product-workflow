@@ -31,6 +31,27 @@ function evidenceDataUrl(mimeType, suffix = "") {
   return `data:${mimeType};base64,${Buffer.concat([base, Buffer.from(String(suffix))]).toString("base64")}`;
 }
 
+async function stubEvidenceAi(t) {
+  let received;
+  const stub = http.createServer((req, res) => {
+    if (req.url === "/health") { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ modelLoaded: true, modelName: "test-model", minimumConfidence: 0.5 })); return; }
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      received = JSON.parse(Buffer.concat(chunks).toString()).imageBase64;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ configured: true, detections: [], performance: {
+        imageWidth: 100, imageHeight: 100, inferenceMs: 1, analyzedAt: new Date().toISOString()
+      } }));
+    });
+  });
+  await new Promise((resolve) => stub.listen(0, "127.0.0.1", resolve));
+  const previous = process.env.AI_SERVICE_URL;
+  process.env.AI_SERVICE_URL = `http://127.0.0.1:${stub.address().port}`;
+  t.after(async () => { process.env.AI_SERVICE_URL = previous; await new Promise((resolve) => stub.close(resolve)); });
+  return () => received;
+}
+
 const database = JSON.parse(fs.readFileSync(sourceDatabase, "utf8"));
 const passwordHash = bcrypt.hashSync(TEST_PASSWORD, 4);
 database.users.forEach((user) => {
@@ -373,8 +394,19 @@ async function login(role, origin = "http://localhost:3000") {
 test.before(async () => {
   osrmServer = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, "http://localhost");
-    if (parsedUrl.pathname.startsWith("/route/v1/")) {
+    if (parsedUrl.pathname.startsWith("/route/v1/") || parsedUrl.pathname.startsWith("/nearest/v1/")) {
       osrmRequests.push({ method: req.method, url: req.url });
+    }
+    if (parsedUrl.pathname.startsWith("/nearest/v1/")) {
+      const coordinates = parsedUrl.pathname.split("/").pop() || "";
+      const [lng, lat] = coordinates.split(";")[0].split(",").map(Number);
+      // Snap mock: requested point snapped ~0.001 degree north onto a road.
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({
+        code: "Ok",
+        mapmatching: [{ confidence: 0.9, distance: 111, nodes: [1, 2] }],
+        waypoints: [{ location: [lng, lat + 0.001], distance: 111, name: "Mock Road", alternatives_count: 0 }]
+      }));
     }
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -1264,7 +1296,97 @@ test("response-unit live GPS accepts only an officer's own unit and drives fresh
   }
 });
 
-test("hybrid dispatch recommends before confirmation, reserves capacity once, and releases it on resolution", async () => {
+test("dispatch readiness RBAC denies unauthorized operational roles on primary, support and officer endpoints", async () => {
+  const original = await readDatabase();
+  const officerId = users.find((user) => user.role === "Police Officer").id;
+  try {
+    for (const operationalRole of ["CALL_TAKER", "FIELD_OFFICER", null]) {
+      const db = structuredClone(original);
+      const officer = db.users.find((user) => user.id === officerId);
+      officer.operationalRole = operationalRole;
+      officer.data = { ...officer.data, operationalRole };
+      await writeDatabase(db);
+      for (const [method, path, body] of [
+        ["POST", "assign-unit", { unitId: "unused" }],
+        ["POST", "assign-unit", { recommendationId: "unused" }],
+        ["POST", "recommend-unit", {}], ["POST", "release-unit", {}],
+        ["POST", "officer-assignments", { assignments: [] }]
+      ]) {
+        const response = await request(`/api/incidents/dispatch-audit/${path}`, { method,
+          headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        assert.equal(response.status, 403, `${operationalRole}: ${method} ${path}`);
+      }
+    }
+    for (const operationalRole of ["DISPATCHER", "SUPERVISOR"]) {
+      const db = structuredClone(original);
+      const officer = db.users.find((user) => user.id === officerId);
+      officer.operationalRole = operationalRole;
+      officer.data = { ...officer.data, operationalRole };
+      await writeDatabase(db);
+      // Missing fixture incident gives 404 only after the authorization gate succeeds.
+      for (const path of ["recommend-unit", "assign-unit", "officer-assignments"]) {
+        const response = await request(`/api/incidents/dispatch-audit/${path}`, { method: "POST",
+          headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json" }, body: JSON.stringify({ unitId: "unused", assignments: [] }) });
+        assert.equal(response.status, 404, `${operationalRole}: ${path}`);
+      }
+    }
+  } finally { await writeDatabase(original); }
+});
+
+test("dispatch readiness HTTP lifecycle protects primary deployments and persists audit plus realtime", async () => {
+  const original = await readDatabase();
+  let socket;
+  const { once } = require("node:events");
+  const mutate = (path, body, method = "POST") => request(`/api/incidents/dispatch-audit/${path}`, {
+    method, headers: { ...authHeaders("Admin"), "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const db = structuredClone(original);
+    const at = new Date().toISOString();
+    db.policeOfficers ||= [];
+    db.responseUnitMembers ||= [];
+    db.incidents.push({ id: "dispatch-audit", title: "Isolated dispatch audit fixture", status: "Assigned", severity: "HIGH", assignedUnitId: "audit-p", lat: 17.5285, lng: 78.2636, locationStatus: "Verified", locationSource: "manual" });
+    for (const id of ["audit-p", "audit-q"]) db.responseUnits.push({ id, unitCode: id, unitType: "police_patrol", status: id === "audit-p" ? "busy" : "available", operational: true, assignedIncidentId: id === "audit-p" ? "dispatch-audit" : null, lat: 17.5285, lng: 78.2636, locationSource: "live_gps", locationAccuracy: 5, locationCapturedAt: at, locationReceivedAt: at, isDemo: false });
+    for (const id of ["audit-o1", "audit-o2"]) {
+      db.users.push({ id, name: `Isolated fixture ${id}`, role: "Police Officer", status: "active" });
+      db.policeOfficers.push({ id: `profile-${id}`, userId: id, active: true, dutyStatus: "on_duty", availabilityStatus: "available" });
+      db.responseUnitMembers.push({ id: `member-${id}`, unitId: "audit-p", officerUserId: id });
+    }
+    await writeDatabase(db);
+    const { io: connect } = require("socket.io-client");
+    socket = connect(baseUrl, { transports: ["websocket"], reconnection: false, extraHeaders: authHeaders("Admin", true) });
+    await once(socket, "connect", { signal: AbortSignal.timeout(10000) });
+    const event = once(socket, "incident_officer_assignment_changed", { signal: AbortSignal.timeout(10000) });
+    const deployed = await mutate("officer-assignments", { assignments: [{ officerId: "audit-o1", responseRole: "TEAM_LEAD" }, { officerId: "audit-o2", responseRole: "DRIVER" }] });
+    assert.equal(deployed.status, 201);
+    const rows = (await deployed.json()).assignments;
+    assert.equal((await event)[0].incidentId, "dispatch-audit");
+    assert.equal(rows.length, 2);
+    const members = await request("/api/incidents/dispatch-audit/unit-members", { headers: authHeaders("Admin") });
+    assert.equal((await members.json()).members.filter((member) => member.deployment).length, 2);
+    for (const [path, body, method] of [
+      ["release-unit", { expectedAssignedUnitId: "audit-p", reason: "Audit" }, "POST"],
+      ["assign-unit", { unitId: "audit-q", expectedAssignedUnitId: "audit-p", reason: "Audit" }, "POST"],
+      ["status", { status: "Rejected / False Alarm" }, "PATCH"]
+    ]) {
+      const response = await mutate(path, body, method);
+      assert.equal(response.status, 409, path);
+      assert.equal((await response.json()).code, "ACTIVE_OFFICER_DEPLOYMENTS", path);
+    }
+    assert.equal((await mutate(`officer-assignments/${rows[0].id}`, { responseRole: "RESPONSE_OFFICER", reason: "Rotation" }, "PATCH")).status, 200);
+    for (const row of rows) assert.equal((await mutate(`officer-assignments/${row.id}/release`, { reason: "Audit completed" })).status, 200);
+    const released = await readDatabase();
+    assert.equal(released.incidents.find((item) => item.id === "dispatch-audit").assignedUnitId, "audit-p");
+    assert.equal(released.responseUnitMembers.filter((item) => item.unitId === "audit-p").length, 2);
+    assert.equal(released.incidentOfficerAssignments.filter((item) => item.incidentId === "dispatch-audit" && item.status === "RELEASED").length, 2);
+    assert.equal(released.policeOfficers.find((item) => item.userId === "audit-o1").assignedIncidentId || null, null);
+    const audits = released.auditLogs.filter((item) => item.incidentId === "dispatch-audit").map((item) => item.action);
+    for (const action of ["incident_officer_assigned", "incident_officer_role_changed", "incident_officer_released"]) assert.ok(audits.includes(action), action);
+    assert.equal((await mutate("release-unit", { expectedAssignedUnitId: "audit-p", reason: "All officers released" })).status, 200);
+  } finally { socket?.close(); await writeDatabase(original); }
+});
+
+test("primary assignment precedes hybrid support, which reserves capacity once and releases on resolution", async () => {
   const original = await readDatabase();
   const snapshot = {
     users: structuredClone(original.users),
@@ -1333,17 +1455,11 @@ test("hybrid dispatch recommends before confirmation, reserves capacity once, an
       headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
       body: "{}"
     });
-    assert.equal(fallback.status, 200);
+    assert.equal(fallback.status, 409);
     const fallbackBody = await fallback.json();
-    assert.equal(fallbackBody.recommendation.primary, null);
-    assert.ok(fallbackBody.recommendation.stationSupport.allocations.length >= 1);
-    const rejected = await request(`/api/incidents/${incident.id}/dispatch-recommendation/reject`, {
-      method: "POST",
-      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-      body: JSON.stringify({ recommendationId: fallbackBody.recommendation.id, reason: "Recalculate after primary GPS refresh" })
-    });
-    assert.equal(rejected.status, 200);
-    assert.equal((await rejected.json()).recommendation.status, "rejected");
+    assert.equal(fallbackBody.code, "PRIMARY_UNIT_RECOMMENDATION_UNAVAILABLE");
+    assert.equal(fallbackBody.primary, null);
+    assert.deepEqual(fallbackBody.stationSupport.allocations, []);
     fallbackDb = await readDatabase();
     const refreshedPrimary = fallbackDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit");
     refreshedPrimary.locationCapturedAt = new Date().toISOString();
@@ -1360,22 +1476,47 @@ test("hybrid dispatch recommends before confirmation, reserves capacity once, an
     const recommendationBody = await recommended.json();
     assert.equal(recommendationBody.recommendation.confirmationRequired, true);
     assert.equal(recommendationBody.recommendation.primary.unitId, "hybrid_primary_unit");
-    assert.equal(recommendationBody.recommendation.stationSupport.allocations[0].stationId, "hybrid_station_support");
+    assert.deepEqual(recommendationBody.recommendation.stationSupport.allocations, []);
     let currentDb = await readDatabase();
     assert.equal(currentDb.incidents.find((item) => item.id === incident.id).assignedUnitId, null);
     assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit").status, "available");
 
-    const confirmationRequest = () => request(`/api/incidents/${incident.id}/assign-unit`, {
+    const blockedSupport = await request(`/api/incidents/${incident.id}/assign-unit`, {
       method: "POST",
       headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
       body: JSON.stringify({ recommendationId: recommendationBody.recommendation.id, expectedAssignedUnitId: null })
+    });
+    assert.equal(blockedSupport.status, 409);
+    assert.equal((await blockedSupport.json()).code, "PRIMARY_UNIT_REQUIRED");
+
+    const primaryAssignment = await request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ unitId: "hybrid_primary_unit", expectedAssignedUnitId: null })
+    });
+    assert.equal(primaryAssignment.status, 200);
+
+    const supportRecommendation = await request(`/api/incidents/${incident.id}/recommend-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: "{}"
+    });
+    assert.equal(supportRecommendation.status, 200);
+    const supportRecommendationBody = await supportRecommendation.json();
+    assert.equal(supportRecommendationBody.recommendation.primary.unitId, "hybrid_primary_unit");
+    assert.equal(supportRecommendationBody.recommendation.stationSupport.allocations[0].stationId, "hybrid_station_support");
+
+    const confirmationRequest = () => request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ recommendationId: supportRecommendationBody.recommendation.id, expectedAssignedUnitId: "hybrid_primary_unit" })
     });
     const confirmations = await Promise.all([confirmationRequest(), confirmationRequest()]);
     assert.deepEqual(confirmations.map((response) => response.status).sort(), [200, 409]);
     currentDb = await readDatabase();
     assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit").status, "busy");
     assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_support_unit").status, "busy");
-    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "u_fixture_officer").availabilityStatus, "busy");
+    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "u_fixture_officer").availabilityStatus, "available");
     assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "hybrid_support_officer").availabilityStatus, "busy");
 
     for (const status of ["En Route", "On Scene", "Resolved"]) {
@@ -1393,7 +1534,6 @@ test("hybrid dispatch recommends before confirmation, reserves capacity once, an
     assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "hybrid_support_officer").availabilityStatus, "available");
     const actions = currentDb.auditLogs.filter((entry) => entry.incidentId === incident.id).map((entry) => entry.action);
     assert.ok(actions.includes("DISPATCH_RECOMMENDATION_CREATED"));
-    assert.ok(actions.includes("DISPATCH_REJECTED"));
     assert.ok(actions.includes("DISPATCH_CONFIRMED"));
     assert.ok(actions.includes("PRIMARY_RESPONDER_SELECTED"));
     assert.ok(actions.includes("STATION_SUPPORT_SELECTED"));
@@ -2018,17 +2158,17 @@ test("Citizen can use report routes but receives only the public-safe contract",
   }
 });
 
-test("Admin video evidence upload creates AI observations and converts only after verification", async () => {
-  const videoData = evidenceDataUrl("video/mp4", "admin-video-evidence");
+test("Admin evidence upload sends image bytes to mocked AI analysis", async (t) => {
+  const received = await stubEvidenceAi(t);
+  const imageData = evidenceDataUrl("image/jpeg", "admin-image-evidence");
   const upload = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify({
-      fileName: "admin-investigation.mp4",
+      fileName: "admin-investigation.jpg",
       fileSize: 20,
-      mimeType: "video/mp4",
-      durationSeconds: 12,
-      dataUrl: videoData,
+      mimeType: "image/jpeg",
+      dataUrl: imageData,
       linkedReportId: createdCitizenReportId,
       notes: "Admin chain-of-custody upload"
     })
@@ -2055,54 +2195,30 @@ test("Admin video evidence upload creates AI observations and converts only afte
     headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
   });
   assert.equal(analyzed.status, 200);
-  const analyzedBody = await analyzed.json();
-  assertNoEvidenceSecrets(analyzedBody);
-  assert.equal("incident" in analyzedBody, false);
-  assert.ok(analyzedBody.observations.length >= 1);
-  const vehicleObservation = analyzedBody.observations.find((item) => item.detectionType === "vehicle_detected");
-  assert.ok(vehicleObservation);
-  assert.equal(vehicleObservation.vehicleType, "possible vehicle");
-  assert.equal(vehicleObservation.possibleColor, "dark");
-  assert.equal(vehicleObservation.plateDetected, true);
-  assert.equal(vehicleObservation.possiblePlateText, "possible plate region");
-  assert.equal(vehicleObservation.actionable, false);
-  assert.match(vehicleObservation.message, /Possible/i);
-  assert.doesNotMatch(vehicleObservation.message, /confirmed/i);
-  const missingObjectObservation = analyzedBody.observations.find((item) => item.detectionType === "missing_object_possible_match");
-  assert.ok(missingObjectObservation);
-  assert.equal(missingObjectObservation.objectType, "backpack");
-  assert.equal(missingObjectObservation.possibleColor, "blue");
-  assert.equal(missingObjectObservation.actionable, false);
-  const observation = analyzedBody.observations[0];
-  assert.equal(observation.source, "video_upload");
-  assert.equal(observation.actionable, false);
-  assert.equal(observation.operationalAlert, false);
-  assert.match(observation.message, /Possible/i);
-
-  const verified = await request(`/api/video-observations/${observation.id}/review`, {
-    method: "POST",
-    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ action: "verify", notes: "Verified by human reviewer" })
-  });
-  assert.equal(verified.status, 200);
-  const verifiedBody = await verified.json();
-  assert.equal(verifiedBody.observation.reviewStatus, "verified");
-  assert.equal(verifiedBody.observation.actionable, true);
-  assert.equal(verifiedBody.observation.operationalAlert, false);
-
-  const converted = await request(`/api/video-observations/${observation.id}/convert-incident`, {
-    method: "POST",
-    headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(converted.status, 200);
-  const convertedBody = await converted.json();
-  assert.equal(convertedBody.incident.sourceType, "video_upload");
-  assert.equal(convertedBody.incident.sourceRecordId, observation.id);
-
-  const audits = (await (await request("/api/audit-logs", { headers: authHeaders("Admin") })).json()).auditLogs.map((log) => log.action);
-  for (const action of ["evidence_uploaded", "video_ai_analysis_started", "ai_observation_created", "observation_verified", "observation_converted_to_incident", "incident_created_from_video_observation"]) {
-    assert.ok(audits.includes(action), action);
-  }
+  const analysisResult = await analyzed.json();
+  assert.ok(analysisResult.analysis);
+  assert.ok(analysisResult.evidence);
+  assert.equal(analysisResult.analysis.evidenceId, uploaded.evidence.id);
+  assert.ok("detections" in analysisResult.analysis);
+  assert.ok("counts" in analysisResult.analysis);
+  assert.ok("inputSha256" in analysisResult.analysis);
+  assert.equal(analysisResult.analysis.inputSha256, uploaded.evidence.checksum);
+  assert.equal(received(), imageData);
+  const after = await readDatabase();
+  assert.ok(after.auditLogs.some((log) => log.action === "evidence_analyzed"));
+  const initialAgain = await request(`/api/video-evidence/${uploaded.evidence.id}/analyze`, { method: "POST", headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" } });
+  assert.equal(initialAgain.status, 409);
+  const invalidRepeat = await request(`/api/video-evidence/${uploaded.evidence.id}/reanalyze`, { method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify({ reason: "no" }) });
+  assert.equal(invalidRepeat.status, 400);
+  const repeat = await request(`/api/video-evidence/${uploaded.evidence.id}/reanalyze`, { method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify({ reason: "manual verification" }) });
+  assert.equal(repeat.status, 200);
+  const repeatBody = await repeat.json();
+  assert.notEqual(repeatBody.analysis.id, analysisResult.analysis.id);
+  const history = await request(`/api/video-evidence/${uploaded.evidence.id}/analyses`, { headers: authHeaders("Admin") });
+  const historyBody = await history.json();
+  assert.equal(historyBody.analyses.length, 2);
+  assert.ok(historyBody.analyses.some((run) => run.reason === "manual verification"));
+  assert.ok((await readDatabase()).auditLogs.some((log) => log.action === "EVIDENCE_AI_REANALYSIS_REQUESTED"));
 });
 
 test("Evidence upload rejects MIME and file-signature mismatches", async () => {
@@ -2118,6 +2234,25 @@ test("Evidence upload rejects MIME and file-signature mismatches", async () => {
 
   assert.equal(mismatch.status, 400);
   assert.match((await mismatch.json()).error, /does not match/i);
+});
+
+test("Admin can upload an image while analysis remains fail-closed", async () => {
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3]);
+  const upload = await request("/api/video-evidence", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ fileName: "image.jpg", dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}` })
+  });
+  assert.equal(upload.status, 201);
+  const { evidence } = await upload.json();
+  assert.equal(evidence.mimeType, "image/jpeg");
+  assert.equal(evidence.fileSize, bytes.length);
+  const analyzed = await request(`/api/video-evidence/${evidence.id}/analyze`, {
+    method: "POST", headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
+  });
+  assert.equal(analyzed.status, 503);
+  const after = await readDatabase();
+  assert.equal(after.alerts.filter((item) => item.linkedEvidenceId === evidence.id).length, 0);
 });
 
 test("Evidence storage failure does not create successful metadata", async () => {
@@ -2162,46 +2297,32 @@ test("Citizen report storage failure returns an error without saving report or e
   }
 });
 
-test("Police video evidence must be case-linked and rejected observations cannot convert", async () => {
-  const videoData = evidenceDataUrl("video/webm", "police-video-evidence");
+test("Police image evidence requires an assigned case", async (t) => {
+  const received = await stubEvidenceAi(t);
+  const adminUpload = await request("/api/video-evidence", {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ fileName: "admin-unlinked.jpg", dataUrl: evidenceDataUrl("image/jpeg", "admin-unlinked") })
+  });
+  assert.equal(adminUpload.status, 201);
+  const unlinkedAdminEvidence = (await adminUpload.json()).evidence;
+  const denied = await request(`/api/video-evidence/${unlinkedAdminEvidence.id}/analyze`, {
+    method: "POST", headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
+  });
+  assert.equal(denied.status, 403);
+  const imageData = evidenceDataUrl("image/jpeg", "police-image-evidence");
   const unlinked = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ fileName: "unlinked.webm", dataUrl: videoData })
+    body: JSON.stringify({ fileName: "unlinked.jpg", dataUrl: imageData })
   });
   assert.equal(unlinked.status, 400);
 
   const linked = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ fileName: "linked.webm", dataUrl: videoData, linkedReportId: "report_other_citizen" })
+    body: JSON.stringify({ fileName: "linked.jpg", dataUrl: imageData, linkedReportId: "report_other_citizen" })
   });
-  assert.equal(linked.status, 201);
-  const linkedBody = await linked.json();
-  assertNoEvidenceSecrets(linkedBody);
-
-  const analyzed = await request(`/api/video-evidence/${linkedBody.evidence.id}/analyze`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(analyzed.status, 200);
-  const observation = (await analyzed.json()).observations[0];
-
-  const rejected = await request(`/api/video-observations/${observation.id}/review`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ action: "reject", notes: "False positive" })
-  });
-  assert.equal(rejected.status, 200);
-  const rejectedBody = await rejected.json();
-  assert.equal(rejectedBody.observation.reviewStatus, "false_alarm");
-  assert.equal(rejectedBody.observation.actionable, false);
-
-  const convertRejected = await request(`/api/video-observations/${observation.id}/convert-incident`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(convertRejected.status, 409);
+  assert.equal(linked.status, 403);
 });
 
 test("Citizen can upload evidence only for own report and cannot access operational video evidence", async () => {
@@ -2250,6 +2371,12 @@ test("Citizen can upload evidence only for own report and cannot access operatio
 
   const firstCannotPreviewSecond = await request(`/api/video-evidence/${secondCitizenEvidenceId}/preview`, { headers: authHeaders("Citizen") });
   assert.equal(firstCannotPreviewSecond.status, 403);
+
+  const missingPreview = await request("/api/video-evidence/nonexistent-evidence/preview", { headers: authHeaders("Citizen") });
+  assert.equal(missingPreview.status, 403);
+  assert.deepEqual(await missingPreview.json(), await firstCannotPreviewSecond.json());
+  assert.equal((await request("/api/video-evidence/nonexistent-evidence/preview", { headers: authHeaders("Admin") })).status, 404);
+  assert.equal((await request("/api/video-evidence/nonexistent-evidence/preview")).status, 401);
 
   assert.equal((await request("/api/video-evidence", { headers: authHeaders("Citizen") })).status, 403);
   const ownReports = await request("/api/missing-persons", { headers: authHeaders("Citizen") });
@@ -2751,6 +2878,121 @@ test("routes outside the local OSRM extract fall back to approximate routing", a
   } finally {
     restoreRoutingEnv(snapshot);
     await new Promise((resolve, reject) => noRouteServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("map snap endpoint snaps clicked points to the nearest routable road", async () => {
+  const snapshot = routingEnvSnapshot();
+  osrmRequests = [];
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = `http://127.0.0.1:${osrmServer.address().port}`;
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "3000";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, true);
+    assert.equal(body.provider, "osrm");
+    assert.ok(body.distanceMeters >= 0);
+    assert.ok(Math.abs(body.snapped.lat - 17.51 - 0.001) < 1e-9);
+    assert.ok(osrmRequests.some((item) => item.url.startsWith("/nearest/v1/driving/78.32,17.51")));
+
+    const police = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(police.status, 200);
+
+    const anonymous = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(anonymous.status, 401);
+
+    const citizen = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Citizen"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(citizen.status, 403);
+
+    const invalid = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 999, lng: 78.32 })
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    restoreRoutingEnv(snapshot);
+    osrmRequests = [];
+  }
+});
+
+test("map snap reports no nearby road when the snapped point is too far away", async () => {
+  const farSnapServer = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url, "http://localhost");
+    if (!parsedUrl.pathname.startsWith("/nearest/v1/")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ code: "Ok", routes: [] }));
+    }
+    const coordinates = parsedUrl.pathname.split("/").pop() || "";
+    const [lng, lat] = coordinates.split(";")[0].split(",").map(Number);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      code: "Ok",
+      mapmatching: [{ confidence: 0.1, distance: 1500, nodes: [3, 4] }],
+      waypoints: [{ location: [lng, lat + 0.0135], distance: 1500, name: "", alternatives_count: 0 }]
+    }));
+  });
+  await new Promise((resolve) => farSnapServer.listen(0, "127.0.0.1", resolve));
+  const snapshot = routingEnvSnapshot();
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = `http://127.0.0.1:${farSnapServer.address().port}`;
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "3000";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, false);
+    assert.equal(body.reason, "no_nearby_road");
+    assert.match(body.error, /No routable road found near this location/);
+  } finally {
+    restoreRoutingEnv(snapshot);
+    await new Promise((resolve, reject) => farSnapServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("map snap degrades gracefully when OSRM is offline", async () => {
+  const snapshot = routingEnvSnapshot();
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "100";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, false);
+    assert.equal(body.reason, "service_unavailable");
+    assert.match(body.error, /Road snap is unavailable/);
+  } finally {
+    restoreRoutingEnv(snapshot);
   }
 });
 
@@ -4111,8 +4353,8 @@ test("frontend Incident Command uses a fluid enterprise workspace without weaken
 
   assert.match(appSource, /commandFilters: \{ search: "", severity: "all", status: "all", source: "all", assignment: "all" \}/);
   assert.match(appSource, /function commandIncidentMatchesFilters\(incident\)/);
-  assert.match(appSource, /const visibleIncidents = active\.filter\(commandIncidentMatchesFilters\)/);
-  assert.match(appSource, /row\.setAttribute\("aria-pressed", String\(incident\.id === state\.selectedIncidentId\)\)/);
+  assert.match(appSource, /const visibleIncidents = prioritizeIncidents\(active\.filter\(commandIncidentMatchesFilters\)\)/);
+  assert.match(appSource, /row\.setAttribute\("aria-pressed", String\(incident\.id === selectedVisible\?\.id\)\)/);
   assert.match(appSource, /node\("span", "command-row-meta"\)/);
   assert.match(appSource, /scheduleMapResizeRender\(\)/);
   assert.match(appSource, /\$\("#commandIncidentSearch"\)\?\.addEventListener\("input"/);
@@ -4208,7 +4450,8 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(gisSection, /id="satelliteMapLayer" class="ghost"[\s\S]*aria-pressed="false"/);
   assert.match(gisSection, /id="resetGisMap"[\s\S]*Reset Map/);
   assert.match(gisSection, /aria-label="Reset Map View\. Return to the local operational center and clear stale route markers\."/);
-  assert.match(gisSection, /id="gisMap"[\s\S]*data-map-layer="satellite"/);
+  assert.match(gisSection, /id="gisMap"[\s\S]*data-map-layer="streets"/);
+  assert.doesNotMatch(gisSection, /data-map-layer="satellite"/);
   assert.doesNotMatch(gisSection, /<span class="heat heat-two"><\/span>/);
   assert.match(gisSection, /id="navigateMap"[\s\S]*aria-label="Calculate Route\. Choose a route start and destination before calculating\."/);
   assert.match(gisSection, /id="recalculateRoute"[\s\S]*aria-label="Recalculate\. Calculate a route before using this action\."/);
@@ -4235,10 +4478,13 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /return event\.target\.closest\("\.map-control, \.map-zoom-slider, \.map-search, \.map-layer-control, \.operational-marker"\)/);
   assert.match(appSource, /instance\.map\.addEventListener\("click", \(event\) => \{[\s\S]*selectNavigationPointFromMap\(event\)/);
   assert.match(appSource, /if \(instance\.map\.id === "gisMap" && state\.mapNavigation\.selectionMode && !blockedMapSelectionTarget\(event\)\) return/);
-  assert.match(appSource, /setRouteStart\(validPoint, "Selected map start"\)/);
-  assert.match(appSource, /setRouteDestination\(validPoint, "Selected map destination", \{ locationStatus: "Approximate" \}\)/);
-  assert.match(appSource, /Route start selected\./);
-  assert.match(appSource, /Destination selected\. Click Calculate Route\./);
+  assert.match(appSource, /setRouteStart\(chosen, "Selected map start", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
+  assert.match(appSource, /setRouteDestination\(chosen, "Selected map destination", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
+  assert.match(appSource, /Route start selected\. \$\{snapNote\}/);
+  assert.match(appSource, /Destination selected\. \$\{snapNote\}Click Calculate Route\./);
+  assert.match(appSource, /snapRoutePointToRoad\(validPoint\)/);
+  assert.match(appSource, /No routable road found near this location/);
+  assert.match(appSource, /Snapped to the nearest routable road/);
   assert.match(appSource, /state\.mapNavigation\.selectionMode = null;[\s\S]*setMapStart"\)\?\.classList\.remove\("active"\)[\s\S]*setMapDestination"\)\?\.classList\.remove\("active"\)/);
   assert.match(appSource, /function canonicalRoutePoint\(point, fallbackLabel = "Route point"\)/);
   assert.match(appSource, /mapNavigation: emptyRouteNavigationState\(\)/);
@@ -4293,7 +4539,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /logRouteDevelopment\("request", \{ start, destination \}\)/);
   assert.match(appSource, /logRouteDevelopment\(route\?\.isApproximate \? "approximate_fallback" : "success", \{ start, destination \}\)/);
   assert.match(appSource, /state\.mapNavigation\.routeLoading = false;[\s\S]*updateNavigationPanel\(\)/);
-  assert.match(appSource, /catch \(error\) \{[\s\S]*clearRouteResult\(\);[\s\S]*Route could not be calculated/);
+  assert.match(appSource, /catch \(error\) \{[\s\S]*clearRouteResult\(\);[\s\S]*Road routing unavailable - route could not be calculated/);
   assert.match(appSource, /Calculate a route before opening full navigation\./);
   assert.match(appSource, /Choose a route start and destination before calculating\./);
   assert.match(appSource, /function clearRouteStart\(\)/);
@@ -4393,7 +4639,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /selected-unit-section/);
   assert.match(appSource, /unit-mini-list/);
   assert.match(appSource, /route\.warning/);
-  assert.match(appSource, /Air-line estimate ready\. Road distance and travel time are unavailable\./);
+  assert.match(appSource, /Road routing unavailable - straight-line estimate shown\. Road distance and ETA are unavailable\./);
   assert.match(appSource, /const GIS_HOME_ZOOM = 12/);
   assert.match(appSource, /const LOCAL_OPERATIONAL_BOUNDS/);
   assert.match(appSource, /function isLocalOperationalPoint\(point\)/);
@@ -4407,11 +4653,13 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /const DEFAULT_MAP_CENTER = \{ lat: 17\.5109, lng: 78\.3276 \}/);
   assert.match(appSource, /function resetGisMapView\(\) \{[\s\S]*resetGisNavigationState\(""\);[\s\S]*resetGisMapToOperationalCenter\("Map reset to local operational center\. Route markers cleared\."\)/);
   assert.match(appSource, /\$\(\"\#resetGisMap\"\)\.addEventListener\(\"click\", resetGisMapView\)/);
-  assert.match(appSource, /Route cleared\. Map restored to Patancheru\/BHEL operational center\./);
+  assert.match(appSource, /Route line cleared\. Start and destination are kept; distance and ETA were reset\./);
   const clearRouteBlock = appSource.match(/function clearMapRoute\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.doesNotMatch(clearRouteBlock, /showWorldMap|zoom\s*=\s*[0-9]/);
-  assert.match(clearRouteBlock, /resetGisMapToOperationalCenter/);
-  assert.match(clearRouteBlock, /resetGisNavigationState\(""\)/);
+  assert.match(clearRouteBlock, /clearRouteResult\(\)/);
+  assert.doesNotMatch(clearRouteBlock, /resetGisNavigationState/);
+  assert.doesNotMatch(clearRouteBlock, /state\.mapNavigation\.start = null/);
+  assert.doesNotMatch(clearRouteBlock, /state\.mapNavigation\.destination = null/);
 
   assert.match(appSource, /\[routeWorkflow \? destination : null, "route-marker destination-marker", "D"\]/);
   assert.match(appSource, /addLeafletMarker\(instance, point, className, label, kind/);
@@ -4455,7 +4703,7 @@ test("frontend GIS route button state table keeps controls visible and synchroni
 
   const initial = gisRouteButtonStates({});
   assert.equal(initial.street.disabled, false);
-  assert.equal(initial.street.label, "Street View");
+  assert.equal(initial.street.label, "Street Map");
   assert.equal(initial.street.active, true);
   assert.equal(initial.satellite.disabled, false);
   assert.equal(initial.satellite.label, "Satellite View");
@@ -4604,7 +4852,7 @@ test("frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safel
   assert.match(appSource, /instance\.baseLayer = "streets"/);
   assert.match(appSource, /instance\.activeBaseLayer = "streets"/);
   assert.match(appSource, /instance\.leafletTileLayers\?\.streets\?\.redraw\(\)/);
-  assert.match(appSource, /updateNavigationPanel\(`\$\{reason\}; switched to Street View\.`\)/);
+  assert.match(appSource, /updateNavigationPanel\(`\$\{reason\}; switched to Street Map\.`\)/);
   assert.match(appSource, /if \(key === "satellite" && tileState\.failedCompletely\) \{[\s\S]*fallbackSatelliteToStreet\(instance\)/);
   assert.match(appSource, /if \(key === "satellite" && tileState\.loaded > 0 && !hasVisibleUsableLeafletTiles\(instance, "satellite"\)\) \{[\s\S]*scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /updateNavigationPanel\(`Loading \$\{TILE_SOURCES\[instance\.baseLayer\]\.label\} imagery\.\.\.`\)/);
@@ -4674,7 +4922,7 @@ test("Docker OSRM service is internal only and backend public fallback is disabl
   const osrmBlock = compose.match(/\n  osrm:\n([\s\S]*?)\n\n  backend:/)?.[1] || "";
   const backendBlock = compose.match(/\n  backend:\n([\s\S]*?)\n\n  frontend:/)?.[1] || "";
 
-  assert.match(osrmBlock, /image:\s*osrm\/osrm-backend:v5\.27\.1/);
+  assert.match(osrmBlock, /image:\s*ghcr\.io\/project-osrm\/osrm-backend:v5\.27\.1/);
   assert.match(osrmBlock, /osrm-routed/);
   assert.match(osrmBlock, /--algorithm", "mld"/);
   assert.match(osrmBlock, /expose:\s*\n\s*-\s*"5000"/);

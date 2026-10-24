@@ -3,6 +3,27 @@ const assert = require("node:assert/strict");
 const { answer, clean, READ_ONLY_QUERY_REGISTRY, sanitizePageContext } = require("../services/copilotRead.service");
 
 const NOW = Date.parse("2026-10-10T10:00:00.000Z");
+test("incident responder questions distinguish explicit deployments, support and investigation", () => {
+  const source = db();
+  source.users.push({ id: "support", name: "Support Officer", role: "Police Officer" }, { id: "investigator", name: "Investigator", role: "Police Officer" });
+  source.policeOfficers.push({ userId: "support", stationId: "station_madhapur", assignedIncidentId: "INC-1042" }, { userId: "investigator", stationId: "station_madhapur" });
+  source.incidents[0].investigatingOfficerId = "investigator";
+  source.incidents[0].supportAllocations = [{ stationName: "Support Station", officerIds: ["support"] }];
+  source.policeOfficers[0].assignedIncidentId = null;
+  source.incidentOfficerAssignments = [{ id: "deployment-204", incidentId: "INC-1042", unitId: "unit_14", officerId: "user_204", status: "ASSIGNED", responseRole: "TEAM_LEAD" }];
+  const admin = { actor: { id: "admin", role: "Admin" } };
+  const response = answer(source, "Who is responding to INC-1042?", admin).answer;
+  assert.match(response, /Primary Response: P-14/);
+  assert.match(response, /Arjun Kumar/);
+  assert.match(response, /Emergency Support: Support Station[\s\S]*Support Officer/);
+  assert.match(response, /Investigation: Investigator/);
+  const support = answer(source, "Who is supporting INC-1042?", admin).answer;
+  assert.match(support, /Support Officer/);
+  assert.doesNotMatch(support, /Arjun Kumar|Investigator|Primary Response/);
+  assert.doesNotMatch(answer(source, "Who is responding to INC-1042?", { actor: { id: "citizen", role: "Citizen" } }).answer, /Support Officer|Arjun Kumar/);
+  source.incidentOfficerAssignments[0].status = "RELEASED";
+  assert.doesNotMatch(answer(source, "Who is responding to INC-1042?", admin).answer, /Arjun Kumar/);
+});
 function db() {
   return {
     users: [{ id: "user_204", name: "Arjun Kumar", role: "Police Officer", passwordHash: "never-expose", apiToken: "never-expose" }],
@@ -45,6 +66,23 @@ test("recommendations remain informational and provide navigation only", () => {
   assert.equal(source.responseUnits[0].status, "available");
 });
 
+test("conversational wording does not intercept explicit operational requests", () => {
+  assert.match(answer(db(), "Why is CAM-C27 red?", { currentTime: NOW }).answer, /usable video frames are not arriving/);
+  assert.match(answer(db(), "Why is PERSON-8421 a possible match?", { currentTime: NOW }).answer, /Overall candidate confidence: 89%/);
+  assert.match(answer(db(), "Which unit is recommended for INC-1042?", { currentTime: NOW }).answer, /Recommended Unit: P-14/);
+  assert.match(answer(db(), "Give today's operational summary", { currentTime: NOW }).answer, /Unhealthy cameras: 1/);
+});
+
+test("conversational evidence follow-up excludes incidents outside the officer's scope", () => {
+  const source = db();
+  source.incidents[0].stationId = "station_madhapur";
+  source.incidents.push({ id: "INC-9999", stationId: "other_station" });
+  source.videoEvidence.push({ id: "ev_secret", incidentId: "INC-9999" });
+  const response = answer(source, "what about evidence?", { actor: { id: "user_204", role: "Police Officer", stationId: "station_madhapur" } });
+  assert.match(response.answer, /ev_1/);
+  assert.doesNotMatch(response.answer, /ev_secret|INC-9999/);
+});
+
 test("all operational mutation requests are blocked without changing data", () => {
   for (const prompt of ["Assign P-14 to INC-1042", "Delete CAM-C27", "Close INC-1042", "Update INC-1042", "Change severity for INC-1042", "Resolve INC-1042", "Start maintenance for CAM-C27", "Confirm the match for PERSON-8421"]) {
     const source = db(), before = JSON.stringify(source);
@@ -54,7 +92,7 @@ test("all operational mutation requests are blocked without changing data", () =
 });
 
 test("read-only registry contains approved queries and no mutation or generic data access", () => {
-  assert.deepEqual(Object.keys(READ_ONLY_QUERY_REGISTRY).sort(), ["getCameraById", "getIncidentById", "getOfficerById", "getTrackById", "getUnitById", "listAvailableUnits", "listCriticalIncidents", "listSlaBreaches", "listUnhealthyCameras"].sort());
+  assert.deepEqual(Object.keys(READ_ONLY_QUERY_REGISTRY).sort(), ["getCameraById", "getIncidentById", "getOfficerById", "getTrackById", "getUnitById", "listAvailableUnits", "listCriticalIncidents", "listSlaBreaches", "listUnhealthyCameras", "listOfficersByStation"].sort());
   assert.equal(Object.keys(READ_ONLY_QUERY_REGISTRY).some((name) => /create|update|delete|assign|resolve|write|sql|repository/i.test(name)), false);
 });
 
@@ -121,4 +159,57 @@ test("aggregate and selected incident answers share server actor scope; totals a
   assert.doesNotMatch(JSON.stringify(response), /Outside scope|INC-SECRET/);
   assert.match(answer(source, "selected incident status", options).answer, /No incident/);
   assert.match(answer(source, "how many critical incidents?", { actor: { role: "Admin" } }).answer, /Critical incidents: 26/);
+});
+test("natural pending queries and camera follow-up preserve page and conversation context", () => {
+  const source = db();
+  source.incidents.push({ id: "INC-CLOSED", severity: "HIGH", status: "Closed" });
+  const admin = { actor: { role: "Admin" }, currentTime: NOW };
+  assert.equal(sanitizePageContext({ page: "cctns" }).page, "cctns");
+  assert.equal(answer(source, "pending cases", { ...admin, pageContext: { page: "cctns" } }).intent, "cctns_case_search");
+  assert.match(answer(source, "pending cases", { ...admin, pageContext: { page: "incident-command" } }).answer, /Matching active incidents: 1/);
+  assert.match(answer(source, "pending incidents?", admin).answer, /Matching active incidents: 1/);
+  assert.equal(answer(source, "anything pending?", { ...admin, pageContext: { page: "cctv" } }).intent, "camera_search");
+  const cameras = answer(source, "what about cameras?", admin);
+  assert.match(answer(source, "any issue there?", { ...admin, priorEntities: cameras.entities }).answer, /usable video frames are not arriving/);
+  assert.equal(answer(source, "how many pending cases?", { ...admin, priorEntities: [{ type: "incident", id: "INC-1042" }] }).intent, "cctns_case_search");
+});
+test("plural incident follow-ups retain the authorized result set and free-unit counts are explicit", () => {
+  const source = db(); source.incidents.push({ id: "INC-SECOND", title: "Second", status: "New", severity: "HIGH" });
+  const opts = { actor: { role: "Admin" }, currentTime: NOW };
+  const found = answer(source, "pending incidents?", opts);
+  const follow = answer(source, "show those", { ...opts, priorEntities: found.entities });
+  assert.match(follow.answer, /INC-1042/); assert.match(follow.answer, /INC-SECOND/);
+  assert.match(answer(source, "how many units are free?", opts).answer, /Available response units \(registry status\): 1/);
+});
+
+test("CCTNS pending case counts use simulator status and operator station scope", () => {
+  const source = db();
+  const pageContext = { page: "cctns" };
+  const admin = answer(source, "how many cases are open?", { actor: { role: "Admin" }, pageContext });
+  assert.match(admin.answer, /simulator \(not live government data\): 2 cases/);
+  assert.match(admin.answer, /ACTIVE: 1; UNDER INVESTIGATION: 1/);
+  const officer = answer(source, "pending cases", { actor: { role: "Police Officer", stationId: "PS-PATANCHERU" }, pageContext });
+  assert.match(officer.answer, /: 2 cases/);
+  assert.match(answer(source, "pending cases", { actor: { role: "Police Officer", stationId: "other" }, pageContext }).answer, /: 0 cases/);
+  assert.match(answer(source, "pending cases", { actor: { role: "Citizen" }, pageContext }).answer, /authorized operator/);
+  const original = process.env.CCTNS_SIMULATOR_STATUS;
+  try {
+    process.env.CCTNS_SIMULATOR_STATUS = "UNAVAILABLE";
+    assert.match(answer(source, "pending cases", { actor: { role: "Admin" }, pageContext }).answer, /unavailable; case counts cannot be determined/);
+  } finally {
+    if (original === undefined) delete process.env.CCTNS_SIMULATOR_STATUS; else process.env.CCTNS_SIMULATOR_STATUS = original;
+  }
+});
+
+test("tracking pending reviews count explicit candidate statuses and preserve session follow-up", () => {
+  const source = db();
+  source.trackingCandidates.push({ id: "cand_confirmed", sessionId: "track_person_8421", status: "CONFIRMED" }, { id: "cand_unknown", sessionId: "track_person_8421" });
+  const before = JSON.stringify(source);
+  const options = { actor: { role: "Admin" }, pageContext: { page: "multi-camera-tracking" }, currentTime: NOW };
+  const response = answer(source, "pending reviews", options);
+  assert.match(response.answer, /pending human review: 1/);
+  assert.match(response.answer, /cand_1/);
+  assert.doesNotMatch(response.answer, /cand_confirmed|cand_unknown/);
+  assert.match(answer(source, "show those", { ...options, priorEntities: response.entities }).answer, /PERSON-8421/);
+  assert.equal(JSON.stringify(source), before);
 });

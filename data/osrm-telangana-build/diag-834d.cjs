@@ -1,0 +1,32 @@
+const { chromium } = require("playwright");
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 834, height: 1112 } });
+  const page = await context.newPage();
+  page.on("response", (r) => { if (r.url().includes("/api/maps/")) console.log("API", r.request().method(), r.url().replace("http://localhost:3001", "").slice(0, 70), r.status()); });
+  page.on("console", (m) => { if (m.type() === "error") console.log("CONSOLE ERROR:", m.text().slice(0, 160)); });
+  await page.goto("http://localhost:3001", { waitUntil: "domcontentloaded" });
+  await page.locator("#loginForm input[name=email]").fill("admin@rakshakai.local");
+  await page.locator("#loginForm input[name=password]").fill("demo123");
+  await page.locator("#loginForm button[type=submit]").click();
+  await page.locator("#appShell:not(.app-hidden)").waitFor({ state: "visible", timeout: 30000 });
+  await page.goto("http://localhost:3001/gis", { waitUntil: "domcontentloaded" });
+  const map = page.locator("#gisMap .leaflet-container");
+  await map.waitFor({ state: "visible", timeout: 30000 });
+  await page.locator("#resetGisMap").click();
+  await page.locator("#setMapStart").click();
+  console.log("status after arm:", await page.locator("#mapNavigationStatus").innerText());
+  await map.scrollIntoViewIfNeeded();
+  const mb = await map.boundingBox();
+  const px = mb.x + mb.width - 20, py = mb.y + 338;
+  const probe = await page.evaluate(([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    return el ? el.tagName + "." + String(el.className.baseVal ?? el.className).slice(0, 60) : "none";
+  }, [px, py]);
+  console.log("click target:", probe, "at", Math.round(px), Math.round(py), "map:", JSON.stringify(mb));
+  await page.mouse.click(px, py);
+  await page.waitForTimeout(6000);
+  console.log("status after click:", await page.locator("#mapNavigationStatus").innerText());
+  console.log("clearRouteStart disabled:", await page.locator("#clearRouteStart").evaluate((el) => el.disabled));
+  await browser.close();
+})();

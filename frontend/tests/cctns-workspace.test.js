@@ -58,11 +58,27 @@ test("a pending search cannot discard a linked record selected while it is loadi
     await new Promise((resolve) => setImmediate(resolve));
     dom.window.document.querySelector('[data-cctns-category="crime"]').click();
     dom.window.document.querySelector('[data-cctns-record="case-1"]').click();
+    const toggle = document.querySelector('[data-cctns-toggle-filters]');
+    const crimeFilter = document.querySelector('[data-cctns-filter="crimeType"]');
+    toggle.focus();
+    toggle.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
     finishSearch({ records: [vehicle], total: 1, state: "EXACT_RECORD_MATCH" });
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(document.querySelector('[data-cctns-toggle-filters]'), toggle, "Search completion must preserve the pressed control");
+    assert.equal(document.activeElement, toggle, "Search completion must retain keyboard focus");
+    toggle.click();
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
     finishLinkedDetail({ record: linked });
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(document.querySelector('[data-cctns-filter="crimeType"]'), crimeFilter);
+    assert.equal(document.querySelector("#cctnsFilters").classList.contains("open"), true);
     assert.equal(dom.window.document.querySelector(".cctns-detail-title")?.textContent, "CASE-1");
+    const search = document.querySelector('[data-cctns-search]');
+    search.value = "New query";
+    search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    assert.equal(document.querySelector(".cctns-results-list [data-cctns-record]"), null, "Stale search cards must disappear immediately, before debounce completes");
+    assert.ok(document.querySelector(".cctns-loading"));
+    assert.equal(document.querySelector('[data-cctns-search]'), search);
   } finally {
     Object.assign(global, previous);
     dom.window.close();
@@ -96,5 +112,27 @@ test("late record failures and another operator's pending requests cannot replac
     assert.equal(document.querySelector(".cctns-detail-title"), null);
     resetCctnsWorkspace();
     assert.equal(document.querySelector("#cctnsWorkspace").textContent, "");
+  } finally { Object.assign(global, previous); dom.window.close(); }
+});
+
+
+test("category tabs support keyboard navigation and retain focus after search", async () => {
+  const dom = new JSDOM('<div id="cctnsWorkspace"></div>', { url: "http://localhost/cctns" });
+  const previous = { window: global.window, document: global.document, location: global.location, Option: global.Option };
+  Object.assign(global, { window: dom.window, document: dom.window.document, location: dom.window.location, Option: dom.window.Option });
+  try {
+    const { configureCctns, renderCctnsWorkspace, resetCctnsWorkspace } = await import("../src/components/CctnsWorkspace.js");
+    resetCctnsWorkspace();
+    configureCctns({ getContext: () => ({ user: { id: "keyboard-test", role: "Admin" }, stations: [], incidents: [] }), api: { search: async () => ({ records: [], total: 0 }) } });
+    renderCctnsWorkspace();
+    await new Promise(resolve => setImmediate(resolve));
+    const first = document.querySelector('[data-cctns-category="all"]');
+    first.focus();
+    first.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(document.activeElement.dataset.cctnsCategory, "case");
+    assert.equal(document.activeElement.getAttribute("aria-selected"), "true");
+    assert.equal(document.querySelector('[data-cctns-category="all"]').tabIndex, -1);
+    resetCctnsWorkspace();
   } finally { Object.assign(global, previous); dom.window.close(); }
 });

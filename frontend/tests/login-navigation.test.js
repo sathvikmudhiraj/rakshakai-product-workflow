@@ -4,6 +4,21 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { JSDOM } from "jsdom";
 
+test("direct view paths and unknown paths resolve to the requested page or role landing", () => {
+  const source = fs.readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  const start = source.indexOf("function requestedPortalView() {");
+  const end = source.indexOf("function applyRoleAccess()", start);
+  const context = vm.createContext({ location: { pathname: "/gis", hash: "" }, state: { user: { role: "Admin" } }, VIEW_TITLES: { gis: "GIS", settings: "Settings", cctns: "CCTNS" }, landingForRole: (role) => role === "Citizen" ? "missing" : "dashboard" });
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.requestedPortalView(), "gis");
+  context.location.pathname = "/rakshak/live-vision";
+  assert.equal(context.requestedPortalView(), "live-vision");
+  context.location.pathname = "/unknown";
+  assert.equal(context.requestedPortalView(), "dashboard");
+  context.state.user.role = "Citizen";
+  assert.equal(context.requestedPortalView(), "missing");
+});
+
 test("login refresh cannot overwrite navigation or allow duplicate login submissions", async () => {
   const source = fs.readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
   const begin = source.indexOf('$("#loginForm").addEventListener("submit"');
@@ -22,7 +37,7 @@ test("login refresh cannot overwrite navigation or allow duplicate login submiss
   const form = dom.window.document.querySelector("form");
   const context = vm.createContext({
     loginSubmissionInFlight: false, state: {}, FormData: dom.window.FormData,
-    location: { pathname: "/", hash: "" },
+    location: { pathname: "/", hash: "" }, VIEW_TITLES: { dashboard: "Dashboard", cctns: "CCTNS", settings: "Settings" },
     $: (selector) => selector === "#loginForm"
       ? { addEventListener: (_event, handler) => { submit = handler; } }
       : dom.window.document.querySelector(selector),

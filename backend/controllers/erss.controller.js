@@ -126,7 +126,19 @@ exports.listEvents = async (req, res, next) => {
     events.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const total = events.length;
     events = events.slice(Number(offset), Number(offset) + Number(limit));
-    res.json({ events, total, limit: Number(limit), offset: Number(offset) });
+    res.json({
+      events,
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+      calls: db.erssCalls || [],
+      triage: db.erssTriage || [],
+      dispatchRequests: db.erssDispatchRequests || [],
+      unitRequests: db.erssUnitRequests || [],
+      assistanceRequests: db.erssAssistanceRequests || [],
+      jurisdictionHistory: db.erssJurisdictionHistory || [],
+      ownershipTransfers: db.erssOwnershipTransfers || []
+    });
   } catch (error) {
     next(error);
   }
@@ -180,10 +192,22 @@ exports.updateEvent = async (req, res, next) => {
   }
 };
 
+const LOCATION_CONFIDENCE_VALUES = ["high", "medium", "low"];
+
+function normalizeLocationConfidence(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (!LOCATION_CONFIDENCE_VALUES.includes(normalized)) {
+    throw Object.assign(new Error("Location confidence must be high, medium, or low"), { status: 400 });
+  }
+  return normalized;
+}
+
 exports.updateLocation = async (req, res, next) => {
   try {
     const { db, user } = await requireErssRole(req, ["CALL_TAKER", "DISPATCHER"]);
-    const { incidentLatitude, incidentLongitude, incidentLocationText, locationSource, locationConfidence } = req.body;
+    const { incidentLatitude, incidentLongitude, incidentLocationText, locationSource } = req.body;
+    const locationConfidence = normalizeLocationConfidence(req.body.locationConfidence);
     if (!Number.isFinite(incidentLatitude) || !Number.isFinite(incidentLongitude)) {
       return res.status(400).json({ error: "Valid incident coordinates required" });
     }
@@ -295,10 +319,44 @@ exports.getTriage = async (req, res, next) => {
   }
 };
 
+function eventServiceType(event) {
+  return ["POLICE", "FIRE", "MEDICAL", "DISASTER", "MULTI_SERVICE"].includes(event?.emergencyType)
+    ? event.emergencyType
+    : "POLICE";
+}
+
+// Recommendation objects embed denormalized unit/route records that can carry
+// Date instances loaded from Postgres. node-postgres serializes raw Date
+// params as non-JSON strings, which jsonb columns reject, so round-trip the
+// payload through JSON before persistence.
+function jsonSafe(value) {
+  return value === undefined || value === null ? null : JSON.parse(JSON.stringify(value));
+}
+
 exports.createDispatchRequest = async (req, res, next) => {
   try {
     const { db, user } = await requireErssRole(req, ["DISPATCHER"]);
-    const { recommendedServices, primary, fallbacks } = req.body;
+    const event = db.erssEvents?.find(e => e.id === req.params.id);
+    if (!event) return res.status(404).json({ error: "Event not found" });
+    const activeRequest = (db.erssDispatchRequests || []).find(
+      (r) => r.erssEventId === event.id && r.status !== "REJECTED"
+    );
+    if (activeRequest) return res.json({ request: activeRequest, existing: true });
+    let { recommendedServices, primary, fallbacks } = req.body || {};
+    if (!primary) {
+      // Generate the recommendation with the existing ERSS engine
+      // (jurisdiction, availability, routing/ETA, workload, fallbacks).
+      const recommendations = await calculateUnitRecommendations(db, event, {});
+      if (!recommendations.primary) {
+        return res.status(409).json({ error: recommendations.error || "No available response unit for this event" });
+      }
+      const serviceType = eventServiceType(event);
+      primary = jsonSafe({ ...recommendations.primary, serviceType });
+      fallbacks = jsonSafe((recommendations.fallbacks || []).map((fb) => ({ ...fb, serviceType }))) || [];
+      if (!Array.isArray(recommendedServices) || recommendedServices.length === 0) {
+        recommendedServices = [serviceType];
+      }
+    }
     if (!primary) return res.status(400).json({ error: "Primary recommendation required" });
     const request = await createDispatchRequest(db, req.params.id, user.id, { services: recommendedServices, primary, fallbacks });
     await writeDatabase(db);
@@ -323,10 +381,30 @@ exports.getDispatchRequest = async (req, res, next) => {
 exports.approveDispatchRequest = async (req, res, next) => {
   try {
     const { db, user } = await requireErssRole(req, ["DISPATCHER"]);
-    const { primary, fallbacks } = req.body;
+    const { primary, fallbacks } = req.body || {};
     const request = await approveDispatchRequest(db, req.params.requestId, user, { primary, fallbacks });
+    // Start ACK monitoring by requesting the primary unit through the existing
+    // unit-request service: status REQUESTED, ack timeout recorded, realtime
+    // event emitted and audit entry written by that service.
+    const primaryRec = request.primaryRecommendation;
+    let unitRequest = null;
+    if (primaryRec?.unitId) {
+      const existingRequest = (db.erssUnitRequests || []).find(
+        (r) => r.erssDispatchRequestId === request.id
+          && r.unitId === primaryRec.unitId
+          && ["REQUESTED", "ACKNOWLEDGED", "ACCEPTED"].includes(r.status)
+      );
+      if (existingRequest) {
+        unitRequest = existingRequest;
+      } else {
+        const unit = (db.responseUnits || []).find((u) => u.id === primaryRec.unitId);
+        const ackTimeoutSeconds = Number(unit?.ackTimeoutSeconds ?? unit?.ack_timeout_seconds) || DEFAULT_ACK_TIMEOUT;
+        const serviceType = primaryRec.serviceType || (request.recommendedServices || [])[0] || "POLICE";
+        unitRequest = await createUnitRequest(db, request.id, request.erssEventId, primaryRec.unitId, serviceType, ackTimeoutSeconds, user);
+      }
+    }
     await writeDatabase(db);
-    res.json({ request });
+    res.json({ request, unitRequest });
   } catch (error) {
     next(error);
   }
@@ -652,12 +730,12 @@ exports.refreshRecommendations = async (req, res, next) => {
     const recommendations = await calculateUnitRecommendations(db, event, {});
     const dispatchRequest = db.erssDispatchRequests?.find(r => r.erssEventId === req.params.id);
     if (dispatchRequest) {
-      dispatchRequest.primaryRecommendation = recommendations.primary;
-      dispatchRequest.fallbackRecommendations = recommendations.fallbacks;
+      dispatchRequest.primaryRecommendation = jsonSafe(recommendations.primary);
+      dispatchRequest.fallbackRecommendations = jsonSafe(recommendations.fallbacks) || [];
       dispatchRequest.updatedAt = new Date().toISOString();
     }
     await writeDatabase(db);
-    res.json({ recommendations });
+    res.json({ recommendations: jsonSafe(recommendations) });
   } catch (error) {
     next(error);
   }

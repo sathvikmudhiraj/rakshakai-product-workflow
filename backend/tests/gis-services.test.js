@@ -107,3 +107,29 @@ test("one provider route stays one route and approximate fallback has no ETA", (
   assert.equal(fallback.routes[0].durationMinutes, null);
   assert.match(fallback.routes[0].warnings.join(" "), /Road distance and travel time are unavailable/);
 });
+
+test("degenerate zero-length routes from far outside the graph coverage are rejected, never faked as road routes", () => {
+  // Observed against the Telangana MLD graph: requesting a route far outside coverage
+  // (e.g. Kolkata) can snap both endpoints onto a stray trunk-fragment node and answer
+  // code=Ok with distance=0, duration=0 and a single-point geometry. The normalizer must
+  // reject it so buildRoute throws and the clearly labelled approximate fallback is used.
+  const farPoint = { lat: 22.5726, lng: 88.3639 };
+  const degenerate = {
+    code: "Ok",
+    routes: [
+      {
+        distance: 0,
+        duration: 0,
+        geometry: { type: "LineString", coordinates: [[81.45209, 17.824926], [81.45209, 17.824926]] },
+        legs: [{ steps: [{ distance: 0, duration: 0, name: "", maneuver: { type: "depart", location: [81.45209, 17.824926] } }] }]
+      }
+    ]
+  };
+  assert.equal(normalizeOsrmRoutes(degenerate, farPoint, farPoint).length, 0);
+  const fallback = approximateRouteResponse(farPoint, farPoint);
+  assert.equal(fallback.isApproximate, true);
+  assert.equal(fallback.provider, "haversine");
+  assert.equal(fallback.durationMinutes, null);
+  assert.equal(fallback.routes[0].durationMinutes, null);
+  assert.equal(fallback.routeType, "approximate_fallback");
+});

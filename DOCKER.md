@@ -77,7 +77,7 @@ docker compose --env-file .env.docker ps
 
 Open the app:
 
-- App URL: [http://localhost:3000](http://localhost:3000/)
+- App URL: [http://localhost:3001](http://localhost:3001/)
 - Backend health: [http://localhost:5000/api/health](http://localhost:5000/api/health)
 - AI health: [http://localhost:8000/health](http://localhost:8000/health)
 

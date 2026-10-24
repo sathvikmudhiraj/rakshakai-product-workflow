@@ -74,6 +74,7 @@ function setupEventListeners() {
     "unit_reassigned",
     "unit_released",
     "incident_assignment_changed",
+    "incident_officer_assignment_changed",
     "escalation_alert_created",
     "escalation_alert_acknowledged",
     "escalation_alert_resolved",

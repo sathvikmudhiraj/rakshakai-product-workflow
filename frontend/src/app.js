@@ -5,6 +5,8 @@ import { api, erssApi } from "./services/api.js";
 import { cctnsApi } from "./services/api.js";
 import { googleWorkspaceSignInUrl } from "./services/api.js";
 import { gisRouteButtonStates } from "./gisButtonState.js";
+import { maneuverText, navigationProgress, shouldRecenterFollow } from "./activeNavigation.js";
+import { prioritizeIncidents, selectedVisibleIncident, criticalQueueFilters } from "./incidentQueue.js";
 import {
   applyRouteResponse,
   clearCalculatedRoutes,
@@ -34,6 +36,7 @@ import { beepCooldownReady, duplicateObservation, shouldPlayAlertBeep, surveilla
 import { isOperatorRole as isOperatorRoleRoleAccess, loadAiVisionData, resolveViewAccess, canAccessErssPage, getOperationalRole } from "./roleAccess.js";
 import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } from "./browserGeolocation.js";
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
+import { canDispatchUnits, createUnitAssignmentRecommendationCoordinator, hybridSupportVisible, memberUnavailable, unitAssignmentAction } from "./unitAssignmentRecommendation.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
 import { createCriticalModal, syncCriticalAttention, clearCriticalAttention, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 import { configureTracking, renderTrackingPage, cleanupTracking, createTrackingSessionModal } from "./components/MultiCameraTracking.js";
@@ -46,6 +49,7 @@ const VIEW_TITLES = {
   dashboard: "Sector 7 Safety Grid",
   "incident-command": "Incident Command",
   "unit-assignment": "Unit Assignment",
+  "police-assignment": "Police Assignment",
   gis: "GIS Monitoring",
   cctv: "CCTV Monitoring",
   "live-vision": "Rakshak Live Vision",
@@ -117,6 +121,8 @@ const state = {
   assignmentFilters: { search: "", incident: "unassigned", unit: "available" },
   assignmentSelectedIncidentId: null,
   assignmentRecommendation: null,
+  assignmentRecommendationStatus: "idle",
+  policeAssignment: { incidentId: null, context: null },
   liveVisionStream: null,
   liveVisionTimer: null,
   liveVisionBusy: false,
@@ -140,8 +146,22 @@ const state = {
   erssAssistanceRequests: [],
   erssJurisdictionHistory: [],
   erssOwnershipTransfers: [],
+  erssEventDetails: {},
+  erssPanelStatus: null,
+  erssReviewInFlight: false,
   selectedErssEventId: null
 };
+
+const assignmentRecommendationCoordinator = createUnitAssignmentRecommendationCoordinator({
+  request: (incident) => api(`/api/incidents/${encodeURIComponent(incident.id)}/recommend-unit`, { method: "POST" }),
+  formatError: dispatchErrorMessage,
+  isUnavailableError: (error) => ["PRIMARY_UNIT_RECOMMENDATION_UNAVAILABLE", "HYBRID_SUPPORT_UNAVAILABLE"].includes(error?.data?.code),
+  onChange: (snapshot) => {
+    state.assignmentRecommendationStatus = snapshot.status;
+    state.assignmentRecommendation = snapshot.data || (snapshot.error ? { error: snapshot.error } : null);
+    renderUnitAssignment();
+  }
+});
 
 configureTracking({ cameraSources: () => state.cameraSources || [] });
 configureCctns({
@@ -153,11 +173,11 @@ configureCopilot({ context: () => {
   const entityId = page === "incident-command" || page === "investigations" || page === "escalations"
     ? state.selectedIncidentId
     : page === "unit-assignment"
-      ? state.selectedIncidentId || state.selectedUnitId
+      ? state.assignmentSelectedIncidentId
       : page === "response-units" || page === "gis"
         ? state.selectedUnitId
       : page === "video-evidence" ? state.activeEvidenceId : null;
-  return { page, entityId: entityId || null };
+  return { page, entityId: entityId || null, ...(page === "unit-assignment" && entityId && /timed?\s*out|timeout/i.test(state.assignmentRecommendation?.error || "") ? { recommendationTimedOut: true } : {}) };
 } });
 const satelliteMaps = [];
 let loginSubmissionInFlight = false;
@@ -166,6 +186,7 @@ let realtimeUnsubscribers = [];
 let registerSubmissionInFlight = false;
 let browserNavigationRestoreInProgress = false;
 let browserLocationWatchId = null;
+let lastFollowCameraFix = null;
 let lastUnitTelemetrySent = null;
 let pendingUnitTelemetryPoint = null;
 let unitTelemetryInFlight = false;
@@ -339,14 +360,17 @@ function setView(view, options = {}) {
   if (previousView === "settings" && view !== "settings" && state.slaDirty) discardSlaDraft();
   if (document.body.dataset.view === "live-vision" && view !== "live-vision") stopLiveVision();
   if (document.body.dataset.view === "multi-camera-tracking" && view !== "multi-camera-tracking") cleanupTracking();
+  if (view === "police-assignment" && !isOperatorRole()) view = landingForRole(state.user?.role);
   const nav = [...$$(".nav-item")].find((button) => button.dataset.view === view);
   if (nav?.hidden) landingForRole(state.user?.role);
   view = resolveViewAccess({ view, role: state.user?.role, user: state.user, document, viewTitles: VIEW_TITLES });
+  document.querySelector(`.nav-item[data-view="${view}"]`)?.closest(".nav-group")?.setAttribute("open", "");
   renderCriticalAttention(view);
-  if (view === "cctns" && location.pathname !== "/cctns") {
-    history.replaceState(history.state, "", `/cctns${location.search}`);
-  } else if (view !== "cctns" && location.pathname === "/cctns") {
-    history.replaceState(history.state, "", "/");
+  const destination = view === "live-vision" ? "/rakshak/live-vision" : `/${view}`;
+  if (location.pathname !== destination) {
+    const suffix = ["cctns", "police-assignment"].includes(view) ? location.search : view === "settings" && location.hash.startsWith("#settings/") ? location.hash : "";
+    const method = options.restoreHistory || nav?.hidden ? "replaceState" : "pushState";
+    history[method](history.state, "", `${destination}${suffix}`);
   }
   if (view === "missing" && state.user?.role === "Citizen") setText("#viewTitle", "My Reports & Public Safety Help");
   if (view === "settings") {
@@ -379,6 +403,7 @@ function setView(view, options = {}) {
   }
   if (view === "incident-command") renderIncidentCommand();
   if (view === "unit-assignment") renderUnitAssignment();
+  if (view === "police-assignment") renderPoliceAssignment();
   if (view === "multi-camera-tracking") renderTrackingPage();
   if (view === "cctns") renderCctnsWorkspace();
   if (view === "erss-call-taker") renderErssCallTaker();
@@ -391,7 +416,10 @@ function setView(view, options = {}) {
 
 function settingsSectionFromLocation() {
   const match = location.hash.match(/^#settings\/([^/?#]+)/);
-  const section = match ? decodeURIComponent(match[1]) : state.settingsSection;
+  let section = state.settingsSection;
+  if (match) {
+    try { section = decodeURIComponent(match[1]); } catch { section = "security"; }
+  }
   return SETTINGS_SECTIONS.has(section) ? section : "security";
 }
 
@@ -455,6 +483,8 @@ function landingForRole(role) {
 function requestedPortalView() {
   if (location.pathname === "/cctns") return "cctns";
   if (location.pathname === "/rakshak/live-vision") return "live-vision";
+  const pathView = location.pathname.replace(/^\/+|\/+$/g, "");
+  if (Object.prototype.hasOwnProperty.call(VIEW_TITLES, pathView)) return pathView;
   return state.user?.role === "Admin" && location.hash.startsWith("#settings/") ? "settings" : landingForRole(state.user?.role);
 }
 
@@ -469,6 +499,7 @@ function applyRoleAccess() {
       button.hidden = !canSee(button, role);
     }
   });
+  $$(".nav-group").forEach((group) => { group.hidden = ![...group.querySelectorAll(".nav-item")].some((button) => !button.hidden); });
   $("#runAiScan").classList.toggle("restricted-hidden", !isOperatorRole());
   $("#assignIncident").classList.toggle("restricted-hidden", !isOperatorRole());
   $("#routeIncident").classList.toggle("restricted-hidden", !isOperatorRole());
@@ -571,11 +602,12 @@ function initializeRealtimeAlerts() {
   if (!isOperatorRole()) return;
   initializeSocket(state.user);
   if (realtimeUnsubscribers.length) return;
-  const events = ["critical_incident_created", "incident_assignment_warning", "incident_assignment_breached", "response_sla_breached", "escalation_level_changed", "investigation_overdue", "escalation_alert_created", "escalation_alert_resolved", "unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"];
+  const events = ["critical_incident_created", "incident_assignment_warning", "incident_assignment_breached", "response_sla_breached", "escalation_level_changed", "investigation_overdue", "escalation_alert_created", "escalation_alert_resolved", "unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed", "incident_officer_assignment_changed"];
   realtimeUnsubscribers = events.map((eventName) => onRealtime(eventName, (payload) => {
     loadPersistentEscalations(payload?.alert || null).catch((error) => console.warn("Could not refresh escalation alerts:", error.message));
-    if (["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"].includes(eventName)) {
+    if (["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed", "incident_officer_assignment_changed"].includes(eventName)) {
       refresh().catch((error) => console.warn("Could not refresh assignment data:", error.message));
+      if (document.body.dataset.view === "police-assignment") renderPoliceAssignment();
     }
   }));
   realtimeUnsubscribers.push(onRealtime("camera_health_changed", ({ camera }) => {
@@ -591,7 +623,17 @@ function initializeRealtimeAlerts() {
   const erssEvents = ["erss_event_received", "erss_event_updated", "erss_actionable", "erss_dispatch_required", "erss_dispatch_approved", "erss_recommendation_updated", "erss_unit_requested", "erss_unit_acknowledged", "erss_unit_accepted", "erss_unit_timeout", "erss_fallback_recommended", "erss_assistance_requested", "erss_assistance_acknowledged", "erss_assistance_accepted", "erss_assistance_declined", "erss_assistance_timeout", "erss_jurisdiction_changed", "erss_ownership_transfer_requested", "erss_ownership_transfer_acknowledged", "erss_ownership_transferred", "erss_supervisor_escalated", "erss_call_started", "erss_call_ended", "erss_triage_completed"];
   erssEvents.forEach((eventName) => {
     realtimeUnsubscribers.push(onRealtime(eventName, () => {
-      refresh().catch((error) => console.warn("Could not refresh ERSS data:", error.message));
+      refresh().then(() => {
+        const panel = $("[data-panel='erss-call-taker']");
+        const typingInCallTaker = panel?.contains(document.activeElement)
+          && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+        if ((document.body.dataset.view || "") === "erss-call-taker" && !typingInCallTaker) {
+          renderErssCallTaker();
+        }
+        if ((document.body.dataset.view || "") === "erss-dispatcher") {
+          renderErssDispatcher();
+        }
+      }).catch((error) => console.warn("Could not refresh ERSS data:", error.message));
     }));
   });
 }
@@ -616,11 +658,15 @@ function showApp() {
   mountNotificationCenter({
     showCopilot: operator,
     openCopilot,
-    navigate: ({ view, entityType, entityId }) => {
+    navigate: ({ view, entityType, entityId, evidenceId }) => {
       if (entityType === "incident") state.selectedIncidentId = entityId;
       if (entityType === "tracking_session") document.body.dataset.trackingSessionId = entityId;
       if (entityType === "tracking_candidate") document.body.dataset.trackingCandidateId = entityId;
       if (entityType === "ai_observation") state.aiObservationCameraId = state.aiObservations.find((item) => item.id === entityId)?.cameraId || null;
+      if (entityType === "evidence" || evidenceId) {
+        state.activeEvidenceId = evidenceId || entityId;
+        renderVideoEvidence();
+      }
       setView(view);
     }
   });
@@ -688,6 +734,19 @@ function setMapView(instance, point, zoom = instance.zoom, label = instance.plac
       instance.syncingLeafletView = false;
     });
   }
+}
+
+function panFollowLocation(instance, point) {
+  const valid = validMapPoint(point);
+  if (!valid) return;
+  instance.center = latLngToTile(valid.lat, valid.lng, instance.zoom);
+  instance.placeLabel = point.label || "Live device location";
+  if (instance.leafletMap) {
+    instance.syncingLeafletView = true;
+    instance.leafletMap.panTo([valid.lat, valid.lng], { animate: false });
+    queueMicrotask(() => { instance.syncingLeafletView = false; });
+  }
+  lastFollowCameraFix = { lat: valid.lat, lng: valid.lng, at: Date.now() };
 }
 
 function syncLeafletMapToState(instance) {
@@ -813,7 +872,76 @@ function setMapLayerVisibility(key, visible) {
 
 function makeMapLayersControl(instance) {
   const panel = node("fieldset", "map-layer-control");
-  panel.append(node("legend", "", "Map Layers"));
+  panel.setAttribute("aria-label", "Map layers");
+  const toggle = node("button", "map-layer-toggle", "Layers");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-label", "Show map layers");
+  const menu = node("div", "map-layer-menu");
+  const compactMode = () => window.matchMedia("(max-width: 620px)").matches;
+  menu.hidden = compactMode();
+  const closeMenu = () => {
+    panel.classList.remove("is-open");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", "Show map layers");
+    menu.hidden = compactMode();
+  };
+  const clampMenuToMap = () => {
+    const mapHeight = instance.map.clientHeight || 0;
+    const toggleBottomInMap = panel.offsetTop + toggle.offsetTop + toggle.offsetHeight;
+    const available = mapHeight - toggleBottomInMap - 12;
+    menu.style.maxHeight = `${Math.max(120, Math.min(380, available))}px`;
+  };
+  const openMenu = () => {
+    panel.classList.add("is-open");
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.setAttribute("aria-label", "Hide map layers");
+    clampMenuToMap();
+    menu.hidden = false;
+  };
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    panel.classList.contains("is-open") ? closeMenu() : openMenu();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!panel.contains(event.target)) closeMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !panel.classList.contains("is-open")) return;
+    event.preventDefault();
+    closeMenu();
+    toggle.focus();
+  });
+  window.addEventListener("resize", () => {
+    if (!compactMode()) {
+      panel.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+      menu.style.maxHeight = "";
+      menu.hidden = false;
+    } else if (!panel.classList.contains("is-open")) {
+      menu.hidden = true;
+    } else {
+      clampMenuToMap();
+    }
+  });
+  const baseLayers = node("div", "map-layer-basemap");
+  baseLayers.append(node("span", "map-layer-heading", "Base map"));
+  [["streets", "Street Map"], ["satellite", "Satellite"]].forEach(([key, labelText]) => {
+    const button = node("button", "map-layer-base", labelText);
+    button.type = "button";
+    button.dataset.mapBaseLayer = key;
+    button.setAttribute("aria-pressed", String(instance.baseLayer === key));
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setBaseLayer(instance, key);
+      baseLayers.querySelectorAll("[data-map-base-layer]").forEach((item) => {
+        item.setAttribute("aria-pressed", String(item.dataset.mapBaseLayer === key));
+      });
+      closeMenu();
+    });
+    baseLayers.append(button);
+  });
+  menu.append(baseLayers, node("span", "map-layer-heading", "Operational overlays"));
   [
     ["incidents", "Incidents"],
     ["responseUnits", "Response Units"],
@@ -833,8 +961,9 @@ function makeMapLayersControl(instance) {
       event.stopPropagation();
       setMapLayerVisibility(key, event.currentTarget.checked);
     });
-    panel.append(label);
+    menu.append(label);
   });
+  panel.append(toggle, menu);
   instance.map.classList.toggle("labels-visible", state.mapLayers.labels);
   instance.map.classList.toggle("heatmap-hidden", !state.mapLayers.heatOverlay);
   return panel;
@@ -1146,10 +1275,10 @@ function fallbackSatelliteToStreet(instance, reason = "Satellite imagery unavail
   instance.leafletTileLayers?.streets?.redraw();
   syncLayerButtons(instance);
   updateMapAttribution(instance);
-  updateLeafletLayerStatus(instance, `${reason}; switched to Street View.`);
+  updateLeafletLayerStatus(instance, `${reason}; switched to Street Map.`);
   scheduleStreetLoadOutcome(instance, switchId);
   if (instance.map.id === "gisMap") {
-    updateNavigationPanel(`${reason}; switched to Street View.`);
+    updateNavigationPanel(`${reason}; switched to Street Map.`);
   }
   requestAnimationFrame(() => {
     instance.satelliteFallbackInProgress = false;
@@ -1353,7 +1482,9 @@ function cancelMapPlace(instance, place) {
 }
 
 function clearRouteResult() {
+  if (state.mapNavigation.activeNavigation) endActiveNavigation("Navigation ended because the route changed.");
   state.mapNavigation = clearCalculatedRoutes(state.mapNavigation);
+  state.dispatchSupportRoutes = [];
 }
 
 function clearSearchPreview() {
@@ -1391,8 +1522,8 @@ function canonicalRoutePoint(point, fallbackLabel = "Route point") {
   };
 }
 
-function setRouteStart(point, label = "Route start") {
-  const canonicalPoint = canonicalRoutePoint({ ...point, label }, label);
+function setRouteStart(point, label = "Route start", metadata = {}) {
+  const canonicalPoint = canonicalRoutePoint({ ...point, ...metadata, label }, label);
   if (!canonicalPoint) return false;
   state.mapNavigation.start = canonicalPoint;
   clearRouteResult();
@@ -1565,6 +1696,13 @@ function updateGisButtonStates() {
   applyGisButtonState($("#satelliteMapLayer"), states.satellite);
   applyGisButtonState($("#useMyLocation"), states.location);
   applyGisButtonState($("#toggleLocationTracking"), states.tracking);
+  const followButton = $("#toggleFollowLocation");
+  if (followButton) {
+    followButton.disabled = !state.mapNavigation.locationTracking;
+    followButton.setAttribute("aria-pressed", String(state.mapNavigation.followLocation));
+    followButton.textContent = state.mapNavigation.followLocation ? "Stop Following" : "Follow Location";
+    followButton.title = followButton.disabled ? "Start GPS tracking to follow your location." : "Keep the map centered on live GPS updates.";
+  }
   const trackingButton = $("#toggleLocationTracking");
   if (trackingButton && state.user?.role === "Police Officer" && !state.telemetryUnit && !state.mapNavigation.locationTracking) {
     trackingButton.disabled = true;
@@ -1576,6 +1714,16 @@ function updateGisButtonStates() {
   applyGisButtonState($("#setMapStart"), states.start);
   applyGisButtonState($("#setMapDestination"), states.destination);
   applyGisButtonState($("#navigateMap"), states.calculate);
+  const navButton = $("#startNavigation");
+  if (navButton) {
+    const route = selectedRoute(state.mapNavigation);
+    const active = Boolean(state.mapNavigation.activeNavigation);
+    navButton.disabled = active || !routeValidation.valid || !hasUsableRealRoute(route) || state.mapNavigation.routeLoading;
+    navButton.innerHTML = `<span aria-hidden="true">➤</span> ${active ? "Navigating" : "Start Navigation"}`;
+    navButton.title = route?.isApproximate ? "Turn-by-turn navigation unavailable — road routing service unavailable." : navButton.disabled ? "Calculate a valid road route before starting navigation." : "Start navigation on the selected route.";
+    navButton.setAttribute("aria-label", navButton.title);
+    setText("#navigationAvailability", route?.isApproximate ? "Turn-by-turn navigation unavailable — road routing service unavailable." : "");
+  }
   applyGisButtonState($("#recalculateRoute"), states.recalculate);
   applyGisButtonState($("#openExternalRoute"), states.external);
   applyGisButtonState($("#clearMapRoute"), states.clear);
@@ -1617,6 +1765,20 @@ function renderRoutePointCards() {
 async function reverseGeocodePoint(point) {
   const data = await api(`/api/maps/reverse?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}`);
   return data.place || null;
+}
+
+async function snapRoutePointToRoad(point) {
+  try {
+    const data = await api("/api/maps/snap", { method: "POST", body: { lat: Number(point.lat), lng: Number(point.lng) } });
+    if (data?.available && data.snapped) {
+      const snapped = validMapPoint(data.snapped);
+      if (snapped) return { snapped, distanceMeters: Math.max(0, Number(data.distanceMeters) || 0) };
+    }
+    if (data?.reason === "no_nearby_road") return { noNearbyRoad: true };
+    return { unavailable: true };
+  } catch {
+    return { unavailable: true };
+  }
 }
 
 function escapeHtml(value = "") {
@@ -1767,6 +1929,10 @@ function renderNavigationOverlay(instance) {
   instance.leafletMarkerLayer.clearLayers();
   instance.leafletRouteLayer.clearLayers();
   const { currentLocation, searchPreview, routes = [], selectedRouteId } = state.mapNavigation;
+  const location = validMapPoint(currentLocation);
+  if (instance.map.id === "gisMap" && location && Number.isFinite(currentLocation.accuracy) && currentLocation.accuracy > 0) {
+    L.circle([location.lat, location.lng], { radius: currentLocation.accuracy, color: "#1677d2", fillOpacity: 0.12, weight: 1, interactive: false, className: "location-accuracy-circle" }).addTo(instance.leafletRouteLayer);
+  }
   const route = selectedRoute(state.mapNavigation);
   const routeValidation = routePointValidation();
   const start = routeValidation.start;
@@ -1958,8 +2124,9 @@ function resetGisNavigationState(message = "", { preserveRoute = false } = {}) {
     }
     state.mapNavigation = emptyMapNavigationState();
   }
-  else state.mapNavigation.selectionMode = null;
+    else state.mapNavigation.selectionMode = null;
   clearGisSelectionUi();
+  state.dispatchSupportRoutes = [];
   satelliteMaps.forEach(removeNavigationLayerArtifacts);
   if (message) setMapStatus(message);
 }
@@ -2006,7 +2173,7 @@ function updateNavigationPanel(message = "") {
   const displayDestination = routeValidation.destination || destination;
   const meta = routeDisplayMeta(route);
   setText("#routeDistance", route ? `${route.isApproximate ? "Straight-line " : ""}${Number(route.distanceKm).toFixed(2)} km` : "--");
-  setText("#routeEta", Number(route?.durationMinutes) > 0 ? `${Math.round(route.durationMinutes)} min` : "Unavailable");
+  setText("#routeEta", !route ? "--" : Number(route.durationMinutes) > 0 ? `${Math.round(route.durationMinutes)} min` : "Unavailable");
   setText("#routeProvider", meta.title);
   setText("#routePoints", `${displayStart?.label || "Start not selected"} to ${displayDestination?.label || "destination not selected"}`);
   setText("#routeStartCoordinates", `Status: ${routeLoading ? "Calculating" : meta.status}`);
@@ -2066,6 +2233,7 @@ function renderRouteOptionsPanel() {
       node("small", `route-option-badge ${option.isApproximate ? "warning" : "success"}`, badgeText)
     );
     card.addEventListener("click", () => {
+      if (state.mapNavigation.activeNavigation && state.mapNavigation.selectedRouteId !== option.id) endActiveNavigation("Navigation ended. Start navigation on the newly selected route.");
       state.mapNavigation = selectRouteId(state.mapNavigation, option.id);
       updateNavigationPanel(`${option.label || "Route"} selected.`);
       renderSatelliteMaps();
@@ -2135,6 +2303,8 @@ function renderUnitPanel(selector) {
 
 function renderHybridDispatchRecommendation(panel, recommendation) {
   if (!recommendation) return;
+  const incident = activeIncident();
+  const supportAllowed = hybridSupportVisible(incident, recommendation);
   const primary = recommendation.primary;
   const primaryCard = node("article", "hybrid-dispatch-card primary-response");
   primaryCard.append(node("span", "eyebrow", "Primary Rapid Response"));
@@ -2150,10 +2320,10 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
       node("p", "dispatch-reason", primary.selectionReason || "Fastest eligible live responder")
     );
   } else {
-    primaryCard.append(node("strong", "location-warning", "No eligible live responder"), node("small", "", "Station-team fallback is active."));
+    primaryCard.append(node("strong", "location-warning", "Automated recommendation unavailable"), node("small", "", "Select an eligible available primary unit manually."));
   }
   panel.append(primaryCard);
-  (recommendation.stationSupport?.allocations || []).forEach((allocation, index) => {
+  (supportAllowed ? recommendation.stationSupport?.allocations || [] : []).forEach((allocation, index) => {
     const supportCard = node("article", "hybrid-dispatch-card " + (index ? "additional-support" : "station-support"));
     const routeState = allocation.approximate ? "ROUTE: APPROXIMATE" : "Verified route";
     supportCard.append(
@@ -2166,14 +2336,14 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
     );
     panel.append(supportCard);
   });
-  const remainingOfficers = recommendation.stationSupport?.officersRemaining || 0;
-  const remainingUnits = recommendation.stationSupport?.unitsRemaining || 0;
+  const remainingOfficers = supportAllowed ? recommendation.stationSupport?.officersRemaining || 0 : 0;
+  const remainingUnits = supportAllowed ? recommendation.stationSupport?.unitsRemaining || 0 : 0;
   if (remainingOfficers || remainingUnits) {
     panel.append(node("p", "location-warning", "Unfilled requirement: " + remainingOfficers + " officers and " + remainingUnits + " units."));
   }
   const excludedUnits = recommendation.primaryExcludedUnits || [];
-  const allocatedStationIds = new Set((recommendation.stationSupport?.allocations || []).map((allocation) => allocation.stationId));
-  const otherStations = (recommendation.stationSupport?.candidates || [])
+  const allocatedStationIds = new Set((supportAllowed ? recommendation.stationSupport?.allocations || [] : []).map((allocation) => allocation.stationId));
+  const otherStations = (supportAllowed ? recommendation.stationSupport?.candidates || [] : [])
     .filter((candidate) => !allocatedStationIds.has(candidate.stationId));
   const alternatives = node("div", "dispatch-alternatives");
   alternatives.hidden = !state.dispatchAlternativesVisible;
@@ -2187,9 +2357,11 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
   panel.append(alternatives);
   if (recommendation.status === "recommended") {
     const actions = node("div", "hybrid-dispatch-actions");
-    const confirm = node("button", "primary", "Confirm Dispatch");
-    confirm.type = "button";
-    confirm.addEventListener("click", confirmHybridDispatchRecommendation);
+    const confirm = supportAllowed ? node("button", "primary", "Confirm Hybrid / Emergency Support") : null;
+    if (confirm) {
+      confirm.type = "button";
+      confirm.addEventListener("click", confirmHybridDispatchRecommendation);
+    }
     const viewAlternatives = node("button", "ghost", state.dispatchAlternativesVisible ? "Hide Alternatives" : "View Alternatives");
     viewAlternatives.type = "button";
     viewAlternatives.addEventListener("click", () => {
@@ -2209,7 +2381,7 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
       await refresh();
       setText("#routeSummary", "Dispatch recommendation cancelled.");
     }).catch((error) => alert(dispatchErrorMessage(error))));
-    actions.append(confirm, viewAlternatives, cancel);
+    actions.append(...[confirm, viewAlternatives, cancel].filter(Boolean));
     panel.append(actions);
   }
 }
@@ -2262,7 +2434,7 @@ function renderDispatchCandidatePanel() {
 async function confirmHybridDispatchRecommendation() {
   const incident = activeIncident();
   const recommendation = state.dispatchRecommendation;
-  if (!incident || !recommendation || recommendation.status !== "recommended") return;
+  if (!incident || !incident.assignedUnitId || !recommendation || recommendation.status !== "recommended") return;
   try {
     const result = await api("/api/incidents/" + encodeURIComponent(incident.id) + "/assign-unit", {
       method: "POST",
@@ -2380,6 +2552,12 @@ function bindLeafletInteractions(instance) {
     instance.leafletMap.on("click", (event) => {
       instance.selectNavigationPointFromMap(event);
     });
+    instance.leafletMap.on("dragstart", () => {
+      if (instance.map.id === "gisMap" && state.mapNavigation.followLocation) {
+        state.mapNavigation.followLocation = false;
+        updateGisButtonStates();
+      }
+    });
     instance.leafletMap.on("moveend zoomend resize", () => {
       if (instance.syncingLeafletView || instance.renderingLeafletMap) return;
       syncInstanceFromLeaflet(instance);
@@ -2420,12 +2598,22 @@ function enableMapInteractions(instance) {
       updateNavigationPanel("The selected map point is invalid.");
       return true;
     }
-    if (selectionMode === "start") {
-      setRouteStart(validPoint, "Selected map start");
-      updateNavigationPanel("Route start selected.");
+    const isStart = selectionMode === "start";
+    const snap = await snapRoutePointToRoad(validPoint);
+    if (snap.noNearbyRoad) {
+      updateNavigationPanel(`No routable road found near this location. Click another point to choose the ${isStart ? "route start" : "destination"}, or press Escape to cancel.`);
+      return true;
+    }
+    const chosen = snap.snapped || validPoint;
+    const snapNote = snap.snapped
+      ? `Snapped to the nearest routable road, ${Math.round(snap.distanceMeters)} m from the clicked location.`
+      : "Road snap is unavailable; the clicked location is used as-is.";
+    if (isStart) {
+      setRouteStart(chosen, "Selected map start", { locationStatus: snap.snapped ? "Snapped to road" : "Approximate" });
+      updateNavigationPanel(`Route start selected. ${snapNote}`);
     } else {
-      setRouteDestination(validPoint, "Selected map destination", { locationStatus: "Approximate" });
-      updateNavigationPanel("Destination selected. Click Calculate Route.");
+      setRouteDestination(chosen, "Selected map destination", { locationStatus: snap.snapped ? "Snapped to road" : "Approximate" });
+      updateNavigationPanel(`Destination selected. ${snapNote}Click Calculate Route.`);
     }
     state.mapNavigation.selectionMode = null;
     instance.map.classList.remove("selection-active");
@@ -2435,20 +2623,20 @@ function enableMapInteractions(instance) {
     $("#setMapDestination")?.setAttribute("aria-pressed", "false");
     renderSatelliteMap(instance);
     try {
-      const place = await reverseGeocodePoint(validPoint);
-      const target = selectionMode === "start"
+      const place = await reverseGeocodePoint(chosen);
+      const target = isStart
         ? state.mapNavigation.start
         : state.mapNavigation.destination;
       if (place && target) {
         target.label = place.displayName || place.name;
         instance.placeLabel = place.shortName || place.name;
-        updateNavigationPanel(selectionMode === "start"
-          ? "Start location identified. Choose a destination."
-          : "Destination identified. Click Calculate Route.");
+        updateNavigationPanel(isStart
+          ? `Start location identified. ${snapNote}Choose a destination.`
+          : `Destination identified. ${snapNote}Click Calculate Route.`);
         renderSatelliteMap(instance);
       }
     } catch {
-      updateNavigationPanel(selectionMode === "start"
+      updateNavigationPanel(isStart
         ? "Route start selected. Address lookup is unavailable."
         : "Destination selected. Address lookup is unavailable.");
     }
@@ -3108,7 +3296,7 @@ function renderCommandKpiDetails(active, pendingAlerts, pendingReports, availabl
   const unassignedIncidents = active.filter((incident) => !incident.assignedUnit);
 
   if (activeKey === "active") {
-    renderKpiPanel("#commandKpiDetails", "Active Incidents", "Open cases visible to Incident Command.", [
+    renderKpiPanel("#commandKpiDetails", "Active Incidents", "Open incidents visible to Incident Command.", [
       { label: "Open", value: String(active.length) },
       { label: "Assigned", value: String(assignedIncidents.length) },
       { label: "Unassigned", value: String(unassignedIncidents.length) }
@@ -3186,7 +3374,9 @@ function renderIncidentCommand() {
   const review = $("#commandReviewQueue");
   if (!queue || !review) return;
   const active = state.incidents.filter((incident) => !["Closed", "Resolved", "Rejected / False Alarm"].includes(incident.status));
-  const visibleIncidents = active.filter(commandIncidentMatchesFilters);
+  const visibleIncidents = prioritizeIncidents(active.filter(commandIncidentMatchesFilters));
+  const selectedVisible = selectedVisibleIncident(visibleIncidents, state.selectedIncidentId);
+  if (selectedVisible && document.body.dataset.view === "incident-command") state.selectedIncidentId = selectedVisible.id;
   const pendingAlerts = state.alerts.filter((item) => item.status === "Pending Review");
   const pendingReports = state.reports.filter((item) => ["submitted_for_review", "possible_match"].includes(String(item.status || "").toLowerCase()));
   const availableUnits = state.responseUnits.filter((unit) => unitDispatchStatus(unit) === "available");
@@ -3205,10 +3395,9 @@ function renderIncidentCommand() {
     queue.append(node("div", "command-detail-empty", "No incidents match the current filters."));
   } else {
     visibleIncidents.forEach((incident) => {
-      const row = node("button", `command-incident-row ${incident.id === state.selectedIncidentId ? "active" : ""}`);
+      const row = node("button", `command-incident-row ${incident.id === selectedVisible?.id ? "active" : ""}`);
       row.type = "button";
-      row.setAttribute("aria-pressed", String(incident.id === state.selectedIncidentId));
-      row.setAttribute("aria-label", `Select ${incidentTitle(incident)}`);
+      row.setAttribute("aria-pressed", String(incident.id === selectedVisible?.id));
       const identity = node("div");
       const incidentRef = incident.incidentId || incident.id || "Incident";
       identity.append(
@@ -3230,8 +3419,7 @@ function renderIncidentCommand() {
       queue.append(row);
     });
   }
-  if (!active.some((incident) => incident.id === state.selectedIncidentId)) state.selectedIncidentId = active[0]?.id || null;
-  renderIncidentCommandDetailSafe(active.find((incident) => incident.id === state.selectedIncidentId));
+  renderIncidentCommandDetailSafe(selectedVisible);
 
   review.textContent = "";
   const addReviewCard = (kind, item) => {
@@ -3303,6 +3491,23 @@ function cameraSummaryCards(cameras) {
   ];
 }
 
+let cctvTab = "cameras";
+function cameraHasHealthIssue(camera) {
+  return camera.enabled === false || ["RECONNECTING", "DEGRADED", "NO_FRAMES", "AUTH_FAILED", "OFFLINE", "NO_SIGNAL", "NO_VIDEO_FRAMES"].includes(String(camera.streamState || camera.status || "").toUpperCase());
+}
+function selectCctvTab(tab) {
+  cctvTab = tab;
+  document.querySelectorAll("[data-cctv-tab]").forEach((button) => {
+    const selected = button.dataset.cctvTab === tab;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  $("#cctvCameraPanel").hidden = tab === "review";
+  $("#cctvReviewPanel").hidden = tab !== "review";
+  $("#cctvCameraPanel").setAttribute("aria-labelledby", tab === "health" ? "cctvTabHealth" : "cctvTabCameras");
+  renderCameras(state.cameraRegistry || []);
+}
+
 function filteredCameras(cameras) {
   return cameras.filter((camera) => {
     const kindMatch = state.cameraFilters.kind === "all"
@@ -3311,7 +3516,7 @@ function filteredCameras(cameras) {
     const sourceType = camera.isDemo ? "demo" : camera.type;
     const typeMatch = state.cameraFilters.sourceType === "all" || sourceType === state.cameraFilters.sourceType;
     const statusMatch = state.cameraFilters.status === "all" || String(camera.streamState || camera.status || "unknown").toLowerCase() === state.cameraFilters.status;
-    return kindMatch && typeMatch && statusMatch;
+    return kindMatch && typeMatch && statusMatch && (cctvTab !== "health" || cameraHasHealthIssue(camera));
   });
 }
 
@@ -3330,6 +3535,10 @@ function cameraRegistryRow(camera) {
   identity.append(node("small", "", `${camera.cameraId || camera.id} - ${camera.location || camera.zone || "Unassigned"}`));
 
   const meta = node("div", "camera-registry-meta");
+  const details = document.createElement("details");
+  details.className = "camera-secondary-details";
+  details.append(node("summary", "", "More camera details"));
+  const secondaryMeta = node("div", "camera-registry-meta");
   [
     ["Camera ID", camera.cameraId || camera.id],
     ["Location", camera.location || camera.zone || "Unassigned"],
@@ -3346,8 +3555,9 @@ function cameraRegistryRow(camera) {
   ].forEach(([label, value]) => {
     const item = node("span", "");
     item.append(node("small", "", label), node("strong", "", value));
-    meta.append(item);
+    (["Camera ID", "Location", "Gateway", "Connected", "Reconnects", "Last AI success", "Status detail"].includes(label) ? secondaryMeta : meta).append(item);
   });
+  details.append(secondaryMeta);
 
   const viewer = node("div", "camera-viewer-status");
   const viewerTitle = camera.isDemo ? "Simulated demo feed" : `${streamState} · Gateway ${gatewayHealth} · AI ${aiState.replace(/^AI_/, "")}`;
@@ -3387,7 +3597,8 @@ function cameraRegistryRow(camera) {
     actions.append(gateway, edit, remove);
   }
 
-  row.append(identity, meta, viewer, actions);
+  details.append(viewer);
+  row.append(identity, meta, details, actions);
   return row;
 }
 
@@ -3411,7 +3622,7 @@ function renderCameras(cameras = []) {
     largeGrid.textContent = "";
     const visible = filteredCameras(cameras);
     if (!visible.length) {
-      largeGrid.append(node("div", "empty-state", "No cameras match the current filters."));
+      largeGrid.append(node("div", "empty-state", cctvTab === "health" ? "No camera health issues match the current filters." : "No cameras match the current filters."));
       return;
     }
     visible.forEach((camera) => largeGrid.append(cameraRegistryRow(camera)));
@@ -3447,7 +3658,8 @@ function renderAiObservationQueue(observations = state.aiObservations) {
     const head = node("div", "ai-observation-head");
     const title = node("div", ""); title.append(node("span", "eyebrow", "AI Observation"), node("h3", "", observation.id));
     head.append(title, node("span", `chip observation-${String(observation.status).toLowerCase()}`, String(observation.status).replaceAll("_", " ")));
-    const source = node("p", "ai-observation-source", `${observation.cameraId} · ${observation.cameraName} · ${observation.zone}`);
+    const evidenceSource = observation.sourceType === "evidence_image";
+    const source = node("p", "ai-observation-source", evidenceSource ? `Evidence ${observation.evidenceId}` : `${observation.cameraId} · ${observation.cameraName} · ${observation.zone}`);
     const timing = node("small", "", `Captured ${cameraTime(observation.capturedAt)} · Processed ${cameraTime(observation.processedAt)}`);
     const detections = node("div", "ai-observation-detections");
     (observation.detections || []).forEach((detection) => {
@@ -3456,7 +3668,7 @@ function renderAiObservationQueue(observations = state.aiObservations) {
       const meter = node("span", "ai-confidence-meter"); const fill = node("span", "ai-confidence-fill"); fill.style.width = `${Math.round((detection.confidence || 0) * 100)}%`; meter.append(fill);
       row.append(label, meter, node("strong", "", `${Math.round((detection.confidence || 0) * 100)}%`)); detections.append(row);
     });
-    const notice = node("p", "ai-advisory-notice", "AI result is advisory. Human verification is required. Confirmation creates an alert, not an incident.");
+    const notice = node("p", "ai-advisory-notice", evidenceSource ? "AI result is advisory. Human verification is required. Confirmation does not create an alert or incident." : "AI result is advisory. Human verification is required. Confirmation creates an alert, not an incident.");
     body.append(head, source, timing, detections, node("p", "", observation.reason || "Human review required."), notice);
     if (["PENDING_REVIEW", "UNCERTAIN"].includes(observation.status)) {
       const actions = node("div", "ai-observation-actions");
@@ -3960,6 +4172,8 @@ function renderVideoEvidence(data = state.videoEvidence) {
     list.append(node("div", "empty-state", "No video evidence uploaded yet."));
   } else {
     evidenceItems.forEach((evidence) => {
+      const imageObservations = (state.aiObservations || []).filter((item) => item.sourceType === "evidence_image" && item.evidenceId === evidence.id);
+      const pendingImageObservations = imageObservations.filter((item) => ["PENDING_REVIEW", "UNCERTAIN"].includes(item.status)).length;
       const card = node("article", `video-evidence-card ${state.activeEvidenceId === evidence.id ? "active" : ""}`);
       const head = node("div", "video-evidence-card-head");
       head.append(node("strong", "", evidence.fileName), node("span", `source-badge ${evidence.processingStatus === "analysis_complete" ? "ready" : "unknown"}`, evidence.processingStatus || "uploaded"));
@@ -3969,7 +4183,7 @@ function renderVideoEvidence(data = state.videoEvidence) {
         ["Uploaded", alertTime(evidence.uploadedAt)],
         ["Uploader", `${evidence.uploadedByRole}: ${evidence.uploadedByName}`],
         ["Checksum", String(evidence.checksum || "").slice(0, 12)],
-        ["Observations", `${evidence.pendingObservationCount || 0} pending / ${evidence.observationCount || 0} total`]
+        ["Observations", `${(evidence.pendingObservationCount || 0) + pendingImageObservations} pending / ${(evidence.observationCount || 0) + imageObservations.length} total`]
       ].forEach(([label, value]) => {
         const item = node("span", "");
         item.append(node("small", "", label), node("strong", "", value || "--"));
@@ -4023,7 +4237,20 @@ function renderVideoReviewPanel() {
   const right = node("div", "video-observation-review");
   right.append(node("p", "review-warning", "Possible detections only. Human verification is required before any incident is created."));
   const observations = evidenceObservations(evidence.id);
-  if (!observations.length) {
+  const imageObservations = (state.aiObservations || []).filter((item) => item.sourceType === "evidence_image" && item.evidenceId === evidence.id);
+  imageObservations.forEach((observation) => {
+    const button = node("button", "ghost", `Review AI observation ${observation.id}`);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      state.aiObservationCameraId = null;
+      renderAiObservationQueue();
+      setView("cctv");
+      selectCctvTab("review");
+      [...document.querySelectorAll("[data-observation-id]")].find((item) => item.dataset.observationId === observation.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    right.append(button);
+  });
+  if (!observations.length && !imageObservations.length) {
     right.append(node("div", "empty-state", "Run AI Analysis to create pending observations."));
   } else {
     observations.forEach((observation) => {
@@ -4520,24 +4747,12 @@ function assignmentIncidentMatchesFilter(incident, filter) {
 
 async function loadAssignmentRecommendation(incident) {
   if (!incident || incident.assignedUnitId) return;
-  try {
-    const result = await api(`/api/incidents/${encodeURIComponent(incident.id)}/recommend-unit`, { method: "POST" });
-    if (state.assignmentSelectedIncidentId !== incident.id) return;
-    state.assignmentRecommendation = result;
-    renderUnitAssignment();
-  } catch (error) {
-    if (state.assignmentSelectedIncidentId === incident.id) {
-      state.assignmentRecommendation = { error: dispatchErrorMessage(error) };
-      renderUnitAssignment();
-    }
-  }
+  return assignmentRecommendationCoordinator.select(incident);
 }
 
 function selectAssignmentIncident(incident) {
   state.assignmentSelectedIncidentId = incident.id;
-  state.assignmentRecommendation = null;
-  renderUnitAssignment();
-  loadAssignmentRecommendation(incident);
+  assignmentRecommendationCoordinator.select(incident);
 }
 
 async function assignUnitFromAssignmentPage(incident, unit) {
@@ -4546,16 +4761,37 @@ async function assignUnitFromAssignmentPage(incident, unit) {
   if (isReassignment && !String(reason || "").trim()) return;
   if (!window.confirm(`${isReassignment ? "Reassign" : "Assign"} ${unitLabel(unit)} to ${incident.incidentId || incident.id} — ${incidentTitle(incident)}?`)) return;
   try {
-    await api(`/api/incidents/${encodeURIComponent(incident.id)}/assign-unit`, {
+    const result = await api(`/api/incidents/${encodeURIComponent(incident.id)}/assign-unit`, {
       method: "POST",
       body: { unitId: unit.id, expectedAssignedUnitId: incident.assignedUnitId || null, reason: String(reason || "").trim() }
     });
-    state.assignmentRecommendation = null;
+    // Publish the new primary before clearing recommendation state can rerender.
+    Object.assign(incident, result.incident);
+    assignmentRecommendationCoordinator.clear();
     await refresh();
   } catch (error) {
     alert(error.message);
     await refresh();
   }
+}
+
+async function confirmAssignmentRecommendation(incident, recommendation) {
+  if (!incident.assignedUnitId) return alert("Assign a primary response unit before requesting hybrid support.");
+  if (!window.confirm(`Confirm hybrid / emergency support for ${incident.incidentId || incident.id}?`)) return;
+  try {
+    await api(`/api/incidents/${encodeURIComponent(incident.id)}/assign-unit`, { method: "POST", body: { recommendationId: recommendation.id, expectedAssignedUnitId: incident.assignedUnitId || null } });
+    assignmentRecommendationCoordinator.clear();
+    await refresh();
+  } catch (error) { alert(dispatchErrorMessage(error)); await refresh(); }
+}
+
+function requestHybridSupportFromAssignmentPage(incident) {
+  if (!incident?.assignedUnitId) return;
+  state.assignmentFilters.incident = "all";
+  state.assignmentSelectedIncidentId = incident.id;
+  const incidentFilter = $("#assignmentIncidentFilter");
+  if (incidentFilter) incidentFilter.value = "all";
+  assignmentRecommendationCoordinator.requestSupport(incident);
 }
 
 async function releaseUnitFromAssignmentPage(incident) {
@@ -4567,12 +4803,123 @@ async function releaseUnitFromAssignmentPage(incident) {
     await api(`/api/incidents/${encodeURIComponent(incident.id)}/release-unit`, {
       method: "POST", body: { expectedAssignedUnitId: incident.assignedUnitId, reason: String(reason).trim() }
     });
-    state.assignmentRecommendation = null;
+    assignmentRecommendationCoordinator.clear();
     await refresh();
   } catch (error) {
     alert(error.message);
     await refresh();
   }
+}
+
+async function releaseSupportFromAssignmentPage(incident) {
+  const reason = window.prompt(`Reason for releasing emergency support from ${incident.incidentId || incident.id}:`);
+  if (!String(reason || "").trim()) return;
+  if (!window.confirm("Release emergency support while keeping the primary response unit assigned?")) return;
+  try {
+    await api(`/api/incidents/${encodeURIComponent(incident.id)}/release-support`, { method: "POST", body: { expectedAssignedUnitId: incident.assignedUnitId || null, reason: String(reason).trim() } });
+    await refresh();
+  } catch (error) { alert(error.message); await refresh(); }
+}
+
+const INCIDENT_RESPONSE_ROLES = ["TEAM_LEAD", "RESPONSE_OFFICER", "DRIVER", "FIELD_OFFICER", "SUPPORT_OFFICER"];
+const responseRoleLabel = (value) => displayValue(String(value || "").toLowerCase());
+
+function openPoliceAssignment(incidentId) {
+  state.policeAssignment.incidentId = incidentId;
+  history.pushState(history.state, "", `/police-assignment?incidentId=${encodeURIComponent(incidentId)}`);
+  setView("police-assignment", { restoreHistory: true });
+}
+
+async function renderPoliceAssignment() {
+  const container = $("#policeAssignmentMembers"), header = $("#policeAssignmentContext"), status = $("#policeAssignmentStatus");
+  if (!container || !header) return;
+  const incidentId = new URLSearchParams(location.search).get("incidentId") || state.policeAssignment.incidentId;
+  const sequence = (state.policeAssignment.requestSequence || 0) + 1;
+  state.policeAssignment.requestSequence = sequence;
+  state.policeAssignment.context = null;
+  state.policeAssignment.incidentId = incidentId;
+  container.textContent = ""; header.textContent = "";
+  status.textContent = "";
+  const submit = $("#assignSelectedOfficers");
+  if (submit) submit.disabled = true;
+  if (!canDispatchUnits(state.user)) return header.append(node("div", "empty-state", "Dispatcher or Admin authorization is required."));
+  if (!incidentId) return header.append(node("div", "empty-state", "Select an incident from Unit Assignment."));
+  try {
+    const data = await api(`/api/incidents/${encodeURIComponent(incidentId)}/unit-members`);
+    if (sequence !== state.policeAssignment.requestSequence) return;
+    state.policeAssignment.context = data;
+    const incident = data.incident, unit = data.unit;
+    header.append(node("span", "eyebrow", "Incident"), node("h2", "", `${incident.incidentId || incident.id} · ${incidentTitle(incident)}`), node("p", "", `Severity: ${displayValue(incident.severity)} · Status: ${displayValue(incident.status)} · Location: ${displayLocation(incident.address || incident.zone)}`), node("p", "", `Primary Unit: ${unitLabel(unit)} · Station: ${unit.stationName || unit.station || "Not recorded"} · ${assignmentSlaLabel(incident)}`));
+    if (!data.members.length) return container.append(node("div", "empty-state", "No active officers are registered in this response unit."));
+    data.members.forEach((member) => {
+      const deployed = member.deployment && member.deployment.status !== "RELEASED";
+      const busy = memberUnavailable(member, incident.id);
+      const row = node("article", `police-assignment-row ${deployed ? "deployed" : busy ? "busy" : "available"}`);
+      const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.dataset.officerId = member.officerId; checkbox.disabled = busy || deployed || data.deploymentAllowed === false || state.policeAssignment.mutationInFlight; checkbox.setAttribute("aria-label", `Select ${member.name || member.officerId}`);
+      const select = document.createElement("select"); select.dataset.roleFor = member.officerId; select.disabled = (busy && !deployed) || data.deploymentAllowed === false || state.policeAssignment.mutationInFlight;
+      select.append(new Option("Select response role", ""), ...INCIDENT_RESPONSE_ROLES.map((role) => new Option(responseRoleLabel(role), role)));
+      if (deployed) select.value = member.deployment.responseRole;
+      row.append(checkbox, node("div", "police-assignment-officer", member.name || member.officerId), node("span", "", member.rank || "Rank not recorded"), node("span", `chip ${busy ? "warning" : "success"}`, displayValue(member.availability)), node("span", "", member.currentIncidentId || "—"), select, node("span", "", deployed ? `${responseRoleLabel(member.deployment.responseRole)} · ${displayValue(member.deployment.status)}` : busy ? "Unavailable" : "Not Deployed"));
+      const identity = row.querySelector(".police-assignment-officer");
+      if (member.badgeId) identity.append(node("small", "", `Badge: ${member.badgeId}`));
+      if (member.isDemo) identity.append(node("small", "", "Demo / test identity"));
+      if (member.dutyStatus) identity.append(node("small", "", `Duty: ${displayValue(member.dutyStatus)}`));
+      if (deployed) {
+        const assignmentPath = `/api/incidents/${encodeURIComponent(incident.id)}/officer-assignments/${encodeURIComponent(member.deployment.id)}`;
+        const changeRole = node("button", "ghost", "Update Role"); changeRole.type = "button";
+        changeRole.disabled = data.deploymentAllowed === false || Boolean(state.policeAssignment.mutationInFlight);
+        changeRole.addEventListener("click", async () => {
+          if (state.policeAssignment.mutationInFlight || select.value === member.deployment.responseRole) return;
+          if (!INCIDENT_RESPONSE_ROLES.includes(select.value)) { status.textContent = "Select a valid response role."; return; }
+          const reason = window.prompt("Reason for changing the incident response role:");
+          if (!String(reason || "").trim() || !window.confirm(`Change ${member.name || member.officerId} to ${responseRoleLabel(select.value)}?`)) return;
+          await submitPoliceAssignmentMutation(incident.id, assignmentPath, { method: "PATCH", body: { responseRole: select.value, reason } });
+        });
+        const release = node("button", "ghost", "Release Officer"); release.type = "button";
+        release.disabled = Boolean(state.policeAssignment.mutationInFlight);
+        release.addEventListener("click", async () => {
+          if (state.policeAssignment.mutationInFlight) return;
+          const reason = window.prompt(`Release reason for ${member.name || member.officerId}:`);
+          if (!String(reason || "").trim() || !window.confirm(`Release ${member.name || member.officerId} from this incident?`)) return;
+          await submitPoliceAssignmentMutation(incident.id, `${assignmentPath}/release`, { method: "POST", body: { reason } });
+        });
+        row.append(changeRole, release);
+      }
+      container.append(row);
+    });
+    status.textContent = `${data.members.length} unit members · ${data.members.filter((m)=>m.deployment && m.deployment.status!=="RELEASED").length} deployed`;
+    if (data.deploymentAllowed === false) status.textContent += ` · ${data.deploymentUnavailableReason}`;
+    if (submit) submit.disabled = data.deploymentAllowed === false || state.policeAssignment.mutationInFlight || !data.members.some((member) => !member.deployment && !memberUnavailable(member, incident.id));
+  } catch (error) { if (sequence === state.policeAssignment.requestSequence) header.append(node("div", "empty-state", error.message)); }
+}
+
+async function assignSelectedPoliceOfficers() {
+  const data = state.policeAssignment.context; if (!data) return;
+  if (state.policeAssignment.mutationInFlight || data.deploymentAllowed === false) return;
+  const assignments = [...$$("#policeAssignmentMembers input[data-officer-id]:checked")].map((box) => ({ officerId: box.dataset.officerId, responseRole: $(`[data-role-for="${box.dataset.officerId}"]`)?.value || "" }));
+  if (!assignments.length || assignments.some((item)=>!item.responseRole)) return alert("Select at least one available officer and choose a response role for each.");
+  const names = assignments.map((item)=>`${data.members.find((m)=>m.officerId===item.officerId)?.name || item.officerId} — ${responseRoleLabel(item.responseRole)}`).join("\n");
+  if (!window.confirm(`Assign ${assignments.length} officer${assignments.length===1?"":"s"} from ${unitLabel(data.unit)} to ${data.incident.incidentId || data.incident.id}?\n\n${names}`)) return;
+  await submitPoliceAssignmentMutation(data.incident.id, `/api/incidents/${encodeURIComponent(data.incident.id)}/officer-assignments`, { method: "POST", body: { assignments } });
+}
+
+async function submitPoliceAssignmentMutation(incidentId, path, options) {
+  if (state.policeAssignment.mutationInFlight) return;
+  state.policeAssignment.mutationInFlight = true;
+  const controls = $$("#policeAssignmentMembers input, #policeAssignmentMembers select, #policeAssignmentMembers button, #assignSelectedOfficers");
+  const disabled = controls.map((control) => control.disabled);
+  controls.forEach((control) => { control.disabled = true; });
+  let errorMessage = null;
+  try { await api(path, options); }
+  catch (error) { errorMessage = error.message || "Officer assignment request failed. Please retry."; }
+  finally {
+    state.policeAssignment.mutationInFlight = false;
+    controls.forEach((control, index) => { if (control.isConnected) control.disabled = disabled[index]; });
+  }
+  const selected = () => (state.policeAssignment.incidentId || state.policeAssignment.context?.incident?.id) === incidentId;
+  if (!selected()) return;
+  await renderPoliceAssignment();
+  if (errorMessage && selected()) $("#policeAssignmentStatus").textContent = errorMessage;
 }
 
 function renderUnitAssignment() {
@@ -4582,6 +4929,11 @@ function renderUnitAssignment() {
   const recommendationPanel = $("#assignmentRecommendation");
   const activeList = $("#assignmentActiveList");
   if (!incidentList || !unitList || !selectedPanel || !recommendationPanel || !activeList) return;
+  if (!canDispatchUnits(state.user)) {
+    for (const panel of [incidentList, unitList, selectedPanel, recommendationPanel, activeList]) panel.textContent = "";
+    selectedPanel.append(node("div", "empty-state", "Dispatcher or Admin authorization is required."));
+    return;
+  }
   const filters = state.assignmentFilters;
   const query = String(filters.search || "").trim().toLowerCase();
   const dispatchable = state.incidents.filter(isDispatchableIncident);
@@ -4592,6 +4944,12 @@ function renderUnitAssignment() {
     });
   if (!waiting.some((incident) => incident.id === state.assignmentSelectedIncidentId)) state.assignmentSelectedIncidentId = waiting[0]?.id || null;
   const selected = dispatchable.find((incident) => incident.id === state.assignmentSelectedIncidentId) || null;
+  const recommendationState = assignmentRecommendationCoordinator.getSnapshot();
+  if (selected && !selected.assignedUnitId && (recommendationState.incidentId !== selected.id || recommendationState.status === "idle")) {
+    queueMicrotask(() => {
+      if (state.assignmentSelectedIncidentId === selected.id) loadAssignmentRecommendation(selected);
+    });
+  }
   incidentList.textContent = "";
   if (!waiting.length) incidentList.append(node("div", "command-detail-empty", "No incidents currently require unit assignment."));
   waiting.forEach((incident) => {
@@ -4607,12 +4965,48 @@ function renderUnitAssignment() {
   if (!selected) {
     selectedPanel.append(node("div", "command-detail-empty", "Select an incident to review compatible response units."));
   } else {
-    selectedPanel.append(node("strong", "", `${selected.incidentId || selected.id} · ${incidentTitle(selected)}`), node("small", "", `${displayLocation(selected.address || selected.zone)} · ${assignmentSlaLabel(selected)} · ${assignmentEscalationLabel(selected)}`));
-    const recommendation = state.assignmentRecommendation;
+    selectedPanel.append(node("strong", "", `Incident Response Context: ${selected.incidentId || selected.id} · ${incidentTitle(selected)}`), node("small", "", `Severity: ${displayValue(selected.severity)} · Location: ${displayLocation(selected.address || selected.zone)} · Jurisdiction: ${selected.stationName || selected.jurisdiction || "Not recorded"}`), node("small", "", `Assignment: ${selected.assignedUnitId ? "Assigned" : "Unassigned"} · ${assignmentSlaLabel(selected)} · ${assignmentEscalationLabel(selected)}`));
+    const recommendation = recommendationState.incidentId === selected.id ? state.assignmentRecommendation : null;
+    const recommendationStatus = recommendationState.incidentId === selected.id ? recommendationState.status : "idle";
     const recommended = recommendation?.unit || recommendation?.recommendation?.primary?.unit;
     if (recommended) recommendationPanel.append(node("strong", "", `Recommended: ${unitLabel(recommended)}`), node("small", "", recommendation.selectionReason || recommendation.recommendation?.primary?.selectionReason || "Best available compatible unit. Operator confirmation required."));
-    else if (recommendation?.error) recommendationPanel.append(node("strong", "assignment-breach", "No response unit available"), node("small", "", `${recommendation.error}. Supervisor attention required.`));
-    else recommendationPanel.append(node("small", "", selected.assignedUnitId ? "Choose an available unit to change the assignment." : "Calculating the existing dispatch recommendation…"));
+    else if (recommendationStatus === "loading") recommendationPanel.append(node("small", "", "Calculating the existing dispatch recommendation…"));
+    else if (recommendationStatus === "error") {
+      recommendationPanel.append(node("strong", "assignment-breach", "Recommendation request failed"), node("small", "", `${recommendation?.error || "The recommendation service is unavailable."} Select an eligible unit manually or retry.`));
+      const retry = node("button", "ghost", "Retry Recommendation");
+      retry.type = "button";
+      retry.addEventListener("click", () => assignmentRecommendationCoordinator.retry(selected));
+      recommendationPanel.append(retry);
+    } else if (recommendationStatus === "unavailable") {
+      recommendationPanel.append(
+        node("strong", "assignment-breach", "Automated recommendation unavailable"),
+        node("small", "", selected.assignedUnitId
+          ? "No eligible hybrid or emergency support is currently available."
+          : "Select an eligible available primary unit manually.")
+      );
+      const retry = node("button", "ghost", "Retry Recommendation");
+      retry.type = "button";
+      retry.addEventListener("click", () => assignmentRecommendationCoordinator.retry(selected));
+      recommendationPanel.append(retry);
+    } else recommendationPanel.append(node("small", "", selected.assignedUnitId ? "Choose an available unit to change the assignment." : "Preparing the existing dispatch recommendation…"));
+    const hybrid = recommendation?.recommendation;
+    if (hybridSupportVisible(selected, hybrid)) {
+      if (hybrid.primary) {
+        recommendationPanel.append(node("strong", "", "Primary Response"), node("small", "", `${unitLabel(hybrid.primary.unit)} · ${hybrid.primary.unit?.stationName || "Station not recorded"}`));
+        for (const officer of hybrid.primary.officers || []) recommendationPanel.append(node("small", "", `Response Unit Member: ${officer.name || officer.id}`));
+      }
+      const primaryStation = selected.stationId || selected.station_id || selected.jurisdictionId || null;
+      for (const allocation of hybrid.stationSupport?.allocations || []) {
+        const sameStation = primaryStation && [allocation.stationId, allocation.stationCode].includes(primaryStation);
+        recommendationPanel.append(node("strong", "", sameStation ? "Additional Station Support" : primaryStation ? "Nearby Emergency Support" : "Station Support (jurisdiction not recorded)"), node("small", "", allocation.stationName || allocation.stationCode || "Station not recorded"));
+        if (allocation.officers?.length) for (const officer of allocation.officers) recommendationPanel.append(node("small", "", `${officer.name} · Rank: ${officer.rank || "Not recorded"} · Home station: ${officer.station || "Not recorded"} · Unit: ${officer.unitId || "None"} · Duty: ${displayValue(officer.dutyStatus)} · Availability: ${displayValue(officer.availabilityStatus)}`));
+        else for (const officerId of allocation.officerIds || []) recommendationPanel.append(node("small", "", `Emergency support officer: ${officerId}`));
+        recommendationPanel.append(node("small", "", allocation.approximate ? `Straight-line estimate: ${allocation.distanceKm ?? "--"} km · Road ETA unavailable` : `Distance: ${allocation.distanceKm ?? "--"} km · Road ETA: ${allocation.etaMinutes ?? "--"} min`));
+        recommendationPanel.append(node("small", "", allocation.reason || "Support recommended"));
+      }
+      const confirm = node("button", "primary", "Confirm Hybrid / Emergency Support");
+      confirm.type = "button"; confirm.addEventListener("click", () => confirmAssignmentRecommendation(selected, hybrid)); recommendationPanel.append(confirm);
+    }
     const candidateIds = new Set((recommendation?.candidates || recommendation?.recommendation?.primaryCandidates || []).map((candidate) => candidate.unit?.id || candidate.unitId || candidate.id));
     const units = state.responseUnits.filter((unit) => {
       const status = unitDispatchStatus(unit);
@@ -4622,10 +5016,10 @@ function renderUnitAssignment() {
     if (!units.length) unitList.append(node("div", "command-detail-empty", "No response units match this filter."));
     units.forEach((unit) => {
       const status = unitDispatchStatus(unit);
-      const assignable = status === "available" && unit.operational !== false;
+      const { assignable, label } = unitAssignmentAction({ status, operational: unit.operational, assignedUnitId: selected.assignedUnitId });
       const card = node("article", `assignment-unit-card status-${status}`);
       card.append(node("strong", "", unitLabel(unit)), node("small", "", `${unitTypeLabel(unit)} · ${displayValue(status)} · ${unit.stationName || unit.station || "Station unavailable"}`), node("small", "", `${unitLocationAgeText(unit)} · GPS ${unitFreshnessText(unit)}`));
-      const action = node("button", assignable ? "primary" : "ghost", assignable ? (selected.assignedUnitId ? "Change Unit" : "Assign Unit") : displayValue(status));
+      const action = node("button", assignable ? "primary" : "ghost", assignable ? label : displayValue(label));
       action.type = "button"; action.disabled = !assignable;
       action.addEventListener("click", () => assignUnitFromAssignmentPage(selected, unit));
       card.append(action); unitList.append(card);
@@ -4636,12 +5030,37 @@ function renderUnitAssignment() {
   if (!active.length) activeList.append(node("div", "command-detail-empty", "No active unit assignments."));
   active.forEach((incident) => {
     const card = node("article", "assignment-active-card");
-    card.append(node("strong", "", `${incident.incidentId || incident.id} · ${unitLabel(incident.assignedUnit)}`), node("small", "", `${incidentTitle(incident)} · ${displayValue(incident.status)} · ${incident.etaMinutes ? `${incident.etaMinutes} min ETA` : "ETA pending"}`));
+    card.append(node("span", "eyebrow", "PRIMARY UNIT"), node("strong", "", `${incident.incidentId || incident.id} · ${unitLabel(incident.assignedUnit)}`), node("small", "", `${incidentTitle(incident)} · ${displayValue(incident.status)} · ${incident.etaMinutes ? `${incident.etaMinutes} min ETA` : "ETA pending"}`));
     const actions = node("div", "command-action-grid");
     const view = node("button", "ghost", "View Incident"); view.type = "button"; view.addEventListener("click", () => { state.selectedIncidentId = incident.id; setView("incident-command"); });
     const change = node("button", "ghost", "Change Unit"); change.type = "button"; change.addEventListener("click", () => selectAssignmentIncident(incident));
     const release = node("button", "ghost", "Release Unit"); release.type = "button"; release.addEventListener("click", () => releaseUnitFromAssignmentPage(incident));
-    actions.append(view, change, release); card.append(actions); activeList.append(card);
+    const manage = node("button", "primary", "Manage Police Assignment"); manage.type = "button"; manage.addEventListener("click", () => openPoliceAssignment(incident.id));
+    const viewOfficers = node("button", "ghost", "View Officers"); viewOfficers.type = "button";
+    const requestSupport = node("button", "ghost", "Request Hybrid / Emergency Support"); requestSupport.type = "button"; requestSupport.addEventListener("click", () => requestHybridSupportFromAssignmentPage(incident));
+    actions.append(view, change, viewOfficers, manage, requestSupport, release);
+    if (isAdminRole() && (incident.supportAllocations || []).length) {
+      const releaseSupport = node("button", "ghost", "Release Emergency Support");
+      releaseSupport.type = "button"; releaseSupport.addEventListener("click", () => releaseSupportFromAssignmentPage(incident)); actions.append(releaseSupport);
+    }
+    const memberSummary = node("div", "assignment-member-summary", "Loading unit members…");
+    api(`/api/incidents/${encodeURIComponent(incident.id)}/unit-members`).then((data) => {
+      memberSummary.textContent = "";
+      const deployed = data.members.filter((m) => m.deployment && m.deployment.status !== "RELEASED");
+      const available = data.members.filter((m) => !m.deployment && !memberUnavailable(m, incident.id));
+      memberSummary.append(node("strong", "", "PRIMARY UNIT"), node("small", "", `${data.members.length} Unit Members · ${available.length} Available · ${deployed.length} Deployed`));
+      if (!data.members.length) memberSummary.append(node("small", "", "No permanent members registered. An administrator must register actual unit members before officer deployment."));
+      data.members.forEach((member) => {
+        const details = [member.name || member.officerId, member.rank || "Rank not recorded", member.badgeId ? `Badge: ${member.badgeId}` : null,
+          member.isDemo ? "Demo / test identity" : null, `Availability: ${displayValue(member.availability)}`, member.dutyStatus ? `Duty: ${displayValue(member.dutyStatus)}` : null,
+          member.currentIncidentId ? `Incident: ${member.currentIncidentId}` : null,
+          member.deployment ? responseRoleLabel(member.deployment.responseRole) : "Not deployed to this incident"];
+        memberSummary.append(node("small", "", details.filter(Boolean).join(" · ")));
+      });
+    }).catch(() => { memberSummary.textContent = "Unit member details unavailable."; });
+    memberSummary.hidden = true;
+    viewOfficers.addEventListener("click", () => { memberSummary.hidden = !memberSummary.hidden; viewOfficers.textContent = memberSummary.hidden ? "View Officers" : "Hide Officers"; });
+    card.append(memberSummary, actions); activeList.append(card);
   });
 }
 
@@ -4871,16 +5290,36 @@ function policeUserCard(user) {
   const meta = node("div", "police-user-meta");
   [
     ["Badge / Staff ID", user.badgeId],
-    ["Unit ID", user.unitId],
+    ["Rank", user.rank],
+    ["Police role", user.role],
+    ["Response Unit", user.unitId || "Not Assigned"],
     ["Station", user.station],
     ["Beat / Sector", user.beat],
     ["Jurisdiction", user.jurisdiction],
     ["Duty", displayValue(user.dutyStatus)],
     ["Availability", displayValue(user.availabilityStatus)],
+    ["Current Unit Deployment", (user.deployments || []).map((deployment) => deployment.id).join(", ") || "None"],
     ["Created", user.createdAt ? alertTime(user.createdAt) : ""],
     ["Updated", user.updatedAt ? alertTime(user.updatedAt) : ""]
   ].forEach(([label, value]) => meta.append(node("span", "", `${label}: ${displayValue(value, "--")}`)));
   const managementActions = node("div", "police-user-row-actions police-user-summary-actions");
+  const profile = node("button", "ghost", "View Officer");
+  profile.type = "button";
+  profile.setAttribute("aria-expanded", "false");
+  const details = node("section", "police-officer-profile");
+  details.hidden = true;
+  details.append(node("h3", "", "Officer Profile"), node("p", "", `Active Unit Deployments: ${(user.deployments || []).length} · Investigations: ${(user.investigations || []).length} · Current Response Unit: ${user.unitId || "Not Assigned"}`), node("p", "", "Completed Assignments: historical unit participation is not recorded."));
+  details.append(node("h4", "", "Current Unit Deployment"));
+  if (!user.deployments?.length) details.append(node("p", "", "No current unit deployment."));
+  (user.deployments || []).forEach((deployment) => details.append(node("p", "", `${deployment.id} · Response Unit: ${deployment.unitCode || deployment.unitId} · ${deployment.type || "Type not recorded"} · ${deployment.status || "Status not recorded"}`)));
+  details.append(node("h4", "", "Emergency Support Deployment"));
+  if (!user.supportDeployments?.length) details.append(node("p", "", "No current emergency support deployment."));
+  (user.supportDeployments || []).forEach((deployment) => details.append(node("p", "", `${deployment.id} · Home Station: ${deployment.homeStation || "Not recorded"} · Support Station: ${deployment.station || "Not recorded"} · Source: ${deployment.source}${deployment.reason ? ` · ${deployment.reason}` : ""}`)));
+  details.append(node("h4", "", "Investigation Assignment"));
+  if (!user.investigations?.length) details.append(node("p", "", "No recorded investigations."));
+  (user.investigations || []).forEach((investigation) => details.append(node("p", "", `${investigation.id} · ${investigation.type || "Type not recorded"} · ${investigation.status || "Status not recorded"} · Assigned: ${investigation.assignedAt ? alertTime(investigation.assignedAt) : "Not recorded"} · Updated: ${investigation.updatedAt ? alertTime(investigation.updatedAt) : "Not recorded"}`)));
+  details.append(node("h4", "", "Operational Activity"), node("p", "", "Incident and investigation workload over time"), node("p", "", "Not enough verified historical operational data."));
+  profile.addEventListener("click", () => { details.hidden = !details.hidden; profile.setAttribute("aria-expanded", String(!details.hidden)); });
   const edit = node("button", "ghost", "Edit Officer");
   edit.type = "button";
   edit.setAttribute("aria-expanded", "false");
@@ -4892,7 +5331,7 @@ function policeUserCard(user) {
   reset.type = "button";
   reset.dataset.policeAction = "reset-password";
   reset.dataset.policeUserId = user.id;
-  managementActions.append(edit, reset, toggle);
+  managementActions.append(profile, edit, reset, toggle);
   const form = node("form", "police-user-edit");
   form.dataset.policeUserId = user.id;
   form.hidden = true;
@@ -4947,7 +5386,7 @@ function policeUserCard(user) {
     edit.setAttribute("aria-expanded", String(!form.hidden));
     if (!form.hidden) form.querySelector("input")?.focus();
   });
-  card.append(head, meta, managementActions, form);
+  card.append(head, meta, managementActions, details, form);
   return card;
 }
 
@@ -4956,7 +5395,7 @@ function renderPoliceManagementKpis(users = []) {
   if (!kpis) return;
   const active = users.filter((user) => user.status !== "inactive").length;
   const inactive = users.filter((user) => user.status === "inactive").length;
-  const assignedUnits = new Set(users.map((user) => String(user.unitId || "").trim()).filter(Boolean)).size;
+  const assignedUnits = new Set(users.flatMap((user) => user.unitIds?.length ? user.unitIds : [String(user.unitId || "").trim()]).filter(Boolean)).size;
   const items = [
     ["Total Police", users.length],
     ["Active", active],
@@ -4974,7 +5413,7 @@ function renderPoliceManagementKpis(users = []) {
 function renderPoliceUsers(users = []) {
   state.policeUsers = users;
   renderPoliceManagementKpis(users);
-  setText("#policeUserCount", `${users.length} account${users.length === 1 ? "" : "s"}`);
+  setText("#policeUserCount", `${users.length} officer${users.length === 1 ? "" : "s"}`);
   const list = $("#policeUserList");
   if (!list) return;
   list.textContent = "";
@@ -5204,15 +5643,15 @@ async function calculateMapRoute() {
     fitCalculatedRoutesOnMap();
     renderSatelliteMaps();
     updateNavigationPanel(route?.isApproximate
-      ? "Air-line estimate ready. Road distance and travel time are unavailable."
+      ? "Road routing unavailable - straight-line estimate shown. Road distance and ETA are unavailable."
       : `${state.mapNavigation.routes.length} real road route option${state.mapNavigation.routes.length === 1 ? "" : "s"} ready.`);
     setText("#routeSummary", route?.isApproximate
-      ? `${Number(route.distanceKm).toFixed(2)} km straight-line distance to ${destination.label || "destination"}; ETA unavailable.`
+      ? `Road routing unavailable. ${Number(route.distanceKm).toFixed(2)} km straight-line distance to ${destination.label || "destination"}; ETA unavailable.`
       : `${Number(route.distanceKm).toFixed(2)} km, about ${Math.round(route.durationMinutes)} min to ${destination.label || "destination"}.`);
   } catch (error) {
     logRouteDevelopment("error", { start, destination });
     clearRouteResult();
-    updateNavigationPanel(error.message.includes("permission") ? error.message : "Route could not be calculated. Choose a manual start point and retry.");
+    updateNavigationPanel(error.message.includes("permission") ? error.message : "Road routing unavailable - route could not be calculated. Retry or choose different points.");
   } finally {
     state.mapNavigation.routeLoading = false;
     updateNavigationPanel();
@@ -5316,8 +5755,14 @@ function liveGpsStatus(point) {
 }
 
 function stopLocationTracking(message = "Tracking stopped", { error = false, notifyBackend = true, updateNavigation = true } = {}) {
+  if (state.mapNavigation.activeNavigation) {
+    state.mapNavigation.activeNavigation = null;
+    const panel = $("#activeNavigationPanel"); if (panel) panel.hidden = true;
+  }
   releaseLocationTracking({ notifyBackend });
   state.mapNavigation.locationTracking = false;
+  state.mapNavigation.followLocation = false;
+  lastFollowCameraFix = null;
   state.mapNavigation.locationTrackingFixes = 0;
   updateGisButtonStates();
   setUnitGpsUi({ mode: error ? "error" : "stopped", message, point: null, updatedAt: null });
@@ -5397,15 +5842,17 @@ function startLocationTracking() {
         const firstFix = state.mapNavigation.locationTrackingFixes === 0;
         state.mapNavigation.locationTrackingFixes += 1;
         state.mapNavigation.currentLocation = point;
-        setRouteStart(point, "Live device location");
+        if (!state.mapNavigation.activeNavigation) setRouteStart(point, "Live device location");
         const instance = gisMapInstance();
         if (instance) {
-          if (firstFix) setMapView(instance, point, Math.max(instance.zoom, 14), point.label);
+          if (state.mapNavigation.followLocation && shouldRecenterFollow(point, lastFollowCameraFix)) panFollowLocation(instance, point);
+          else if (firstFix && !state.mapNavigation.activeNavigation && !state.mapNavigation.followLocation) setMapView(instance, point, Math.max(instance.zoom, 14), point.label);
           renderSatelliteMap(instance);
         }
         if (state.user?.role === "Police Officer") transmitUnitTelemetry(point);
         else setUnitGpsUi({ mode: "active", message: "Device GPS: Active · local GIS only", point, updatedAt: point.capturedAt });
-        updateNavigationPanel(liveGpsStatus(point));
+        if (state.mapNavigation.activeNavigation) updateActiveNavigation(point);
+        else updateNavigationPanel(liveGpsStatus(point));
       },
       onError(error) {
         stopLocationTracking(error.message, { error: true });
@@ -5414,6 +5861,74 @@ function startLocationTracking() {
   } catch (error) {
     stopLocationTracking(error.message, { error: true });
   }
+}
+
+function endActiveNavigation(message = "Navigation ended.") {
+  const active = state.mapNavigation.activeNavigation;
+  if (!active) return;
+  state.mapNavigation.activeNavigation = null;
+  state.mapNavigation.followLocation = false;
+  if (active.startedTracking) stopLocationTracking("Navigation GPS stopped", { updateNavigation: false });
+  const panel = $("#activeNavigationPanel"); if (panel) panel.hidden = true;
+  updateGisButtonStates();
+  if (message) setMapStatus(message);
+}
+
+function updateActiveNavigation(point) {
+  const active = state.mapNavigation.activeNavigation;
+  const route = selectedRoute(state.mapNavigation);
+  if (!active || !route || route.id !== active.routeId) return;
+  const wasOffRoute = Boolean(active.progress?.offRoute);
+  const progress = navigationProgress(route, point, active.progress);
+  if (!progress) return;
+  active.progress = progress;
+  const gps = progress.accuracy === null ? "Accuracy unavailable" : `Accuracy: ±${Math.round(progress.accuracy)} m`;
+  setText("#activeNavigationGps", `${gps}${progress.poorGps ? " · Poor GPS; progress uncertain" : ""}${progress.offRoute ? " · Off route" : ""}`);
+  setText("#activeNavigationRoute", `Selected route: ${route.label || route.id}`);
+  setText("#activeNavigationManeuver", progress.offRoute ? "Off route" : progress.nextStep ? `${maneuverText(progress.nextStep)} in ${Math.round(progress.nextDistanceMeters)} m` : "No upcoming maneuver available");
+  setText("#activeNavigationProgress", progress.poorGps || progress.offRoute ? "Remaining: unavailable · ETA: unavailable" : `Remaining: ${progress.remainingKm.toFixed(2)} km · Estimated remaining time: ${Math.ceil(progress.remainingMinutes)} min`);
+  const recalculate = $("#navigationRecalculate"); if (recalculate) recalculate.disabled = progress.poorGps || !state.mapNavigation.currentLocation;
+  if (progress.arrived) { endActiveNavigation(""); setMapStatus("Destination reached. Operational status has not been changed."); }
+  else if (progress.offRoute && !wasOffRoute) void recalculateActiveNavigation();
+}
+
+function startActiveNavigation() {
+  const route = selectedRoute(state.mapNavigation);
+  if (!routePointValidation().valid || !hasUsableRealRoute(route)) return updateNavigationPanel("Turn-by-turn navigation unavailable — road routing service unavailable.");
+  const wasTracking = state.mapNavigation.locationTracking;
+  if (!wasTracking && state.user?.role === "Police Officer" && !state.telemetryUnit) return updateNavigationPanel("No authorised response unit is assigned to this Police account.");
+  state.mapNavigation.activeNavigation = { routeId: route.id, startedTracking: !wasTracking };
+  state.mapNavigation.followLocation = true;
+  $("#activeNavigationPanel").hidden = false;
+  setText("#activeNavigationManeuver", "Waiting for GPS");
+  setText("#activeNavigationRoute", `Selected route: ${route.label || route.id}`);
+  setText("#activeNavigationProgress", "Remaining: -- · ETA: --");
+  setText("#activeNavigationGps", "GPS: waiting for a fix");
+  if (!wasTracking) startLocationTracking();
+  else if (state.mapNavigation.currentLocation) updateActiveNavigation(state.mapNavigation.currentLocation);
+  updateGisButtonStates();
+}
+
+async function recalculateActiveNavigation() {
+  const active = state.mapNavigation.activeNavigation;
+  const point = state.mapNavigation.currentLocation;
+  const destination = routePointValidation().destination;
+  if (!active || !point || !destination || state.mapNavigation.routeLoading) return;
+  state.mapNavigation.routeLoading = true;
+  setText("#activeNavigationManeuver", "Recalculating from current location…");
+  updateGisButtonStates();
+  try {
+    const response = await api("/api/maps/route", { method: "POST", body: { start: { lat: point.lat, lng: point.lng }, destination: { lat: destination.lat, lng: destination.lng }, mode: "driving" } });
+    if (state.mapNavigation.activeNavigation !== active) return;
+    const updated = applyRouteResponse(state.mapNavigation, response);
+    const route = selectedRoute(updated);
+    if (!hasUsableRealRoute(route)) { endActiveNavigation("Road routing unavailable; navigation ended."); return; }
+    state.mapNavigation = updated;
+    state.mapNavigation.activeNavigation.routeId = route.id;
+    state.mapNavigation.activeNavigation.progress = null;
+    renderSatelliteMaps(); updateNavigationPanel("Route recalculated from current GPS location."); updateActiveNavigation(point);
+  } catch { if (state.mapNavigation.activeNavigation === active) setText("#activeNavigationManeuver", "Recalculation failed. Retry when routing is available."); }
+  finally { state.mapNavigation.routeLoading = false; updateGisButtonStates(); }
 }
 
 async function navigateToIncident(incident) {
@@ -5437,8 +5952,9 @@ async function navigateToIncident(incident) {
 }
 
 function clearMapRoute() {
-  resetGisNavigationState("");
-  resetGisMapToOperationalCenter("Route cleared. Map restored to Patancheru/BHEL operational center.");
+  clearRouteResult();
+  updateNavigationPanel("Route line cleared. Start and destination are kept; distance and ETA were reset.");
+  renderSatelliteMaps();
 }
 
 function openExternalRoute() {
@@ -5854,9 +6370,10 @@ async function refresh() {
     setText("#alertMetric", summary.openAlerts ?? summary.criticalAlerts ?? 0);
     setText("#zoneMetric", zones.zones.length);
     setText("#queueCount", `${summary.activeIncidents ?? 0} active`);
-    setText("#systemHealthTitle", aiConnected ? "Systems operational" : "AI connection pending");
+    setText("#dashboardCriticalCount", (incidents.incidents || []).filter((incident) => String(incident.severity).toLowerCase() === "critical").length);
+    setText("#systemHealthTitle", aiConnected ? "AI connected" : "AI connection pending");
     setText("#systemHealthDetail", aiConnected
-      ? "AI, GIS, cameras, and dispatch are ready"
+      ? "AI service is reachable. Check camera and unit status below."
       : "Core operations remain available while AI reconnects");
   }
   renderIncidents(incidents.incidents);
@@ -5996,9 +6513,16 @@ window.addEventListener("hashchange", () => {
   else if (document.body.dataset.view === "settings") setSettingsSection(settingsSectionFromLocation(), { updateUrl: false });
 });
 $$("[data-layer]").forEach((button) => button.addEventListener("click", () => setLayer(button.dataset.layer)));
-$$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewJump)));
+$$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => {
+  if (button.dataset.criticalQueue) state.commandFilters = criticalQueueFilters();
+  setView(button.dataset.viewJump);
+  if (button.dataset.openAiReview && document.body.dataset.view === "cctv") selectCctvTab("review");
+}));
+$("#dashboardCriticalQueue")?.addEventListener("click", () => { state.commandFilters = criticalQueueFilters(); setView("incident-command"); });
 $("#refreshCommand")?.addEventListener("click", () => refresh().catch((error) => alert(error.message)));
 $("#refreshUnitAssignment")?.addEventListener("click", () => refresh().catch((error) => alert(error.message)));
+$("#backToUnitAssignment")?.addEventListener("click", () => setView("unit-assignment"));
+$("#assignSelectedOfficers")?.addEventListener("click", () => assignSelectedPoliceOfficers().catch((error) => alert(error.message)));
 $("#assignmentSearch")?.addEventListener("input", (event) => {
   state.assignmentFilters.search = event.currentTarget.value;
   renderUnitAssignment();
@@ -6030,6 +6554,20 @@ $("#commandIncidentSearch")?.addEventListener("input", (event) => {
     state.commandFilters[key] = event.currentTarget.value;
     renderIncidentCommand();
   });
+});
+document.querySelector(".cctv-tabs")?.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-cctv-tab]");
+  if (tab) selectCctvTab(tab.dataset.cctvTab);
+});
+document.querySelector(".cctv-tabs")?.addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll("[data-cctv-tab]")];
+  const current = tabs.indexOf(document.activeElement);
+  if (current < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  selectCctvTab(tabs[next].dataset.cctvTab);
+  tabs[next].focus();
 });
 $("#cameraRegistryFilters")?.addEventListener("change", (event) => {
   const control = event.target.closest("[data-camera-filter]");
@@ -6139,6 +6677,7 @@ $("#cameraGridLarge")?.addEventListener("click", async (event) => {
   if (observationsButton) {
     state.aiObservationCameraId = id;
     renderAiObservationQueue();
+    selectCctvTab("review");
     $("#aiObservationQueue")?.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
   }
@@ -6386,6 +6925,9 @@ $("#assignIncident").addEventListener("click", async () => {
 });
 $("#routeIncident").addEventListener("click", async () => { try { await suggestPoliceRoute(); } catch (error) { $("#routeSummary").textContent = `Route unavailable: ${error.message}`; } });
 $("#navigateMap").addEventListener("click", calculateMapRoute);
+$("#startNavigation").addEventListener("click", startActiveNavigation);
+$("#endNavigation").addEventListener("click", () => endActiveNavigation());
+$("#navigationRecalculate").addEventListener("click", recalculateActiveNavigation);
 $("#streetMapLayer").addEventListener("click", () => {
   const instance = gisMapInstance();
   if (instance) setBaseLayer(instance, "streets");
@@ -6398,6 +6940,16 @@ $("#fitGisMap").addEventListener("click", fitGisMapToOperationalMarkers);
 $("#resetGisMap").addEventListener("click", resetGisMapView);
 $("#useMyLocation").addEventListener("click", useCurrentLocation);
 $("#toggleLocationTracking").addEventListener("click", startLocationTracking);
+$("#toggleFollowLocation").addEventListener("click", () => {
+  if (!state.mapNavigation.locationTracking) return;
+  state.mapNavigation.followLocation = !state.mapNavigation.followLocation;
+  const instance = gisMapInstance();
+  if (state.mapNavigation.followLocation && instance && state.mapNavigation.currentLocation) {
+    panFollowLocation(instance, state.mapNavigation.currentLocation);
+    renderSatelliteMap(instance);
+  }
+  updateGisButtonStates();
+});
 $("#recalculateRoute").addEventListener("click", calculateMapRoute);
 $("#openExternalRoute").addEventListener("click", openExternalRoute);
 $("#clearMapRoute").addEventListener("click", clearMapRoute);
@@ -6406,7 +6958,28 @@ $("#clearRouteDestination").addEventListener("click", clearRouteDestination);
 $("#swapRoutePoints").addEventListener("click", swapRoutePoints);
 $("#setMapStart").addEventListener("click", () => setNavigationSelectionMode("start"));
 $("#setMapDestination").addEventListener("click", () => setNavigationSelectionMode("destination"));
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !state.mapNavigation.selectionMode) return;
+  setNavigationSelectionMode(state.mapNavigation.selectionMode);
+});
 $("#closeIncident").addEventListener("click", async () => { const i = activeIncident(); if (i) await api(`/api/incidents/${i.id}/status`, { method: "PATCH", body: { status: "closed" } }); state.selectedIncidentId = null; await refresh(); });
+$("#alertUseLocation").addEventListener("click", async () => {
+  const status = $("#alertLocationStatus"), button = $("#alertUseLocation");
+  button.disabled = true;
+  status.textContent = "Finding current location?";
+  try {
+    const position = await getBrowserLocation(navigator.geolocation);
+    const form = $("#manualAlertForm");
+    form.elements.lat.value = position.lat;
+    form.elements.lng.value = position.lng;
+    form.dataset.locationSource = "browser_gps";
+    status.textContent = "Current location added. You can review it under advanced coordinates.";
+  } catch (error) { status.textContent = error.message; }
+  finally { button.disabled = false; }
+});
+$("#manualAlertForm").addEventListener("input", (event) => {
+  if (["lat", "lng"].includes(event.target.name)) event.currentTarget.dataset.locationSource = "manual_latlng";
+});
 $("#manualAlertForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -6414,9 +6987,16 @@ $("#manualAlertForm").addEventListener("submit", async (event) => {
   error.textContent = "";
   const data = new FormData(form);
   const zone = String(data.get("zone") || "All Zones").trim();
-  const lat = Number(data.get("lat"));
-  const lng = Number(data.get("lng"));
-  const location = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, locationSource: "manual_latlng" } : null;
+  const latValue = String(data.get("lat") || "").trim();
+  const lngValue = String(data.get("lng") || "").trim();
+  if (Boolean(latValue) !== Boolean(lngValue)) {
+    error.textContent = "Enter both latitude and longitude, or leave both blank.";
+    return;
+  }
+  const lat = Number(latValue);
+  const lng = Number(lngValue);
+  const locationSource = form.dataset.locationSource || "manual_latlng";
+  const location = latValue && lngValue && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, locationSource } : null;
   try {
     await api("/api/send-alert", {
       method: "POST",
@@ -6426,11 +7006,13 @@ $("#manualAlertForm").addEventListener("submit", async (event) => {
         zone,
         message: data.get("message"),
         location,
-        locationSource: location ? "manual_latlng" : "unknown"
+        locationSource: location ? locationSource : "unknown"
       }
     });
     state.alertFilter = "all";
     form.reset();
+    delete form.dataset.locationSource;
+    $("#alertLocationStatus").textContent = "Location is optional.";
     form.elements.type.value = "Emergency Broadcast";
     form.elements.severity.value = "critical";
     form.elements.zone.value = "All Zones";
@@ -7097,11 +7679,86 @@ function handleBrowserNavigationRestore(message = "GIS route state reset after n
   });
 }
 
+const ERSS_EMERGENCY_TYPE_OPTIONS = ["POLICE", "FIRE", "MEDICAL", "DISASTER", "MULTI_SERVICE"];
+const ERSS_PRIORITY_OPTIONS = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const ERSS_LOCATION_SOURCE_OPTIONS = ["CALLER_CONFIRMED", "GPS", "DEVICE", "MANUAL_OPERATOR", "REVERSE_GEOCODED", "EXTERNAL_EVENT", "UNKNOWN"];
+const ERSS_TRIAGE_ACTION_OPTIONS = [
+  ["MARK_ACTIONABLE", "Mark Actionable"],
+  ["NEED_VERIFICATION", "Needs Verification"],
+  ["MARK_ACCIDENTAL", "Mark Accidental"],
+  ["MARK_FALSE_ALARM", "Mark False Alarm"],
+  ["MARK_NUISANCE", "Mark Nuisance"],
+  ["FORWARD_TO_DISPATCH", "Forward to Dispatch"],
+  ["ESCALATE_TO_SUPERVISOR", "Escalate to Supervisor"]
+];
+const ERSS_TRIAGE_STATUS_BY_ACTION = {
+  MARK_ACTIONABLE: "ACTIONABLE",
+  NEED_VERIFICATION: "VERIFYING",
+  MARK_ACCIDENTAL: "ACCIDENTAL",
+  MARK_FALSE_ALARM: "FALSE_ALARM",
+  MARK_NUISANCE: "NUISANCE",
+  FORWARD_TO_DISPATCH: "DISPATCH_RECOMMENDED",
+  ESCALATE_TO_SUPERVISOR: "LEGAL_REVIEW"
+};
+
+function canTakeErssCalls(user) {
+  if (!user) return false;
+  if (user.role === "Admin") return true;
+  return user.role === "Police Officer" && getOperationalRole(user) === "CALL_TAKER";
+}
+
+function formatErssCoord(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(6) : "Not provided";
+}
+
+function erssDetailField(label, value) {
+  const field = node("div", "erss-detail-field");
+  field.append(node("span", "", label), node("strong", "", value));
+  return field;
+}
+
+function erssFormField(labelText, input) {
+  const label = node("label", "erss-field");
+  label.append(node("span", "", labelText), input);
+  return label;
+}
+
+function erssSelect(options, selected) {
+  const select = document.createElement("select");
+  for (const option of options) {
+    const [value, text] = Array.isArray(option) ? option : [option, displayValue(option)];
+    const element = document.createElement("option");
+    element.value = value;
+    element.textContent = text;
+    if (value === selected) element.selected = true;
+    select.append(element);
+  }
+  return select;
+}
+
+function erssYesNoSelect(selected) {
+  return erssSelect([["yes", "Yes"], ["no", "No"]], selected ? "yes" : "no");
+}
+
+function erssFormActions(...buttons) {
+  const actions = node("div", "erss-form-actions");
+  actions.append(...buttons);
+  return actions;
+}
+
 function renderErssCallTaker() {
   const panel = $("[data-panel='erss-call-taker']");
   if (!panel) return;
   const db = state.erssEvents || [];
   const activeEvents = db.filter(e => e.callStatus === "IN_PROGRESS" && !["CLOSED", "DISPATCHED"].includes(e.triageStatus));
+  panel.querySelectorAll(".caller-details-panel, .incident-location-panel, .triage-panel, .live-notes-panel").forEach((section) => { section.hidden = activeEvents.length === 0; });
+  if (activeEvents.length === 1 && state.selectedErssEventId !== activeEvents[0].id) {
+    state.selectedErssEventId = activeEvents[0].id;
+  }
+  if (state.selectedErssEventId && !activeEvents.some(e => e.id === state.selectedErssEventId)) {
+    state.selectedErssEventId = null;
+  }
   const callInfo = $("#erssCallInfo");
   if (callInfo) {
     callInfo.textContent = "";
@@ -7110,6 +7767,7 @@ function renderErssCallTaker() {
     } else {
       activeEvents.forEach(event => {
         const card = node("article", "erss-event-card");
+        if (event.id === state.selectedErssEventId) card.classList.add("selected");
         card.append(
           node("strong", "", `Event: ${event.externalEventId || event.id}`),
           node("span", "status-badge " + statusClass(event.triageStatus), displayValue(event.triageStatus)),
@@ -7118,11 +7776,366 @@ function renderErssCallTaker() {
           node("small", "", `Caller: ${event.callerLocationText || "Unknown"} | Incident: ${event.incidentLocationText || "Unknown"}`),
           node("small", "", `Jurisdiction: ${event.jurisdictionId || "Not determined"}`)
         );
+        if (activeEvents.length > 1) {
+          const isSelected = event.id === state.selectedErssEventId;
+          const selectBtn = node("button", isSelected ? "ghost" : "primary", isSelected ? "Working On This Call" : "Select / Open");
+          selectBtn.type = "button";
+          selectBtn.disabled = isSelected;
+          selectBtn.addEventListener("click", () => {
+            state.selectedErssEventId = event.id;
+            renderErssCallTaker();
+          });
+          card.append(selectBtn);
+        }
         callInfo.append(card);
       });
     }
   }
+  renderSelectedErssCallPanels();
+  if (state.selectedErssEventId) loadSelectedErssEventDetails();
 }
+
+async function loadSelectedErssEventDetails() {
+  const eventId = state.selectedErssEventId;
+  if (!eventId) return;
+  try {
+    const details = await erssApi.getEvent(eventId);
+    if (state.selectedErssEventId !== eventId) return;
+    state.erssEventDetails = { ...(state.erssEventDetails || {}), [eventId]: details };
+    renderSelectedErssCallPanels();
+  } catch (error) {
+    if (state.selectedErssEventId !== eventId) return;
+    renderSelectedErssCallPanels(error);
+  }
+}
+
+async function refreshErssCallTakerData() {
+  await refresh();
+  if ((document.body.dataset.view || "") !== "erss-call-taker") return;
+  renderErssCallTaker();
+  await loadSelectedErssEventDetails();
+}
+
+function renderSelectedErssCallPanels(loadError = null) {
+  const panel = $("[data-panel='erss-call-taker']");
+  if (!panel) return;
+  const eventId = state.selectedErssEventId;
+  const details = eventId ? state.erssEventDetails?.[eventId] || null : null;
+  const authorized = canTakeErssCalls(state.user);
+  renderErssCallerDetails(details, loadError);
+  renderErssIncidentLocation(details, eventId, authorized, loadError);
+  renderErssTriage(details, eventId, authorized, loadError);
+  renderErssLiveNotes(details, eventId, authorized, loadError);
+}
+
+function renderErssCallerDetails(details, loadError) {
+  const container = $("#callerDetails");
+  if (!container) return;
+  container.textContent = "";
+  if (loadError) {
+    container.append(node("div", "empty-state", `Could not load caller details: ${loadError.message}`));
+    return;
+  }
+  if (!state.selectedErssEventId) {
+    container.append(node("div", "empty-state", "Select an active call above to begin working this event."));
+    return;
+  }
+  if (!details) {
+    container.append(node("div", "empty-state", "Loading caller details..."));
+    return;
+  }
+  const event = details.event || {};
+  const call = details.call || null;
+  const grid = node("div", "erss-detail-grid");
+  grid.append(
+    erssDetailField("Caller Reference", displayValue(event.callerReference)),
+    erssDetailField("Channel", `${displayValue(event.channel)}${event.simulated ? " (SIMULATED)" : ""}`),
+    erssDetailField("Caller Location", displayValue(event.callerLocationText)),
+    erssDetailField("Caller Latitude", formatErssCoord(event.callerLatitude)),
+    erssDetailField("Caller Longitude", formatErssCoord(event.callerLongitude)),
+    erssDetailField("Call Status", displayValue(event.callStatus)),
+    erssDetailField("Call Record", call
+      ? `${displayValue(call.status)} | Started ${new Date(call.startedAt).toLocaleString()}`
+      : "No call record"),
+    erssDetailField("Data Classification", event.simulated ? "SIMULATED / TEST EVENT" : "Live Event")
+  );
+  container.append(grid);
+}
+
+function renderErssIncidentLocation(details, eventId, authorized, loadError) {
+  const container = $("#incidentLocationForm");
+  if (!container) return;
+  container.textContent = "";
+  if (loadError) {
+    container.append(node("div", "empty-state", `Could not load incident location: ${loadError.message}`));
+    return;
+  }
+  if (!state.selectedErssEventId) {
+    container.append(node("div", "empty-state", "Select an active call above to begin working this event."));
+    return;
+  }
+  if (!details) {
+    container.append(node("div", "empty-state", "Loading incident location..."));
+    return;
+  }
+  const event = details.event || {};
+  const station = details.jurisdictionStation || null;
+  const grid = node("div", "erss-detail-grid");
+  grid.append(
+    erssDetailField("Incident Location Text", displayValue(event.incidentLocationText)),
+    erssDetailField("Incident Latitude", formatErssCoord(event.incidentLatitude)),
+    erssDetailField("Incident Longitude", formatErssCoord(event.incidentLongitude)),
+    erssDetailField("Location Source", displayValue(event.locationSource)),
+    erssDetailField("Location Confidence", displayValue(event.locationConfidence)),
+    erssDetailField("Detected Jurisdiction", station
+      ? `${station.name || station.id} (${station.id})`
+      : displayValue(event.jurisdictionId, "Not determined"))
+  );
+  container.append(grid);
+  if (!authorized) {
+    container.append(node("div", "erss-rbac-notice", "Location updates require the CALL_TAKER operational role. Sign in with an authorized CALL_TAKER account to edit."));
+    return;
+  }
+  const status = node("div", "erss-form-status", "");
+  const locationInput = document.createElement("input");
+  locationInput.type = "text";
+  locationInput.value = event.incidentLocationText || "";
+  locationInput.placeholder = "Incident location text";
+  locationInput.required = true;
+  const latInput = document.createElement("input");
+  latInput.type = "number";
+  latInput.step = "any";
+  latInput.value = Number.isFinite(event.incidentLatitude) ? event.incidentLatitude : "";
+  latInput.placeholder = "Latitude";
+  latInput.required = true;
+  const lngInput = document.createElement("input");
+  lngInput.type = "number";
+  lngInput.step = "any";
+  lngInput.value = Number.isFinite(event.incidentLongitude) ? event.incidentLongitude : "";
+  lngInput.placeholder = "Longitude";
+  lngInput.required = true;
+  const sourceSelect = erssSelect(ERSS_LOCATION_SOURCE_OPTIONS, ERSS_LOCATION_SOURCE_OPTIONS.includes(event.locationSource) ? event.locationSource : "MANUAL_OPERATOR");
+  const confidenceSelect = document.createElement("select");
+  for (const [value, text] of [["", "Select confidence"], ["high", "High"], ["medium", "Medium"], ["low", "Low"]]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    confidenceSelect.append(option);
+  }
+  const storedConfidence = String(event.locationConfidence || "").trim().toLowerCase();
+  if (["high", "medium", "low"].includes(storedConfidence)) confidenceSelect.value = storedConfidence;
+  const saveBtn = node("button", "primary", "Save Location & Re-verify Jurisdiction");
+  saveBtn.type = "submit";
+  const form = node("form", "erss-inline-form");
+  form.append(
+    erssFormField("Incident Location Text", locationInput),
+    erssFormField("Latitude", latInput),
+    erssFormField("Longitude", lngInput),
+    erssFormField("Location Source", sourceSelect),
+    erssFormField("Location Confidence", confidenceSelect),
+    erssFormActions(saveBtn)
+  );
+  form.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    const latitude = Number(latInput.value);
+    const longitude = Number(lngInput.value);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      setErssFormStatus(status, "Valid numeric latitude and longitude are required.", true);
+      return;
+    }
+    try {
+      const result = await withButtonBusy(saveBtn, "Saving...", () => erssApi.updateLocation(eventId, {
+        incidentLatitude: latitude,
+        incidentLongitude: longitude,
+        incidentLocationText: locationInput.value.trim(),
+        locationSource: sourceSelect.value,
+        locationConfidence: confidenceSelect.value || undefined
+      }));
+      const jurisdictionStation = result?.jurisdiction?.station;
+      const message = `Location saved. Jurisdiction: ${jurisdictionStation ? `${jurisdictionStation.name || jurisdictionStation.id} (${jurisdictionStation.id})` : "not determined"}${result?.jurisdiction?.provisional ? " (provisional)" : ""}`;
+      setErssFormStatus(status, message);
+      setPendingErssStatus("location", message);
+      await refreshErssCallTakerData();
+    } catch (error) {
+      setErssFormStatus(status, error.message, true);
+    }
+  });
+  container.append(form, status);
+  applyPendingErssStatus(status, "location");
+}
+
+function renderErssTriage(details, eventId, authorized, loadError) {
+  const container = $("#triageForm");
+  if (!container) return;
+  container.textContent = "";
+  if (loadError) {
+    container.append(node("div", "empty-state", `Could not load triage: ${loadError.message}`));
+    return;
+  }
+  if (!state.selectedErssEventId) {
+    container.append(node("div", "empty-state", "Select an active call above to begin working this event."));
+    return;
+  }
+  if (!details) {
+    container.append(node("div", "empty-state", "Loading triage..."));
+    return;
+  }
+  const event = details.event || {};
+  const triage = details.triage || null;
+  if (triage) {
+    const summary = node("div", "erss-detail-grid erss-triage-summary");
+    summary.append(
+      erssDetailField("Recorded Triage", `${displayValue(triage.emergencyType)} | ${displayValue(triage.priority)}`),
+      erssDetailField("Caller Location Verified", triage.callerLocationVerified ? "Yes" : "No"),
+      erssDetailField("Incident Location Verified", triage.incidentLocationVerified ? "Yes" : "No"),
+      erssDetailField("Immediate Danger", triage.immediateDanger ? "Yes" : "No"),
+      erssDetailField("Last Action", displayValue(triage.actionTaken, "None yet")),
+      erssDetailField("Human Confirmed", triage.humanConfirmed ? "Yes" : "No")
+    );
+    if (triage.description) summary.append(erssDetailField("Recorded Description", triage.description));
+    container.append(node("strong", "eyebrow", "Recorded Triage"), summary);
+  }
+  if (!authorized) {
+    container.append(node("div", "erss-rbac-notice", "Triage actions require the CALL_TAKER operational role. Sign in with an authorized CALL_TAKER account to triage this call."));
+    return;
+  }
+  const status = node("div", "erss-form-status", "");
+  const typeSelect = erssSelect(ERSS_EMERGENCY_TYPE_OPTIONS, ERSS_EMERGENCY_TYPE_OPTIONS.includes(event.emergencyType) ? event.emergencyType : "POLICE");
+  const prioritySelect = erssSelect(ERSS_PRIORITY_OPTIONS, ERSS_PRIORITY_OPTIONS.includes(event.priority) ? event.priority : "HIGH");
+  const callerVerifiedSelect = erssYesNoSelect(triage?.callerLocationVerified);
+  const incidentVerifiedSelect = erssYesNoSelect(triage?.incidentLocationVerified);
+  const dangerSelect = erssYesNoSelect(triage?.immediateDanger);
+  const descriptionInput = document.createElement("textarea");
+  descriptionInput.rows = 3;
+  descriptionInput.value = triage?.description || "";
+  descriptionInput.placeholder = "Describe the emergency as reported by the caller";
+  const actionSelect = erssSelect(ERSS_TRIAGE_ACTION_OPTIONS, "MARK_ACTIONABLE");
+  const confirmCheckbox = document.createElement("input");
+  confirmCheckbox.type = "checkbox";
+  const confirmLabel = node("label", "erss-confirmation");
+  confirmLabel.append(confirmCheckbox, node("span", "", "I am the call taker and confirm this triage (required to forward to dispatch)"));
+  const submitBtn = node("button", "primary", "Submit Triage Action");
+  submitBtn.type = "submit";
+  const form = node("form", "erss-inline-form");
+  form.append(
+    erssFormField("Emergency Type", typeSelect),
+    erssFormField("Priority", prioritySelect),
+    erssFormField("Caller Location Verified", callerVerifiedSelect),
+    erssFormField("Incident Location Verified", incidentVerifiedSelect),
+    erssFormField("Immediate Danger", dangerSelect),
+    erssFormField("Description", descriptionInput),
+    erssFormField("Triage Action", actionSelect),
+    confirmLabel,
+    erssFormActions(submitBtn)
+  );
+  form.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    if (actionSelect.value === "FORWARD_TO_DISPATCH" && !confirmCheckbox.checked) {
+      setErssFormStatus(status, "Human confirmation is required before forwarding to dispatch.", true);
+      return;
+    }
+    try {
+      const result = await withButtonBusy(submitBtn, "Submitting...", () => erssApi.createTriage(eventId, {
+        emergencyType: typeSelect.value,
+        priority: prioritySelect.value,
+        callerLocationVerified: callerVerifiedSelect.value === "yes",
+        incidentLocationVerified: incidentVerifiedSelect.value === "yes",
+        immediateDanger: dangerSelect.value === "yes",
+        description: descriptionInput.value.trim(),
+        actionTaken: actionSelect.value,
+        humanConfirmed: confirmCheckbox.checked
+      }));
+      const actionLabel = displayValue(result?.triage?.actionTaken);
+      const newStatus = ERSS_TRIAGE_STATUS_BY_ACTION[result?.triage?.actionTaken] || "TRIAGING";
+      const message = `Triage recorded: ${actionLabel}. Event status is now ${displayValue(newStatus)}.`;
+      setErssFormStatus(status, message);
+      setPendingErssStatus("triage", message);
+      await refreshErssCallTakerData();
+    } catch (error) {
+      setErssFormStatus(status, error.message, true);
+    }
+  });
+  container.append(form, status);
+  applyPendingErssStatus(status, "triage");
+}
+
+function renderErssLiveNotes(details, eventId, authorized, loadError) {
+  const container = $("#liveNotes");
+  if (!container) return;
+  container.textContent = "";
+  if (loadError) {
+    container.append(node("div", "empty-state", `Could not load call notes: ${loadError.message}`));
+    return;
+  }
+  if (!state.selectedErssEventId) {
+    container.append(node("div", "empty-state", "Select an active call above to begin working this event."));
+    return;
+  }
+  if (!details) {
+    container.append(node("div", "empty-state", "Loading call notes..."));
+    return;
+  }
+  const call = details.call || null;
+  container.append(
+    node("strong", "eyebrow", "Transcript"),
+    node("div", "erss-transcript", call?.transcript ? String(call.transcript) : "No transcript recorded."),
+    node("strong", "eyebrow", "Operator Notes"),
+    node("div", "erss-transcript", call?.notes ? String(call.notes) : "No notes recorded yet.")
+  );
+  if (!authorized) {
+    container.append(node("div", "erss-rbac-notice", "Adding notes requires the CALL_TAKER operational role."));
+    return;
+  }
+  if (!call) {
+    container.append(node("div", "empty-state", "No active call record for this event, so notes cannot be saved."));
+    return;
+  }
+  const status = node("div", "erss-form-status", "");
+  const notesInput = document.createElement("textarea");
+  notesInput.rows = 3;
+  notesInput.value = call.notes ? String(call.notes) : "";
+  notesInput.placeholder = "Add call taker notes for this live call";
+  const saveBtn = node("button", "primary", "Save Notes");
+  saveBtn.type = "submit";
+  const form = node("form", "erss-inline-form");
+  form.append(erssFormField("Add / Update Notes", notesInput), erssFormActions(saveBtn));
+  form.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    try {
+      await withButtonBusy(saveBtn, "Saving...", () => erssApi.updateCall(call.id, { notes: notesInput.value }));
+      setErssFormStatus(status, "Notes saved to the call record.");
+      setPendingErssStatus("notes", "Notes saved to the call record.");
+      await refreshErssCallTakerData();
+    } catch (error) {
+      setErssFormStatus(status, error.message, true);
+    }
+  });
+  container.append(form, status);
+  applyPendingErssStatus(status, "notes");
+}
+
+function setErssFormStatus(statusElement, message, isError = false) {
+  if (!statusElement) return;
+  statusElement.textContent = message;
+  statusElement.classList.toggle("error", Boolean(isError));
+  statusElement.hidden = !message;
+}
+
+function setPendingErssStatus(panelKey, message, isError = false) {
+  state.erssPanelStatus = { panelKey, message, isError };
+}
+
+function applyPendingErssStatus(statusElement, panelKey) {
+  const pending = state.erssPanelStatus;
+  if (pending && pending.panelKey === panelKey) {
+    setErssFormStatus(statusElement, pending.message, pending.isError);
+    state.erssPanelStatus = null;
+  }
+}
+
+$("#refreshErssCallTaker")?.addEventListener("click", () => {
+  refreshErssCallTakerData().catch((error) => console.warn("Could not refresh ERSS call taker data:", error.message));
+});
 
 function renderErssDispatcher() {
   const panel = $("[data-panel='erss-dispatcher']");
@@ -7137,6 +8150,7 @@ function renderErssDispatcher() {
     } else {
       actionableEvents.forEach(event => {
         const card = node("article", "erss-event-card");
+        if (event.id === state.selectedErssEventId) card.classList.add("selected");
         card.append(
           node("strong", "", `Event: ${event.externalEventId || event.id}`),
           node("span", "status-badge " + statusClass(event.triageStatus), displayValue(event.triageStatus)),
@@ -7146,15 +8160,91 @@ function renderErssDispatcher() {
         );
         const selectBtn = node("button", "ghost", "Review & Dispatch");
         selectBtn.type = "button";
-        selectBtn.addEventListener("click", () => {
-          state.selectedErssEventId = event.id;
-          renderDispatchRecommendation(event.id);
-        });
+        selectBtn.addEventListener("click", () => { reviewAndDispatch(event.id).catch((error) => console.warn("Could not review event for dispatch:", error.message)); });
         card.append(selectBtn);
         queue.append(card);
       });
     }
   }
+  if (state.selectedErssEventId) {
+    if (!state.erssReviewInFlight) renderDispatchRecommendation(state.selectedErssEventId);
+    renderErssUnitMonitoring(state.selectedErssEventId);
+  } else {
+    const recommendation = $("#dispatchRecommendation");
+    if (recommendation) recommendation.textContent = "";
+    recommendation?.append(node("div", "empty-state", "Select Review & Dispatch on an event to load its recommendation."));
+    const monitoring = $("#unitMonitoring");
+    if (monitoring) monitoring.textContent = "";
+    monitoring?.append(node("div", "empty-state", "Unit ACK monitoring starts after you approve a dispatch."));
+  }
+}
+
+function updateErssDispatchRequestInState(request) {
+  if (!request) return;
+  const requests = state.erssDispatchRequests || [];
+  const index = requests.findIndex(r => r.id === request.id);
+  if (index >= 0) requests[index] = request;
+  else requests.push(request);
+  state.erssDispatchRequests = requests;
+}
+
+async function reviewAndDispatch(eventId) {
+  state.selectedErssEventId = eventId;
+  state.erssReviewInFlight = true;
+  try {
+    renderErssDispatcher();
+    const panel = $("#dispatchRecommendation");
+    if (panel) {
+      panel.textContent = "";
+      panel.append(node("div", "empty-state", "Preparing dispatch recommendation..."));
+    }
+    let request = null;
+    try {
+      request = (await erssApi.getDispatchRequest(eventId)).request;
+    } catch (error) {
+      if (error?.status !== 404) throw error;
+    }
+    if (!request) {
+      const created = await erssApi.createDispatchRequest(eventId, {});
+      request = created.request;
+    }
+    updateErssDispatchRequestInState(request);
+    const event = (state.erssEvents || []).find(e => e.id === eventId);
+    if (event && event.triageStatus === "ACTIONABLE" && request.status !== "REJECTED") {
+      event.triageStatus = "DISPATCH_RECOMMENDED";
+    }
+    renderErssDispatcher();
+    renderDispatchRecommendation(eventId);
+    renderErssUnitMonitoring(eventId);
+  } catch (error) {
+    const panel = $("#dispatchRecommendation");
+    if (panel) {
+      panel.textContent = "";
+      panel.append(node("div", "empty-state", `Could not prepare dispatch recommendation: ${error.message}`));
+    }
+  } finally {
+    state.erssReviewInFlight = false;
+  }
+}
+
+function erssUnitAvailability(unitId) {
+  const unit = (state.responseUnits || []).find(u => u.id === unitId) || null;
+  return unit ? displayValue(unit.status) : "Unknown";
+}
+
+function erssRecommendationCard(rec, variant) {
+  const etaText = rec.etaMinutes == null ? "ETA unavailable (road routing unavailable)" : `ETA: ${rec.etaMinutes} min`;
+  return node("div", `recommendation-card ${variant}`,
+    node("strong", "", `${rec.unitCode || rec.unitId} - ${rec.stationName || rec.stationCode || "Station not recorded"}`),
+    node("small", "", `Availability: ${erssUnitAvailability(rec.unitId)} | Service: ${rec.serviceType || "POLICE"}`),
+    node("small", "", `Distance: ${rec.distanceKm == null ? "--" : rec.distanceKm} km | ${etaText}`),
+    node("small", "", `Reason: ${rec.selectionReason || "Nearest available unit"}`)
+  );
+}
+
+function canApproveErssDispatch() {
+  if (state.user?.role === "Admin") return true;
+  return ["DISPATCHER", "SUPERVISOR"].includes(getOperationalRole(state.user));
 }
 
 function renderDispatchRecommendation(eventId) {
@@ -7167,54 +8257,71 @@ function renderDispatchRecommendation(eventId) {
     panel.append(node("div", "empty-state", "Event not found."));
     return;
   }
+  panel.append(node("div", "erss-detail-grid",
+    erssDetailField("ERSS Event", event.externalEventId || event.id),
+    erssDetailField("Incident ID", event.incidentId || "Created on approval"),
+    erssDetailField("Priority", displayValue(event.priority)),
+    erssDetailField("Emergency Type", displayValue(event.emergencyType)),
+    erssDetailField("Incident Location", displayValue(event.incidentLocationText)),
+    erssDetailField("Jurisdiction", event.jurisdictionId || "Not determined")
+  ));
   if (!dispatchRequest || !dispatchRequest.primaryRecommendation) {
-    panel.append(node("div", "empty-state", "No dispatch recommendation available. Create one first."));
+    panel.append(node("div", "empty-state", "No dispatch recommendation yet. Click Review & Dispatch to generate one."));
     return;
   }
   const primary = dispatchRequest.primaryRecommendation;
   const fallback = dispatchRequest.fallbackRecommendations || [];
-  panel.append(
-    node("strong", "eyebrow", "Primary Recommendation"),
-    node("div", "recommendation-card primary",
-      node("strong", "", `${primary.unitCode || primary.unitId} - ${primary.stationName || primary.stationCode}`),
-      node("small", "", `Service: ${primary.serviceType || "POLICE"} | ETA: ${primary.etaMinutes == null ? "Unavailable" : `${primary.etaMinutes} min`} | Distance: ${primary.distanceKm} km`),
-      node("small", "", `Reason: ${primary.selectionReason || "Nearest available unit"}`)
-    )
-  );
+  panel.append(node("strong", "eyebrow", "Primary Recommended Unit"));
+  panel.append(erssRecommendationCard(primary, "primary"));
   if (fallback.length) {
     panel.append(node("strong", "eyebrow", "Fallback Units"));
-    fallback.forEach(fb => {
-      panel.append(
-        node("div", "recommendation-card fallback",
-          node("strong", "", `${fb.unitCode || fb.unitId} - ${fb.stationName || fb.stationCode}`),
-          node("small", "", `Service: ${fb.serviceType || "POLICE"} | ETA: ${fb.etaMinutes == null ? "Unavailable" : `${fb.etaMinutes} min`} | Distance: ${fb.distanceKm} km`)
-        )
-      );
-    });
+    fallback.forEach(fb => panel.append(erssRecommendationCard(fb, "fallback")));
   }
   const actions = $("#dispatchActions");
   if (actions) {
     actions.textContent = "";
-    if (dispatchRequest.status === "PENDING") {
+    if (dispatchRequest.status === "PENDING" && canApproveErssDispatch()) {
       const approveBtn = node("button", "primary", "Approve & Dispatch");
       approveBtn.type = "button";
       approveBtn.addEventListener("click", async () => {
+        approveBtn.disabled = true;
         try {
-          await api(`/api/erss/dispatch-requests/${dispatchRequest.id}/approve`, {
-            method: "POST",
-            body: {}
-          });
+          const result = await erssApi.approveDispatchRequest(dispatchRequest.id, {});
+          updateErssDispatchRequestInState(result.request);
           await refresh();
-          setText("#dispatchActions", "Dispatch approved and units notified.");
+          renderErssDispatcher();
+          renderDispatchRecommendation(eventId);
+          renderErssUnitMonitoring(eventId);
+          setText("#dispatchActions", "Dispatch approved. Primary unit requested - ACK monitoring active.");
         } catch (error) {
-          alert(error.message);
+          approveBtn.disabled = false;
+          setText("#dispatchActions", `Could not approve dispatch: ${error.message}`);
         }
       });
-      const modifyBtn = node("button", "ghost", "Change Unit");
-      modifyBtn.type = "button";
-      actions.append(approveBtn, modifyBtn);
+      actions.append(approveBtn);
     }
   }
+}
+
+function renderErssUnitMonitoring(eventId) {
+  const panel = $("#unitMonitoring");
+  if (!panel) return;
+  panel.textContent = "";
+  const requests = (state.erssUnitRequests || []).filter(r => r.erssEventId === eventId);
+  if (requests.length === 0) {
+    panel.append(node("div", "empty-state", "No unit response requests yet."));
+    return;
+  }
+  requests.forEach(req => {
+    const unit = (state.responseUnits || []).find(u => u.id === req.unitId);
+    const ackDue = req.timeoutAt ? `ACK due by ${new Date(req.timeoutAt).toLocaleTimeString()}` : "";
+    panel.append(node("article", "unit-request-card",
+      node("strong", "", `Unit: ${unit?.unitCode || unit?.unitId || req.unitId}`),
+      node("span", "status-badge " + statusClass(req.status), displayValue(req.status)),
+      node("small", "", `Station: ${unit?.stationName || unit?.station || req.stationId || "Not recorded"} | Service: ${displayValue(req.serviceType)}`),
+      node("small", "", `Requested: ${new Date(req.requestedAt || req.createdAt).toLocaleTimeString()} ${ackDue}`)
+    ));
+  });
 }
 
 function renderErssAssistance() {
@@ -7319,6 +8426,7 @@ window.addEventListener("pageshow", (event) => {
 
 window.addEventListener("popstate", () => {
   handleBrowserNavigationRestore("GIS route state reset after browser navigation.");
+  if (state.user) setView(requestedPortalView(), { restoreHistory: true });
 });
 
 initSatelliteMaps();

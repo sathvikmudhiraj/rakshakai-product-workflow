@@ -206,6 +206,13 @@ class MediaGateway extends EventEmitter {
   async frame(session, frameBuffer, meta = {}) {
     if (session.stopped || !Buffer.isBuffer(frameBuffer) || !frameBuffer.length) return;
     const now = this.clock();
+    // A supplied capture time must be recent; old frames must not revive stream
+    // health or become fresh operational observations.
+    const suppliedCapture = meta.capturedAt == null ? now : Date.parse(meta.capturedAt);
+    if (!Number.isFinite(suppliedCapture) || suppliedCapture > now + 1000 || now - suppliedCapture > this.noFramesMs) {
+      session.metrics.droppedSamples += 1; this.metrics.droppedSamples += 1;
+      return;
+    }
     session.connected = true; session.streamState = "STREAMING"; session.gatewayHealth = "HEALTHY";
     session.lastFrameAt = new Date(now).toISOString(); session.metrics.frames += 1;
     session.frameTimes.push(now); session.frameTimes = session.frameTimes.filter((value) => now - value <= 5_000);
@@ -223,6 +230,10 @@ class MediaGateway extends EventEmitter {
   }
 
   async processSample(session, sample) {
+    if (session.stopped || this.clock() - Date.parse(sample.capturedAt) > this.noFramesMs) {
+      session.metrics.droppedSamples += 1; this.metrics.droppedSamples += 1;
+      return;
+    }
     if (session.camera.aiEnabled === false || typeof this.analyzeFrame !== "function") {
       session.aiState = session.camera.aiEnabled === false ? "AI_DISABLED" : "AI_UNAVAILABLE";
       await this.publish(session, session.aiState === "AI_UNAVAILABLE" ? "ai_service_unavailable" : "camera_health_updated", true);
@@ -239,6 +250,12 @@ class MediaGateway extends EventEmitter {
         imageBase64: `data:image/jpeg;base64,${sample.frameBuffer.toString("base64")}`
       };
       const result = await withTimeout(this.analyzeFrame(payload, session.camera), this.aiTimeoutMs);
+      // Inference may have completed after the frame aged out or the stream was stopped.
+      if (session.stopped || this.clock() - Date.parse(sample.capturedAt) > this.noFramesMs) {
+        session.metrics.droppedSamples += 1; this.metrics.droppedSamples += 1;
+        if (!session.stopped) { session.aiState = "AI_READY"; await this.publish(session); }
+        return;
+      }
       if (result?.serviceError) {
         session.aiState = /timed?\s*out/i.test(result.serviceError) ? "AI_TIMEOUT" : "AI_UNAVAILABLE";
         if (session.aiState === "AI_TIMEOUT") { session.metrics.aiTimeouts += 1; this.metrics.aiTimeouts += 1; }

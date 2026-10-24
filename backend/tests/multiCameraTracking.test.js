@@ -1,3 +1,5 @@
+require("../services/testDatabaseSafety").prepareIntegrationTestEnvironment();
+
 const trackingService = require("../services/multiCameraTracking.service");
 const { readDatabase } = require("../services/core.service");
 const { query, withTransaction } = require("../services/postgres.service");

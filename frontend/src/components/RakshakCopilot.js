@@ -15,6 +15,39 @@ function storedLanguage() { try { const value = window.localStorage.getItem(COPI
 function relativeFreshness(value, locale) { const elapsed = Date.now() - Date.parse(value || ""); if (!Number.isFinite(elapsed)) return locale.unavailable; if (elapsed < 60_000) return locale.justNow; if (elapsed < 3_600_000) return locale.minutesAgo(Math.floor(elapsed / 60_000)); return locale.hoursAgo(Math.floor(elapsed / 3_600_000)); }
 function sourceName(source) { const type = ({ incident: "Incident", investigation: "Investigation", camera: "Camera", response_unit: "Unit", unit: "Unit", officer: "Officer", track: "Tracking" })[source.type] || titleCase(source.type); return `${type} ${source.id}`; }
 
+async function loadConversationHistory(convId) {
+  if (!convId) return [];
+  try {
+    const response = await api(`/api/copilot/history?conversationId=${encodeURIComponent(convId)}`, { method: "GET" });
+    return response.messages || [];
+  } catch {
+    return [];
+  }
+}
+
+function renderHistoryMessage(role, text, response = {}, locale) {
+  const article = el("article", `copilot-message ${role}`);
+  article.append(el("strong", "copilot-message-role", role === "user" ? locale.you : locale.assistant), el("p", "copilot-message-text", text));
+  if (role === "assistant" && response.sources?.length) {
+    const box = el("div", "copilot-source-box");
+    box.append(el("span", "copilot-source-label", response.sources.length > 1 ? locale.sources : locale.source));
+    response.sources.forEach((source) => {
+      const row = el("div", "copilot-source-row");
+      row.append(el("strong", "", sourceName(source)), el("small", "", `${locale.updated}: ${relativeFreshness(source.updatedAt, locale)}`));
+      box.append(row);
+    });
+    article.append(box);
+  }
+  if (role === "assistant" && response.navigation?.view) {
+    const button = el("button", "copilot-navigation", locale.open);
+    button.type = "button";
+    button.setAttribute("aria-label", `${locale.open}: ${titleCase(response.navigation.view)}${response.navigation.entityId ? ` ${response.navigation.entityId}` : ""}`);
+    button.addEventListener("click", () => navigate(response.navigation));
+    article.append(button);
+  }
+  return article;
+}
+
 export function mountCopilot() {
   if (mounted || document.getElementById("rakshakCopilot")) return;
   mounted = true;
@@ -49,12 +82,23 @@ export function mountCopilot() {
   };
   const navigate = ({ view, entityId }) => { const nav = [...document.querySelectorAll(".nav-item")].find((button) => button.dataset.view === view && !button.hidden); if (nav) { if (entityId) document.body.dataset.copilotEntityId = entityId; nav.click(); hide(); } };
   const appendMessage = (role, text, response = {}) => {
-    empty.hidden = true; const copy = locale(), article = el("article", `copilot-message ${role}`); article.append(el("strong", "copilot-message-role", role === "user" ? copy.you : copy.assistant), el("p", "copilot-message-text", text));
-    if (role === "assistant" && response.sources?.length) { const box = el("div", "copilot-source-box"); box.append(el("span", "copilot-source-label", response.sources.length > 1 ? copy.sources : copy.source)); response.sources.forEach((source) => { const row = el("div", "copilot-source-row"); row.append(el("strong", "", sourceName(source)), el("small", "", `${copy.updated}: ${relativeFreshness(source.updatedAt, copy)}`)); box.append(row); }); article.append(box); }
-    if (role === "assistant" && response.navigation?.view) { const button = el("button", "copilot-navigation", copy.open); button.type = "button"; button.setAttribute("aria-label", `${copy.open}: ${titleCase(response.navigation.view)}${response.navigation.entityId ? ` ${response.navigation.entityId}` : ""}`); button.addEventListener("click", () => navigate(response.navigation)); article.append(button); }
-    messages.append(article); messages.scrollTop = messages.scrollHeight;
+    empty.hidden = true; const copy = locale(); messages.append(renderHistoryMessage(role, text, response, copy)); messages.scrollTop = messages.scrollHeight;
   };
   const appendError = (query) => { empty.hidden = true; const copy = locale(), article = el("article", "copilot-message system-error"); article.append(el("strong", "copilot-message-role", copy.assistant), el("p", "copilot-message-text", copy.error)); const retry = el("button", "copilot-retry", copy.retry); retry.type = "button"; retry.addEventListener("click", () => submitQuery(query, false)); article.append(retry); messages.append(article); messages.scrollTop = messages.scrollHeight; };
+
+  const loadAndRenderHistory = async () => {
+    if (!conversationId) return;
+    const history = await loadConversationHistory(conversationId);
+    if (history.length) {
+      empty.hidden = true;
+      const copy = locale();
+      for (const msg of history) {
+        const response = msg.metadata || {};
+        messages.append(renderHistoryMessage(msg.role, msg.content, response, copy));
+      }
+      messages.scrollTop = messages.scrollHeight;
+    }
+  };
 
   const clamp = ({ left, top }) => { const margin = 10, size = launcher.getBoundingClientRect().width || 58; return { left: Math.min(Math.max(margin, Number(left) || margin), Math.max(margin, window.innerWidth - size - margin)), top: Math.min(Math.max(margin, Number(top) || margin), Math.max(margin, window.innerHeight - size - margin)) }; };
   const position = (value, save = false) => { const next = clamp(value); launcher.style.left = `${next.left}px`; launcher.style.top = `${next.top}px`; launcher.style.right = "auto"; launcher.style.bottom = "auto"; if (save) try { window.localStorage.setItem(POSITION_KEY, JSON.stringify(next)); } catch {} };
@@ -67,7 +111,7 @@ export function mountCopilot() {
     } else if (launcher.parentElement !== root) root.prepend(launcher);
   };
   const hide = () => { drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); backdrop.hidden = true; launcher.setAttribute("aria-expanded", "false"); (previousFocus?.isConnected ? previousFocus : launcher).focus(); };
-  const open = () => { previousFocus = document.activeElement; applyLocale(); drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false; launcher.setAttribute("aria-expanded", "true"); input.focus(); };
+  const open = async () => { previousFocus = document.activeElement; applyLocale(); drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false; launcher.setAttribute("aria-expanded", "true"); await loadAndRenderHistory(); input.focus(); };
   openMountedCopilot = open;
 
   const submitQuery = async (message, showUser = true) => {

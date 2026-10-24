@@ -6,6 +6,8 @@ const {
   approveDispatchRequest,
   createUnitRequest,
   acceptUnitRequest,
+  createErssEvent,
+  updateErssEvent,
   determineJurisdiction,
   calculateUnitRecommendations,
   TRIAGE_STATUS_BY_ACTION
@@ -37,6 +39,25 @@ function erssFixture() {
   db.erssTriage = [];
   return { db, actor, unit, event: db.erssEvents[0] };
 }
+
+test("ERSS location confidence only accepts high, medium, low and stores lowercase", async () => {
+  const { db, actor } = erssFixture();
+  for (const invalid of [0.9, "0.95", 1, "CERTAIN", "unknown"]) {
+    await assert.rejects(
+      createErssEvent(db, { channel: "VOICE_CALL", incidentLatitude: 17.5, incidentLongitude: 78.26, incidentLocationText: "x", locationConfidence: invalid }, actor),
+      /location confidence/i
+    );
+  }
+  const event = await createErssEvent(db, { channel: "VOICE_CALL", incidentLatitude: 17.5, incidentLongitude: 78.26, incidentLocationText: "x", locationConfidence: "HIGH" }, actor);
+  assert.equal(event.locationConfidence, "high");
+  db.erssEvents.push(event);
+  const medium = await createErssEvent(db, { channel: "VOICE_CALL", incidentLatitude: 17.5, incidentLongitude: 78.26, incidentLocationText: "y", locationConfidence: "Medium" }, actor);
+  assert.equal(medium.locationConfidence, "medium");
+  await updateErssEvent(db, event.id, { locationConfidence: "LOW" }, actor);
+  assert.equal(event.locationConfidence, "low");
+  await assert.rejects(updateErssEvent(db, event.id, { locationConfidence: 0.9 }, actor), /location confidence/i);
+  assert.equal(event.locationConfidence, "low");
+});
 
 test("ERSS dispatch creates one canonical incident and never writes an ERSS id into a response unit FK", async () => {
   const { db, actor, unit, event } = erssFixture();

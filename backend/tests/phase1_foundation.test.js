@@ -1,4 +1,6 @@
-﻿const test = require("node:test");
+﻿require("../services/testDatabaseSafety").prepareIntegrationTestEnvironment();
+
+const test = require("node:test");
 const assert = require("node:assert/strict");
 const { after } = require("node:test");
 const { query, withTransaction, getPool, closePool } = require("../services/postgres.service");

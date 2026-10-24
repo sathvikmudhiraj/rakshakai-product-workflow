@@ -114,6 +114,7 @@ export function mountNotificationCenter({ navigate, openCopilot, showCopilot = t
   let drag = null;
   let suppressClick = false;
   const mobileDock = window.matchMedia?.("(max-width: 1120px)") || { matches: false, addEventListener() {}, removeEventListener() {} };
+  let viewState = "list";
 
   const updateBadge = (unread) => {
     const value = Math.max(0, Number(unread) || 0);
@@ -122,8 +123,25 @@ export function mountNotificationCenter({ navigate, openCopilot, showCopilot = t
     launcher.setAttribute("aria-label", value ? `Open Notification Center, ${value} unread` : "Open Notification Center");
   };
 
+  const setView = (nextView) => {
+    viewState = nextView;
+    if (nextView === "list") {
+      list.hidden = false;
+      list.removeAttribute("aria-hidden");
+      detail.hidden = true;
+      detail.setAttribute("aria-hidden", "true");
+      status.textContent = "";
+    } else {
+      list.hidden = true;
+      list.setAttribute("aria-hidden", "true");
+      detail.hidden = false;
+      detail.removeAttribute("aria-hidden");
+    }
+  };
+
   const renderList = () => {
-    detail.hidden = true; list.hidden = false; list.textContent = "";
+    setView("list");
+    list.textContent = "";
     const visible = items.filter((item) => matches(item, activeFilter));
     if (!visible.length) {
       const empty = el("div", "notification-empty");
@@ -151,39 +169,43 @@ export function mountNotificationCenter({ navigate, openCopilot, showCopilot = t
     if (!quiet) { list.setAttribute("aria-busy", "true"); status.textContent = "Loading current notifications…"; }
     try {
       const response = await api("/api/notifications");
-      items = response.notifications || []; updateBadge(response.unreadCount); renderList(); status.textContent = "";
+      items = response.notifications || []; updateBadge(response.unreadCount); if (viewState === "list") renderList();
     } catch (error) { status.textContent = error.message; }
-    finally { list.setAttribute("aria-busy", "false"); }
+    finally { list.setAttribute("aria-busy", "false"); if (!quiet) status.textContent = ""; }
   };
 
   const setRead = async (item, read) => {
     try {
       const response = await api(`/api/notifications/${encodeURIComponent(item.id)}/read`, { method: "PATCH", body: { read } });
       item.read = response.notification.read; item.readAt = response.notification.readAt;
-      updateBadge(items.filter((entry) => !entry.read).length); renderList();
+      updateBadge(items.filter((entry) => !entry.read).length); if (viewState === "list") renderList();
     } catch (error) { status.textContent = error.message; }
   };
 
-  const openRelated = async (item) => {
+  const openRelated = async (item, record) => {
     try { await api(`/api/notifications/${encodeURIComponent(item.id)}/opened`, { method: "POST" }); } catch {}
-    const view = ({ incident: "incident-command", report: "missing", camera: "cctv", ai_observation: "cctv", tracking_session: "multi-camera-tracking", tracking_candidate: "multi-camera-tracking", evidence: "video-evidence" })[item.entityType];
-    if (view && typeof navigate === "function") { navigate({ view, entityType: item.entityType, entityId: item.entityId }); hide(); }
+    const evidenceObservation = item.entityType === "ai_observation" && record?.sourceType === "evidence_image";
+    const view = evidenceObservation ? "video-evidence" : ({ incident: "incident-command", report: "missing", camera: "cctv", ai_observation: "cctv", tracking_session: "multi-camera-tracking", tracking_candidate: "multi-camera-tracking", evidence: "video-evidence" })[item.entityType];
+    if (view && typeof navigate === "function") { navigate({ view, entityType: item.entityType, entityId: item.entityId, evidenceId: evidenceObservation ? record.evidenceId : null }); hide(); }
   };
 
   const showDetails = async (item) => {
-    list.hidden = true; detail.hidden = false; detail.textContent = "";
+    setView("detail");
+    detail.textContent = "";
     const back = el("button", "notification-back", "← Back to Notifications"); back.type = "button"; back.addEventListener("click", renderList);
-    detail.append(back, el("p", "notification-detail-loading", "Loading latest authorized record…"));
+    const loading = el("p", "notification-detail-loading", "Loading latest authorized record…");
+    detail.append(back, loading);
     try {
       if (!item.read) await setRead(item, true);
       const response = await api(`/api/notifications/${encodeURIComponent(item.id)}/details`);
+      if (viewState !== "detail") return;
       detail.textContent = ""; detail.append(back);
       const head = el("div", "notification-detail-head");
       const copy = el("div"); copy.append(el("span", `notification-detail-severity severity-${item.severity.toLowerCase()}`, item.severity), el("h3", "", response.detail.kind), el("p", "", `Latest record fetched ${new Date(response.fetchedAt).toLocaleTimeString()}`));
-      const open = el("button", "notification-open-related", "Open Related Module"); open.type = "button"; open.addEventListener("click", () => openRelated(item));
+      const open = el("button", "notification-open-related", "Open Related Module"); open.type = "button"; open.addEventListener("click", () => openRelated(item, response.detail.record));
       head.append(copy, open); detail.append(head);
       Object.entries(response.detail).filter(([key]) => key !== "kind").forEach(([key, value]) => detail.append(detailNode(value, key)));
-    } catch (error) { detail.querySelector(".notification-detail-loading").textContent = error.message; }
+    } catch (error) { if (viewState === "detail") { detail.textContent = ""; detail.append(back, el("p", "notification-detail-loading", error.message)); } }
   };
 
   FILTERS.forEach((filter) => {

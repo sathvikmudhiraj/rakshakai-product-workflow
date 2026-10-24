@@ -177,7 +177,7 @@ ON CONFLICT (station_code) DO UPDATE SET
 
 -- 2. Migrate beats from response_units data
 INSERT INTO police_beats (id, station_id, beat_code, name, description, jurisdiction, latitude, longitude, operational, created_at, updated_at)
-SELECT DISTINCT
+SELECT DISTINCT ON (ps.id, TRIM(beat_data))
     COALESCE('beat_' || md5(concat(ps.id, beat_data)), 'beat_' || md5(beat_data)) as id,
     ps.id as station_id,
     TRIM(beat_data) as beat_code,
@@ -204,6 +204,7 @@ FROM (
 ) beats_data
 JOIN police_stations ps ON ps.station_code = beats_data.station_id_val OR ps.id = beats_data.station_id_val OR ps.name = beats_data.station_data->>'stationName'
 WHERE beat_data IS NOT NULL AND TRIM(beat_data) <> ''
+ORDER BY ps.id, TRIM(beat_data), COALESCE(station_data->>'updatedAt', station_data->>'updated_at', '') DESC, station_data::text
 ON CONFLICT (station_id, beat_code) DO UPDATE SET
     name = EXCLUDED.name,
     jurisdiction = EXCLUDED.jurisdiction,
@@ -214,7 +215,7 @@ ON CONFLICT (station_id, beat_code) DO UPDATE SET
 
 -- 2b. Migrate beats from users data (Police Officers)
 INSERT INTO police_beats (id, station_id, beat_code, name, description, jurisdiction, latitude, longitude, operational, created_at, updated_at)
-SELECT DISTINCT
+SELECT DISTINCT ON (ps.id, TRIM(beat_data))
     COALESCE('beat_' || md5(concat(ps.id, beat_data)), 'beat_' || md5(beat_data)) as id,
     ps.id as station_id,
     TRIM(beat_data) as beat_code,
@@ -241,6 +242,7 @@ FROM (
 ) beats_data
 JOIN police_stations ps ON ps.station_code = beats_data.station_id_val OR ps.id = beats_data.station_id_val OR ps.name = beats_data.station_data->>'stationName'
 WHERE beat_data IS NOT NULL AND TRIM(beat_data) <> ''
+ORDER BY ps.id, TRIM(beat_data), COALESCE(station_data->>'updatedAt', station_data->>'updated_at', '') DESC, station_data::text
 ON CONFLICT (station_id, beat_code) DO UPDATE SET
     name = EXCLUDED.name,
     jurisdiction = EXCLUDED.jurisdiction,
@@ -251,7 +253,7 @@ ON CONFLICT (station_id, beat_code) DO UPDATE SET
 
 -- 2c. Migrate beats from response_units linkedStationId
 INSERT INTO police_beats (id, station_id, beat_code, name, description, jurisdiction, latitude, longitude, operational, created_at, updated_at)
-SELECT DISTINCT
+SELECT DISTINCT ON (ps.id, TRIM(beat_data))
     COALESCE('beat_' || md5(concat(ps.id, beat_data)), 'beat_' || md5(beat_data)) as id,
     ps.id as station_id,
     TRIM(beat_data) as beat_code,
@@ -278,6 +280,7 @@ FROM (
 ) beats_data
 JOIN police_stations ps ON ps.station_code = beats_data.station_id_val OR ps.id = beats_data.station_id_val OR ps.name = beats_data.station_data->>'stationName'
 WHERE beat_data IS NOT NULL AND TRIM(beat_data) <> ''
+ORDER BY ps.id, TRIM(beat_data), COALESCE(station_data->>'updatedAt', station_data->>'updated_at', '') DESC, station_data::text
 ON CONFLICT (station_id, beat_code) DO UPDATE SET
     name = EXCLUDED.name,
     jurisdiction = EXCLUDED.jurisdiction,
@@ -288,7 +291,7 @@ ON CONFLICT (station_id, beat_code) DO UPDATE SET
 
 -- 2d. Migrate beats from app_state policeStations
 INSERT INTO police_beats (id, station_id, beat_code, name, description, jurisdiction, latitude, longitude, operational, created_at, updated_at)
-SELECT DISTINCT
+SELECT DISTINCT ON (ps.id, TRIM(beat_data))
     COALESCE('beat_' || md5(concat(ps.id, beat_data)), 'beat_' || md5(beat_data)) as id,
     ps.id as station_id,
     TRIM(beat_data) as beat_code,
@@ -315,6 +318,7 @@ FROM (
 ) beats_data
 JOIN police_stations ps ON ps.station_code = beats_data.station_id_val OR ps.id = beats_data.station_id_val OR ps.name = beats_data.station_data->>'stationName'
 WHERE beat_data IS NOT NULL AND TRIM(beat_data) <> ''
+ORDER BY ps.id, TRIM(beat_data), COALESCE(station_data->>'updatedAt', station_data->>'updated_at', '') DESC, station_data::text
 ON CONFLICT (station_id, beat_code) DO UPDATE SET
     name = EXCLUDED.name,
     jurisdiction = EXCLUDED.jurisdiction,
@@ -323,9 +327,53 @@ ON CONFLICT (station_id, beat_code) DO UPDATE SET
     operational = EXCLUDED.operational,
     updated_at = EXCLUDED.updated_at;
 
+-- 2e. Backfill legacy police_officers rows that pre-date the normalized
+-- station model (station_id IS NULL). Relationships are derived strictly from
+-- each officer's own legacy JSONB data matched against the canonical station
+-- registry above; no station is invented or randomly assigned. Rerunnable.
+UPDATE police_officers po
+SET
+    station_id = linked.station_id,
+    beat_id = COALESCE(po.beat_id, linked.beat_id),
+    rank_id = COALESCE(po.rank_id, linked.rank_id),
+    updated_at = NOW()
+FROM (
+    SELECT DISTINCT ON (u.id)
+        u.id as user_id,
+        ps.id as station_id,
+        pb.id as beat_id,
+        COALESCE(orank.id, 'rank_si') as rank_id
+    FROM users u
+    JOIN police_stations ps
+        ON ps.station_code = u.data->>'stationId'
+        OR ps.id = u.data->>'stationId'
+        OR ps.name = u.data->>'stationName'
+        OR ps.name = u.data->>'station'
+    LEFT JOIN police_beats pb
+        ON pb.station_id = ps.id
+        AND pb.beat_code = TRIM(u.data->>'beat')
+    LEFT JOIN officer_ranks orank
+        ON orank.code = u.data->>'rank'
+    WHERE u.role = 'Police Officer'
+    ORDER BY u.id,
+        CASE
+            WHEN ps.station_code = u.data->>'stationId' THEN 0
+            WHEN ps.id = u.data->>'stationId' THEN 1
+            ELSE 2
+        END,
+        ps.station_code
+) linked
+WHERE po.user_id = linked.user_id
+  AND po.station_id IS NULL;
+
 -- 3. Migrate police_officers from users with role 'Police Officer'
+-- The base schema enforces NOT NULL on police_officers.station_id, so officers
+-- whose legacy data does not resolve to a known station are skipped instead of
+-- being inserted with a fabricated station; their profile is created later by
+-- the admin assignment workflow. DISTINCT ON keeps one canonical station
+-- mapping per officer when legacy references are ambiguous.
 INSERT INTO police_officers (user_id, badge_id, station_id, beat_id, rank_id, beat, jurisdiction, active, created_at, updated_at)
-SELECT
+SELECT DISTINCT ON (u.id)
     u.id as user_id,
     u.data->>'badgeId' as badge_id,
     ps.id as station_id,
@@ -337,7 +385,7 @@ SELECT
     COALESCE((u.data->>'createdAt')::timestamptz, u.created_at, NOW()) as created_at,
     NOW() as updated_at
 FROM users u
-LEFT JOIN police_stations ps
+JOIN police_stations ps
     ON ps.station_code = u.data->>'stationId'
     OR ps.id = u.data->>'stationId'
     OR ps.name = u.data->>'stationName'
@@ -348,9 +396,19 @@ LEFT JOIN police_beats pb
 LEFT JOIN officer_ranks orank
     ON orank.code = u.data->>'rank'
 WHERE u.role = 'Police Officer'
+ORDER BY u.id,
+    CASE
+        WHEN ps.station_code = u.data->>'stationId' THEN 0
+        WHEN ps.id = u.data->>'stationId' THEN 1
+        ELSE 2
+    END,
+    ps.station_code
 ON CONFLICT (user_id) DO UPDATE SET
     badge_id = EXCLUDED.badge_id,
-    station_id = EXCLUDED.station_id,
+    -- Preserve an already-established station relationship on reruns; it can
+    -- only be NULL if this row pre-dates the NOT NULL constraint, in which case
+    -- the 2e backfill above has already resolved it where data supported it.
+    station_id = COALESCE(police_officers.station_id, EXCLUDED.station_id),
     beat_id = EXCLUDED.beat_id,
     rank_id = EXCLUDED.rank_id,
     beat = EXCLUDED.beat,
@@ -382,3 +440,23 @@ FROM (
     WHERE ru.station_id IS NULL OR ru.beat_id IS NULL
 ) sub
 WHERE response_units.id = sub.ru_id;
+
+-- 5. Re-assert the NOT NULL constraint on police_officers.station_id for
+-- legacy databases upgraded from schemas where the column was still nullable.
+-- It runs only after the 2e backfill resolved every legacy row and is skipped
+-- (without failing) if an unresolvable row remains, so historical data is
+-- never deleted or force-assigned just to satisfy the constraint.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM police_officers WHERE station_id IS NULL) THEN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'police_officers'
+              AND column_name = 'station_id'
+              AND is_nullable = 'YES'
+        ) THEN
+            ALTER TABLE police_officers ALTER COLUMN station_id SET NOT NULL;
+        END IF;
+    END IF;
+END $$;

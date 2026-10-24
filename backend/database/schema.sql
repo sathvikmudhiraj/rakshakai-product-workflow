@@ -189,7 +189,70 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Copilot chat history persistence
+CREATE TABLE IF NOT EXISTS copilot_conversations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  language TEXT NOT NULL DEFAULT 'en',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS copilot_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES copilot_conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_copilot_conversations_user_id ON copilot_conversations(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_copilot_messages_conversation_id ON copilot_messages(conversation_id, created_at ASC);
+
+CREATE OR REPLACE FUNCTION enforce_copilot_message_limit()
+RETURNS TRIGGER AS $$
+DECLARE
+  message_count INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO message_count
+  FROM copilot_messages
+  WHERE conversation_id = NEW.conversation_id;
+  
+  IF message_count >= 100 THEN
+    DELETE FROM copilot_messages
+    WHERE conversation_id = NEW.conversation_id
+    AND id IN (
+      SELECT id FROM copilot_messages
+      WHERE conversation_id = NEW.conversation_id
+      ORDER BY created_at ASC
+      LIMIT message_count - 99
+    );
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS copilot_messages_limit ON copilot_messages;
+CREATE TRIGGER copilot_messages_limit
+BEFORE INSERT ON copilot_messages
+FOR EACH ROW EXECUTE FUNCTION enforce_copilot_message_limit();
+
 -- Foreign key constraints (added after all tables exist, idempotent)
+-- Legacy installations already have response_units, so CREATE TABLE IF NOT
+-- EXISTS does not add the columns required by the constraints/indexes below.
+ALTER TABLE response_units
+    ADD COLUMN IF NOT EXISTS station_id TEXT,
+    ADD COLUMN IF NOT EXISTS beat_id TEXT,
+    ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
+    ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180),
+    ADD COLUMN IF NOT EXISTS location_accuracy DOUBLE PRECISION CHECK (location_accuracy IS NULL OR location_accuracy >= 0),
+    ADD COLUMN IF NOT EXISTS location_captured_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS location_received_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS location_source TEXT;
+
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_alerts_incident_id') THEN
         ALTER TABLE alerts

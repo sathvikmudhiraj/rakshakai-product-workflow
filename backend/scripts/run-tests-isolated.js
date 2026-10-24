@@ -2,10 +2,8 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const dotenv = require("dotenv");
 const { Pool } = require("pg");
-
-dotenv.config({ path: path.join(__dirname, "..", ".env"), quiet: true });
+const { assertSafeTestDatabase } = require("../services/testDatabaseSafety");
 
 async function main() {
   const requestedFiles = process.argv.slice(2);
@@ -16,24 +14,21 @@ async function main() {
       .sort()
       .map((file) => path.join("tests", file));
 
-  if (!process.env.DATABASE_URL) {
+  if (!process.env.TEST_DATABASE_URL) {
+    if (process.env.DATABASE_URL) throw new Error("Set explicit TEST_DATABASE_URL; DATABASE_URL is not a test target");
     const child = spawnSync(process.execPath, ["--test", "--test-concurrency=1", ...testFiles], {
-      cwd: path.join(__dirname, ".."), env: process.env, stdio: "inherit"
+      cwd: path.join(__dirname, ".."), env: { ...process.env, NODE_ENV: "test", DATABASE_URL: "" }, stdio: "inherit"
     });
     process.exitCode = child.status ?? 1;
     return;
   }
 
+  const baseUrl = assertSafeTestDatabase(process.env);
   const schema = `rakshakai_test_${process.pid}_${crypto.randomBytes(5).toString("hex")}`;
-  const baseUrl = new URL(process.env.DATABASE_URL);
-  // Neon pooled endpoints reject the startup search_path option. Test isolation
-  // requires a session-scoped schema, so use the matching direct endpoint.
-  if (baseUrl.hostname.includes("-pooler.")) {
-    baseUrl.hostname = baseUrl.hostname.replace("-pooler.", ".");
-  }
   const isLocal = ["localhost", "127.0.0.1", "[::1]", "postgres"].includes(baseUrl.hostname);
   const sslMode = String(process.env.PG_SSL_MODE || baseUrl.searchParams.get("sslmode") || (isLocal ? "disable" : "verify-full")).toLowerCase();
   for (const key of ["sslmode", "ssl", "uselibpqcompat", "options"]) baseUrl.searchParams.delete(key);
+  process.env.TEST_DATABASE_URL = baseUrl.toString();
   const poolOptions = {
     connectionString: baseUrl.toString(),
     ssl: sslMode === "disable" ? false : { rejectUnauthorized: true }

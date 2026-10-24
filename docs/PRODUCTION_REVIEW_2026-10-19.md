@@ -31,6 +31,16 @@ This is a code and automated-test review, not an independent penetration test.
 
 ## Verification
 
+**2026-10-20 follow-up:** the latest local release suite passed all 45 browser
+scenarios and all 14 container integration tests. TLS and two-replica synthetic
+load checks passed. The Python 3.11 image now builds, passes 17 tests and a CPU
+inference smoke test, and has a clean installed-package advisory scan after
+pinning setuptools 83.0.0. CCTNS refresh/debounce interaction defects were fixed
+with regressions. See [the final local verification record](LOCAL_RELEASE_VERIFICATION_2026-10-19.md)
+for evidence and limitations. This supersedes the older unverified local gates
+below; it does not close external deployment/identity/AI acceptance gates.
+Deployment remains paused at the user's request. Nothing was committed or pushed.
+
 | Check | Result |
 | --- | --- |
 | `npm test` | PASS after identity remediation: 438 backend tests and 81 frontend tests; backend runner used an isolated PostgreSQL schema. |
@@ -48,6 +58,42 @@ This is a code and automated-test review, not an independent penetration test.
 | GitHub checks and branch protection | NOT VERIFIED against a newly pushed revision. Workflow configuration alone does not prove remote branch policy. |
 
 ## Remaining launch blockers
+
+### Latest local remediation and verification
+
+Officer account edits no longer replace the officer's entire unit-membership
+list. Name/email and unchanged-unit edits preserve memberships, roles and
+assignment timestamps. An explicit primary-unit change removes only that
+membership; secondary assignments and other officers remain untouched.
+Conflicting station/unit changes are rejected. Ten API regression cases cover
+these paths, including invalid updates without persisted changes.
+
+The release browser check also caught a mobile GIS header overlap. The mobile
+GIS header now uses normal document flow; other pages retain measured sticky
+banner offsets. Frontend layout regression coverage preserves both behaviors.
+
+Latest observed results (these supersede the older counts above):
+
+- Backend suite: 467 passed, zero failures. The AI-auth test's general timeout
+  was separated from its dedicated 500 ms timeout regression; production timeout
+  behavior is unchanged.
+- Frontend suite: 87 passed, zero failures.
+- Critical-banner/Copilot browser checks: all five viewport sizes passed,
+  including 390x844.
+- Syntax check: 223 files passed. Frontend build and diff whitespace check passed.
+- Container release integration: 14 tests passed. The first browser matrix
+  stopped on the mobile GIS defect above. The rerun was interrupted; no complete
+  Chromium/Firefox/WebKit release pass is claimed.
+- Paired PostgreSQL/evidence recovery drill passed in disposable containers,
+  including checksum/preview verification. Restore plus verification took about
+  32 seconds for this small fixture, not a production RTO measurement.
+- The load/TLS run did not yield a confirmed final result before the session
+  was interrupted. Docker's engine was unavailable on resuming; these gates
+  remain unverified, not passed.
+
+No production records, tenant configuration, deployment resources, commits or
+pushes were changed by this remediation. The launch blockers below still apply;
+local recovery evidence does not establish production-scale recovery acceptance.
 
 1. **Release evidence:** obtain a healthy Docker environment and pass the complete
    browser matrix, TLS, backup/recovery and operational-load suites. Build the

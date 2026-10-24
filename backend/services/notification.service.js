@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { getDatabaseMode, query } = require("./postgres.service");
-const { writeDb } = require("./core.service");
+const { writeDb, canAccessVideoEvidence } = require("./core.service");
 
 const OPERATOR_ROLES = ["Admin", "Police Officer"];
 const CLOSED_INCIDENT_STATES = new Set(["closed", "resolved", "rejected / false alarm"]);
@@ -112,7 +112,7 @@ function deriveNotifications(db) {
     notifications.push(record({
       dedupeKey: `ai_observation_review:${observation.id}`,
       type: "ai_observation_review", title: "Review Required",
-      message: `${observation.cameraName || observation.cameraId} has an AI observation pending human review.`,
+      message: observation.sourceType === "evidence_image" ? `Evidence ${observation.evidenceId} has an AI observation pending human review.` : `${observation.cameraName || observation.cameraId} has an AI observation pending human review.`,
       severity: "MEDIUM", entityType: "ai_observation", entityId: observation.id,
       createdAt: observation.createdAt || observation.capturedAt, source: "AI Observation Review"
     }));
@@ -210,6 +210,16 @@ async function syncNotifications(db) {
 
 function canSeeNotification(item, user, db) {
   if (!(item.recipientRoles || OPERATOR_ROLES).includes(user.role)) return false;
+  if (item.entityType === "evidence") {
+    return canAccessVideoEvidence(db, user, (db.videoEvidence || []).find((entry) => entry.id === item.entityId));
+  }
+  if (item.entityType === "ai_observation") {
+    const observation = (db.aiObservations || []).find((entry) => entry.id === item.entityId);
+    if (!observation) return false;
+    if (observation.sourceType === "evidence_image") {
+      return canAccessVideoEvidence(db, user, (db.videoEvidence || []).find((entry) => entry.id === observation.evidenceId));
+    }
+  }
   if (user.role !== "Citizen") return true;
   if (item.entityType !== "report") return false;
   const report = (db.reports || []).find((entry) => entry.id === item.entityId);
@@ -339,7 +349,7 @@ function observationDetail(db, id) {
   return deepSafe({
     kind: "AI Observation",
     record: {
-      id: observation.id, cameraId: observation.cameraId, cameraName: observation.cameraName,
+      id: observation.id, sourceType: observation.sourceType, evidenceId: observation.evidenceId, cameraId: observation.cameraId, cameraName: observation.cameraName,
       zone: observation.zone, capturedAt: observation.capturedAt, processedAt: observation.processedAt,
       status: observation.status, detections: observation.detections, reason: observation.reason,
       advisory: true, humanVerificationRequired: observation.humanVerificationRequired,
@@ -363,10 +373,12 @@ async function authoritativeDetail(db, user, notification) {
   }
   if (notification.entityType === "evidence") {
     if (!OPERATOR_ROLES.includes(user.role)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
+    if (!canSeeNotification(notification, user, db)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
     return evidenceDetail(db, notification.entityId);
   }
   if (notification.entityType === "ai_observation") {
     if (!OPERATOR_ROLES.includes(user.role)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
+    if (!canSeeNotification(notification, user, db)) throw Object.assign(new Error("You do not have permission for this record"), { status: 403 });
     return observationDetail(db, notification.entityId);
   }
   throw Object.assign(new Error("Linked record type is not supported"), { status: 404 });

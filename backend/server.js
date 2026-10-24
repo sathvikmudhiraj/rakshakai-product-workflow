@@ -123,10 +123,11 @@ function initializeSocketIO(httpServer) {
   httpServer.once("close", () => {
     for (const [event, handler] of gatewayHandlers) realtimeEvents.off(event, handler);
   });
-  const assignmentEvents = ["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed"];
+  const assignmentEvents = ["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed", "incident_officer_assignment_changed"];
   const assignmentHandlers = new Map(assignmentEvents.map((event) => [event, (payload) => {
     broadcastToAllDashboards(event, payload);
-    if (payload?.incident?.id) emitToIncidentRoom(payload.incident.id, event, payload);
+    const incidentId = payload?.incident?.id || payload?.incidentId;
+    if (incidentId) emitToIncidentRoom(incidentId, event, payload);
   }]));
   for (const [event, handler] of assignmentHandlers) realtimeEvents.on(event, handler);
   httpServer.once("close", () => {
@@ -500,6 +501,61 @@ function straightLineRoute(start, destination, warning = routeUnavailableWarning
   return approximateRouteResponse(start, destination, warning);
 }
 
+const ROAD_SNAP_MAX_METERS = (() => {
+  const value = Number(process.env.MAP_SNAP_MAX_METERS);
+  return Number.isFinite(value) && value > 0 ? value : 150;
+})();
+
+function snapUnavailable(reason, message) {
+  return { available: false, reason, error: message };
+}
+
+async function snapPointToRoad(point, requestId = "no-request-id") {
+  let routingConfig;
+  try {
+    routingConfig = resolveOsrmBaseUrl();
+  } catch (error) {
+    gisHealth.routing = { ...gisHealth.routing, configured: false, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
+    return snapUnavailable("service_unavailable", "Road snap is unavailable because the routing service is offline.");
+  }
+  const url = `${routingConfig.baseUrl.replace(/\/$/, "")}/nearest/v1/driving/${point.lng},${point.lat}?number=1`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), routeTimeoutMs());
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Routing service returned HTTP ${response.status}`);
+    const data = await response.json();
+    if (data?.code !== "Ok") throw new Error(`Routing service responded ${data?.code || "unsuccessfully"}`);
+    const tracepoint = (Array.isArray(data.waypoints) ? data.waypoints[0] : null)
+      ?? (Array.isArray(data.tracepoints) ? data.tracepoints[0] : null);
+    const location = tracepoint?.location;
+    const snapped = validPoint({ lat: location?.[1], lng: location?.[0] });
+    if (!snapped) return snapUnavailable("no_nearby_road", "No routable road found near this location.");
+    const measuredMeters = haversineDistanceKm(point, snapped) * 1000;
+    const distanceMeters = Math.round((Number(tracepoint?.distance) >= 0 ? Number(tracepoint.distance) : measuredMeters) * 10) / 10;
+    if (distanceMeters > ROAD_SNAP_MAX_METERS) {
+      return snapUnavailable("no_nearby_road", "No routable road found near this location.");
+    }
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: true, mode: "osrm", status: "connected", lastError: null };
+    return {
+      available: true,
+      provider: "osrm",
+      requested: { lat: point.lat, lng: point.lng },
+      snapped: { lat: snapped.lat, lng: snapped.lng },
+      distanceMeters,
+      roadName: String(tracepoint?.name || "")
+    };
+  } catch (error) {
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
+    gisHealth.lastRouteError = { requestId, message: error.message, timestamp: new Date().toISOString() };
+    console.warn(`[GIS ${requestId}] Snap error: ${error.message}`);
+    if (/No routable road/.test(error.message)) return snapUnavailable("no_nearby_road", error.message);
+    return snapUnavailable("service_unavailable", "Road snap is unavailable because the routing service is offline.");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function buildRoute(start, destination, mode = "driving", requestId = "no-request-id") {
   let routingConfig;
   try {
@@ -649,6 +705,17 @@ app.post("/api/maps/route", async (req, res, next) => {
   }
 });
 
+app.post("/api/maps/snap", async (req, res, next) => {
+  try {
+    await requireMapUser(req);
+    const point = validPoint(await readJsonBody(req));
+    if (!point) return res.status(400).json({ error: "Valid lat and lng coordinates are required" });
+    return res.json(await snapPointToRoad(point, req.requestId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/maps/health", async (req, res, next) => {
   try {
     await requireMapUser(req);
@@ -725,6 +792,9 @@ app.get("/api/video-evidence", legacyHandler("/api/video-evidence"));
 app.post("/api/video-evidence", legacyHandler("/api/video-evidence"));
 app.get("/api/video-evidence/:id/preview", legacyHandler((req) => `/api/video-evidence/${req.params.id}/preview`));
 app.post("/api/video-evidence/:id/analyze", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyze`));
+app.post("/api/video-evidence/:id/reanalyze", legacyHandler((req) => `/api/video-evidence/${req.params.id}/reanalyze`));
+app.get("/api/video-evidence/:id/analyses", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyses`));
+app.get("/api/video-evidence/:id/analyses/:analysisId", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyses/${req.params.analysisId}`));
 app.post("/api/video-observations/:id/review", legacyHandler((req) => `/api/video-observations/${req.params.id}/review`));
 app.post("/api/video-observations/:id/convert-incident", legacyHandler((req) => `/api/video-observations/${req.params.id}/convert-incident`));
 app.post("/api/browser-observations/:id/review", legacyHandler((req) => `/api/browser-observations/${req.params.id}/review`));
@@ -781,6 +851,17 @@ function validateAiServiceConfig() {
   return { url, authenticated: Boolean(apiKey), insecureDevelopment };
 }
 
+async function runStartupDataRepair() {
+  if (process.env.SKIP_STARTUP_DATA_REPAIR === "true") {
+    console.log("RakshakAI startup data repair skipped by explicit configuration.");
+    return;
+  }
+  const legacyRepairs = await repairLegacyPersistedData();
+  if (legacyRepairs.length) {
+    console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
+  }
+}
+
 async function start(listenPort = port) {
   require("./services/googleWorkspace.service").config();
   validateAiServiceConfig();
@@ -824,10 +905,7 @@ async function start(listenPort = port) {
       throw new Error("PostgreSQL schema is missing. Run: npm run migrate");
     }
   }
-  const legacyRepairs = await repairLegacyPersistedData();
-  if (legacyRepairs.length) {
-    console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
-  }
+  await runStartupDataRepair();
   return new Promise((resolve, reject) => {
     const httpServer = http.createServer(app);
     initializeSocketIO(httpServer);
@@ -912,4 +990,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig, getIO, emitToIncidentRoom, emitToDashboard, broadcastToAllDashboards, emitSlaSweepEvents };
+module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig, getIO, emitToIncidentRoom, emitToDashboard, broadcastToAllDashboards, emitSlaSweepEvents, __testables: { buildRoute } };

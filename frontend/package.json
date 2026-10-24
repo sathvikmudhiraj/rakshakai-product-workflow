@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "leaflet": "^1.9.4",
-    "vite": "^8.0.16",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "vite": "8.1.6"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"

@@ -2,7 +2,7 @@
 
 RakshakAI is split into three services:
 
-- `frontend/` - Vite UI on `http://localhost:3000`
+- `frontend/` - Vite UI on `http://localhost:3000` (Docker app on `http://localhost:3001`)
 - `backend/` - Express API on `http://localhost:5000/api`
 - `ai-service/` - FastAPI AI service on `http://127.0.0.1:8000`
 

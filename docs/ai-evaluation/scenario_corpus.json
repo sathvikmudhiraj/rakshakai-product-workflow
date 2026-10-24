@@ -1,0 +1,362 @@
+{
+  "version": 1,
+  "usage": "Evaluation-only synthetic phrases; not operational facts or YOLO training data. Human review is always required.",
+  "scenarios": [
+    {
+      "scenario_id": "missing_person",
+      "category": "missing person",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "person seen in a location"
+      ],
+      "common_user_phrases": [
+        "Someone is missing; can we review the last reported location?"
+      ],
+      "possible_operator_questions": [
+        "What has the reporter confirmed?"
+      ],
+      "suggested_module": "missing persons",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "A detection cannot identify a missing person."
+    },
+    {
+      "scenario_id": "road_incident",
+      "category": "road incident",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "vehicles stopped",
+        "person on roadway"
+      ],
+      "common_user_phrases": [
+        "Several vehicles have stopped on the road."
+      ],
+      "possible_operator_questions": [
+        "Is anyone injured and what location is confirmed?"
+      ],
+      "suggested_module": "incident command",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "A stopped vehicle does not establish a collision."
+    },
+    {
+      "scenario_id": "crowd",
+      "category": "crowd congestion",
+      "source_type": "research",
+      "source_url": "https://www.nist.gov/ctl/pscr/multi-tiered-video-analytics-abnormality-detection-and-alerting",
+      "country_or_region": "general",
+      "observable_events": [
+        "multiple people visible"
+      ],
+      "common_user_phrases": [
+        "There is a crowd gathering near the gate."
+      ],
+      "possible_operator_questions": [
+        "Can an operator verify the scene and route access?"
+      ],
+      "suggested_module": "CCTV monitoring",
+      "requires_human_verification": true,
+      "confidence": "corroborated",
+      "limitations": "Crowd formation is not established by a single-frame person detector."
+    },
+    {
+      "scenario_id": "public_disturbance",
+      "category": "public disturbance",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "multiple people moving"
+      ],
+      "common_user_phrases": [
+        "People are moving quickly near the entrance."
+      ],
+      "possible_operator_questions": [
+        "What can the operator actually observe?"
+      ],
+      "suggested_module": "incident command",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "Movement does not establish a disturbance or intent."
+    },
+    {
+      "scenario_id": "unattended_item",
+      "category": "unattended object",
+      "source_type": "community",
+      "source_url": "https://www.reddit.com/r/indianrailways/comments/1exwfqh",
+      "country_or_region": "India",
+      "observable_events": [
+        "bag visible"
+      ],
+      "common_user_phrases": [
+        "There is a bag near the entrance; can someone check it?"
+      ],
+      "possible_operator_questions": [
+        "Can a person verify whether it is unattended?"
+      ],
+      "suggested_module": "CCTV monitoring",
+      "requires_human_verification": true,
+      "confidence": "anecdotal",
+      "limitations": "Community account unverified; a bag is not evidence of danger or ownership."
+    },
+    {
+      "scenario_id": "restricted_entry",
+      "category": "restricted-zone entry",
+      "source_type": "research",
+      "source_url": "https://www.nist.gov/ctl/pscr/multi-tiered-video-analytics-abnormality-detection-and-alerting",
+      "country_or_region": "general",
+      "observable_events": [
+        "person near a boundary"
+      ],
+      "common_user_phrases": [
+        "A bike entered the restricted lane."
+      ],
+      "possible_operator_questions": [
+        "Is the zone configured and the event independently verified?"
+      ],
+      "suggested_module": "CCTV monitoring",
+      "requires_human_verification": true,
+      "confidence": "corroborated",
+      "limitations": "Current detector alone does not establish crossing or a violation."
+    },
+    {
+      "scenario_id": "vehicle_violation",
+      "category": "vehicle violation",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "vehicle visible"
+      ],
+      "common_user_phrases": [
+        "A vehicle may have entered a restricted lane."
+      ],
+      "possible_operator_questions": [
+        "Can an operator verify the road rule and footage?"
+      ],
+      "suggested_module": "CCTV monitoring",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "Object detection alone does not establish a traffic violation."
+    },
+    {
+      "scenario_id": "medical",
+      "category": "medical emergency",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "person on ground"
+      ],
+      "common_user_phrases": [
+        "Someone appears to be lying on the road."
+      ],
+      "possible_operator_questions": [
+        "Has a witness confirmed whether medical help is needed?"
+      ],
+      "suggested_module": "ERSS-112",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "Posture and medical status are not validated detector outputs."
+    },
+    {
+      "scenario_id": "fire",
+      "category": "fire or smoke report",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "reported smoke"
+      ],
+      "common_user_phrases": [
+        "There may be smoke near the building."
+      ],
+      "possible_operator_questions": [
+        "Can the report and location be verified?"
+      ],
+      "suggested_module": "ERSS-112",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "Current YOLO deployment is not validated for smoke or fire."
+    },
+    {
+      "scenario_id": "crime_report",
+      "category": "assault or theft case report",
+      "source_type": "official",
+      "source_url": "https://112.gov.in/",
+      "country_or_region": "India",
+      "observable_events": [
+        "witness report"
+      ],
+      "common_user_phrases": [
+        "A witness reports a possible theft."
+      ],
+      "possible_operator_questions": [
+        "What did the witness report, and has it been verified?"
+      ],
+      "suggested_module": "incident command",
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "limitations": "Crime is a reported case type, never an automatic visual conclusion."
+    },
+    {
+      "scenario_id": "event_queues",
+      "category": "event entrance queues",
+      "source_type": "official",
+      "source_url": "https://www.hse.gov.uk/event-safety/crowd-management-controls.htm",
+      "source_date": null,
+      "date_accessed": "2026-10-21",
+      "country_or_region": "United Kingdom",
+      "observable_events": [
+        "queues at entrances",
+        "people moving toward exits"
+      ],
+      "response_patterns": [
+        "manage queues, keep exits and emergency access clear"
+      ],
+      "common_user_phrases": [
+        "There are too many people near the entrance."
+      ],
+      "possible_visual_signals": [
+        "person count",
+        "future queue and movement assessment"
+      ],
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    },
+    {
+      "scenario_id": "event_pinch",
+      "category": "crowd bottleneck",
+      "source_type": "official",
+      "source_url": "https://www.hse.gov.uk/event-safety/crowd-management-assess.htm",
+      "source_date": null,
+      "date_accessed": "2026-10-21",
+      "country_or_region": "United Kingdom",
+      "observable_events": [
+        "people converging near a restricted passage",
+        "opposing pedestrian flows"
+      ],
+      "response_patterns": [
+        "assess venue hazards and protect evacuation routes"
+      ],
+      "common_user_phrases": [
+        "People are moving in different directions near the gate."
+      ],
+      "possible_visual_signals": [
+        "future flow and bottleneck estimation"
+      ],
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    },
+    {
+      "scenario_id": "parade_transport",
+      "category": "festival and transport-hub crowd",
+      "source_type": "official",
+      "source_url": "https://www.police.gov.sg/media-hub/news/2025/07/20250731_security_and_traffic_arrangements_for_national_day_parade_2025_preview_2",
+      "source_date": "2025-07-31",
+      "date_accessed": "2026-10-21",
+      "country_or_region": "Singapore",
+      "observable_events": [
+        "people entering or leaving transit stations",
+        "vehicles using alternative routes"
+      ],
+      "response_patterns": [
+        "manage station entry and exits; advise alternative stations and road routes"
+      ],
+      "common_user_phrases": [
+        "The station exit is crowded after the event."
+      ],
+      "possible_visual_signals": [
+        "person and vehicle detections",
+        "future flow estimation"
+      ],
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    },
+    {
+      "scenario_id": "road_collision",
+      "category": "traffic collision report",
+      "source_type": "official",
+      "source_url": "https://www.police.uk/advice/advice-and-information/rs/road-safety/collisions",
+      "source_date": null,
+      "date_accessed": "2026-10-21",
+      "country_or_region": "United Kingdom",
+      "observable_events": [
+        "vehicles on road"
+      ],
+      "response_patterns": [
+        "receive and assess collision reports"
+      ],
+      "common_user_phrases": [
+        "There may have been a road collision."
+      ],
+      "possible_visual_signals": [
+        "vehicle detections only; no collision determination"
+      ],
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    },
+    {
+      "scenario_id": "disaster_evacuation",
+      "category": "disaster evacuation",
+      "source_type": "official",
+      "source_url": "https://www.ready.gov/sites/default/files/2020-03/fema_how-to-prepare-for-hurricane.pdf",
+      "source_date": null,
+      "date_accessed": "2026-10-21",
+      "country_or_region": "United States",
+      "observable_events": [
+        "people moving along evacuation routes"
+      ],
+      "response_patterns": [
+        "follow local evacuation instructions and identify routes"
+      ],
+      "common_user_phrases": [
+        "People are moving toward the evacuation route."
+      ],
+      "possible_visual_signals": [
+        "future movement direction"
+      ],
+      "requires_human_verification": true,
+      "confidence": "authoritative",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    },
+    {
+      "scenario_id": "left_object_research",
+      "category": "left object and configured zone",
+      "source_type": "research",
+      "source_url": "https://www.nist.gov/ctl/pscr/multi-tiered-video-analytics-abnormality-detection-and-alerting",
+      "source_date": null,
+      "date_accessed": "2026-10-21",
+      "country_or_region": "United States",
+      "observable_events": [
+        "object near a boundary"
+      ],
+      "response_patterns": [
+        "integrate independently evaluated analytics with public-safety workflows"
+      ],
+      "common_user_phrases": [
+        "A bag has been left near the gate."
+      ],
+      "possible_visual_signals": [
+        "future object persistence and boundary crossing"
+      ],
+      "requires_human_verification": true,
+      "confidence": "corroborated",
+      "frequency": "NOT MEASURED",
+      "limitations": "Guidance or advisory, not a verified camera incident. Phrases are authored examples; signals are not validated event recognition."
+    }
+  ]
+}

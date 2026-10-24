@@ -45,6 +45,7 @@ function searchParams() {
 
 async function loadResults() {
   if (!dependencies || !hasOperatorAccess()) return;
+  window.clearTimeout(debounceTimer);
   const version = ++requestVersion;
   state.loading = true; state.error = ""; render();
   try {
@@ -76,7 +77,7 @@ function renderCategoryNav(container) {
   const tabs = el("div", "cctns-category-tabs", ""); tabs.setAttribute("role", "tablist"); tabs.setAttribute("aria-label", "CCTNS search category");
   CATEGORY_LABELS.forEach(([id, label]) => {
     const button = el("button", id === state.category ? "active" : "", label); button.type = "button"; button.dataset.cctnsCategory = id;
-    button.setAttribute("role", "tab"); button.setAttribute("aria-selected", String(id === state.category)); tabs.append(button);
+    button.setAttribute("role", "tab"); button.setAttribute("aria-selected", String(id === state.category)); button.tabIndex = id === state.category ? 0 : -1; tabs.append(button);
   });
   container.append(tabs);
 }
@@ -201,18 +202,42 @@ function renderLinkDialog(container) {
 }
 
 function render() {
-  const container = root(); if (!container || !dependencies) return;
-  if (!hasOperatorAccess()) { container.replaceChildren(el("div", "panel empty-state", "CCTNS is available only to authorized Police and Admin users.")); return; }
+  const host = root(); if (!host || !dependencies) return;
+  if (!hasOperatorAccess()) { host.replaceChildren(el("div", "panel empty-state", "CCTNS is available only to authorized Police and Admin users.")); return; }
+  const container = el("div");
+  const controlsKey = JSON.stringify([state.category, dependencies.getContext().stations || []]);
+  const existingControls = host.querySelector(".cctns-search-controls");
+  const retainControls = existingControls?.dataset.controlsKey === controlsKey;
   const active = document.activeElement;
-  const focusSelector = container.contains(active) && active.matches("[data-cctns-search], [data-cctns-filter]")
-    ? active.hasAttribute("data-cctns-search") ? "[data-cctns-search]" : `[data-cctns-filter="${active.dataset.cctnsFilter}"]` : null;
+  const focusSelector = host.contains(active) && active.matches("[data-cctns-search], [data-cctns-filter], [data-cctns-category]")
+    ? active.hasAttribute("data-cctns-search") ? "[data-cctns-search]" : active.hasAttribute("data-cctns-category") ? `[data-cctns-category="${active.dataset.cctnsCategory}"]` : `[data-cctns-filter="${active.dataset.cctnsFilter}"]` : null;
   const selection = focusSelector && active.tagName === "INPUT" && active.type !== "number" ? [active.selectionStart, active.selectionEnd] : null;
   container.textContent = "";
   const header = el("div", "command-page-head cctns-page-head"); const copy = el("div"); copy.append(el("span", "eyebrow", "CCTNS Adapter / Simulator"), el("h2", "", "CCTNS Search"), el("p", "", "Search and review police crime and investigation records")); const status = el("div", "cctns-adapter-status"); status.append(el("strong", "", "SIMULATED CCTNS RECORDS"), el("small", "", state.adapter?.message || "CCTNS Adapter / Simulator for project demonstration"), badge(state.adapter?.status || "AVAILABLE")); header.append(copy, status); container.append(header);
   renderCategoryNav(container); renderFilters(container);
+  const newControls = container.querySelector(".cctns-search-controls");
+  newControls.dataset.controlsKey = controlsKey;
   const layout = el("div", "cctns-workspace-grid"); renderResults(layout); renderDetail(layout); container.append(layout); renderLinkDialog(container);
+  // Search responses must not detach controls between pointerdown and click,
+  // or close a native select while an operator is using it.
+  if (retainControls) {
+    existingControls.querySelector("[data-cctns-search]").value = state.query;
+    existingControls.querySelectorAll("[data-cctns-filter]").forEach((input) => {
+      const value = state.filters[input.dataset.cctnsFilter] || "";
+      if (input.value !== value) input.value = value;
+    });
+    existingControls.querySelector("#cctnsFilters").classList.toggle("open", state.filtersOpen);
+    existingControls.querySelector("[data-cctns-toggle-filters]").setAttribute("aria-expanded", String(state.filtersOpen));
+  }
+  const children = [...container.children].map((child) => child === newControls && retainControls ? existingControls : child);
+  children.forEach((child, index) => {
+    const current = host.children[index];
+    if (current === child) return;
+    if (current) host.replaceChild(child, current); else host.append(child);
+  });
+  while (host.children.length > children.length) host.lastElementChild.remove();
   if (focusSelector) {
-    const input = container.querySelector(focusSelector); input?.focus({ preventScroll: true });
+    const input = host.querySelector(focusSelector); input?.focus({ preventScroll: true });
     if (selection && input?.setSelectionRange) input.setSelectionRange(...selection);
   }
 }
@@ -222,6 +247,17 @@ function closeLinkDialog() { const dialog = root()?.querySelector("#cctnsLinkDia
 
 function bind() {
   const container = root(); if (!container || container.dataset.bound) return; container.dataset.bound = "true";
+  container.addEventListener("keydown", (event) => {
+    const tab = event.target.closest("[data-cctns-category]");
+    if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [...container.querySelectorAll("[data-cctns-category]")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    const id = tabs[next].dataset.cctnsCategory;
+    tabs[next].click();
+    container.querySelector(`[data-cctns-category="${id}"]`)?.focus();
+  });
   container.addEventListener("click", async (event) => {
     const category = event.target.closest("[data-cctns-category]"); if (category) { state.page = 1; state.category = category.dataset.cctnsCategory; state.group = "all"; for (const key of ["type", "name", "ageMin", "ageMax", "gender", "caseReference", "missingReference", "serialNumber", "propertyType", "brand", "description"]) delete state.filters[key]; loadResults(); return; }
     const group = event.target.closest("[data-cctns-group]"); if (group) { state.page = 1; state.group = group.dataset.cctnsGroup; loadResults(); return; }
@@ -236,7 +272,10 @@ function bind() {
   });
   container.addEventListener("input", (event) => {
     if (!event.target.matches("[data-cctns-search]")) return;
-    state.page = 1; state.query = event.target.value; window.clearTimeout(debounceTimer); debounceTimer = window.setTimeout(loadResults, 250);
+    state.page = 1; state.query = event.target.value; window.clearTimeout(debounceTimer);
+    // Do not leave stale result cards actionable during the debounce window.
+    requestVersion++; state.loading = true; state.error = ""; render();
+    debounceTimer = window.setTimeout(loadResults, 250);
   });
   container.addEventListener("change", (event) => { if (event.target.matches("[data-cctns-filter]")) { state.page = 1; state.filters[event.target.dataset.cctnsFilter] = event.target.value; loadResults(); } });
   container.addEventListener("submit", async (event) => {

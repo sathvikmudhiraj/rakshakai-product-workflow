@@ -12,7 +12,14 @@
       <div class="portal-card">
         <div class="portal-info">
           <div class="portal-brand">
-            <span>R</span>
+            <span class="portal-shield" aria-hidden="true">
+              <svg viewBox="0 0 40 44" focusable="false">
+                <path class="portal-shield-rim" d="M20 2 37 9v12c0 10-8 17-17 21C11 38 3 31 3 21V9Z"/>
+                <path class="portal-shield-face" d="m20 6 13 5v10c0 8-6 14-13 17C13 35 7 29 7 21V11Z"/>
+                <path class="portal-shield-highlight" d="m20 6 13 5v10c0 8-6 14-13 17Z"/>
+                <path class="portal-shield-check" d="m13 21 5 5 10-11"/>
+              </svg>
+            </span>
             <div>
               <strong>RakshakAI</strong>
               <small>Public Safety Intelligence Platform</small>
@@ -104,30 +111,46 @@
       <aside class="sidebar">
         <div class="brand"><span>R</span><div><strong>RakshakAI</strong><small>Public Safety Command</small></div></div>
         <div class="sidebar-status"><span class="status-beacon"></span><div><strong>Operations online</strong><small>Secure monitoring network</small></div></div>
-        <span class="nav-label">Operations</span>
-        <nav class="navigation">
-          <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
-          <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
-          <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
-          <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
-          <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
-          <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
-          <button class="nav-item" data-view="video-evidence" data-roles="Police Officer,Admin">Video Evidence</button>
-          <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
-          <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
-          <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
-          <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
-          <button class="nav-item" data-view="cctns" data-roles="Police Officer,Admin">CCTNS Records</button>
-          <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
-          <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
-        </nav>
-        <span class="nav-label">ERSS-112</span>
-        <nav class="navigation">
-          <button class="nav-item" data-view="erss-call-taker" data-roles="Police Officer,Admin">Call Taker</button>
-          <button class="nav-item" data-view="erss-dispatcher" data-roles="Police Officer,Admin">Dispatcher</button>
-          <button class="nav-item" data-view="erss-assistance" data-roles="Police Officer,Admin">Inter-Station Assistance</button>
-          <button class="nav-item" data-view="erss-supervisor" data-roles="Admin">Supervisor Queue</button>
-          <button class="nav-item" data-view="erss-field" data-roles="Police Officer,Admin">Field Assignments</button>
+        <nav class="sidebar-groups" aria-label="Main navigation">
+          <details class="nav-group" open><summary>Operations</summary>
+            <div class="navigation">
+              <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
+              <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
+              <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
+              <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
+            </div>
+          </details>
+          <details class="nav-group"><summary>Surveillance</summary>
+            <div class="navigation">
+              <button class="nav-item" data-view="cctv" data-roles="Police Officer,Admin">CCTV Monitoring</button>
+              <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
+              <button class="nav-item" data-view="video-evidence" data-roles="Police Officer,Admin">Video Evidence</button>
+              <button class="nav-item" data-view="multi-camera-tracking" data-roles="Police Officer,Admin">Multi-Camera Tracking</button>
+            </div>
+          </details>
+          <details class="nav-group"><summary>Investigations</summary>
+            <div class="navigation">
+              <button class="nav-item" data-view="cctns" data-roles="Police Officer,Admin">CCTNS Records</button>
+              <button class="nav-item" data-view="missing" data-roles="Police Officer,Admin,Citizen">Missing Persons</button>
+              <button class="nav-item" data-view="alerts" data-roles="Police Officer,Admin">Alerts</button>
+              <button class="nav-item" data-view="history" data-roles="Police Officer,Admin">History</button>
+            </div>
+          </details>
+          <details class="nav-group"><summary>Administration</summary>
+            <div class="navigation">
+              <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
+              <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
+            </div>
+          </details>
+          <details class="nav-group"><summary>ERSS-112</summary>
+            <div class="navigation">
+              <button class="nav-item" data-view="erss-call-taker" data-roles="Police Officer,Admin">Call Taker</button>
+              <button class="nav-item" data-view="erss-dispatcher" data-roles="Police Officer,Admin">Dispatcher</button>
+              <button class="nav-item" data-view="erss-assistance" data-roles="Police Officer,Admin">Inter-Station Assistance</button>
+              <button class="nav-item" data-view="erss-supervisor" data-roles="Admin">Supervisor Queue</button>
+              <button class="nav-item" data-view="erss-field" data-roles="Police Officer,Admin">Field Assignments</button>
+            </div>
+          </details>
         </nav>
         <div class="role-box">Active role: <strong id="currentUser">Connecting...</strong></div>
       </aside>
@@ -147,9 +170,10 @@
             </div>
             <div class="command-health">
               <span class="health-icon"><span></span></span>
-              <div><strong id="systemHealthTitle">Systems operational</strong><small id="systemHealthDetail">AI, GIS, cameras, and dispatch are ready</small></div>
+              <div><strong id="systemHealthTitle">Checking AI connection</strong><small id="systemHealthDetail">Current service status is loading.</small></div>
             </div>
           </section>
+          <button type="button" class="critical-queue-summary" id="dashboardCriticalQueue" aria-label="Open critical incident queue"><span><span class="eyebrow">Requires attention</span><strong>Critical incidents</strong><small>Open live incident queue</small></span><span class="critical-queue-count" id="dashboardCriticalCount">--</span></button>
           <div class="dashboard-metrics">
             <article class="summary-card metric-missing" data-kpi="missing" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Missing Persons</span><i>MP</i></div><strong id="missingMetric">--</strong><small>Registered cases</small></article>
             <article class="summary-card metric-alert" data-kpi="alerts" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Active Alerts</span><i>AL</i></div><strong id="alertMetric">--</strong><small>Open alerts</small></article>
@@ -160,10 +184,10 @@
           <section class="panel quick-controls">
             <div class="panel-head"><div><span class="eyebrow">Command Shortcuts</span><h2>Quick Controls</h2></div></div>
             <div class="quick-control-grid">
-              <button type="button" class="quick-control" data-view-jump="gis"><span>GIS</span><strong>GIS Monitoring</strong></button>
-              <button type="button" class="quick-control" data-view-jump="cctv"><span>CCTV</span><strong>CCTV Feeds</strong></button>
-              <button type="button" class="quick-control" data-view-jump="live-vision"><span>LV</span><strong>Live Vision</strong></button>
-              <button type="button" class="quick-control" data-view-jump="missing"><span>MP</span><strong>Missing Persons</strong></button>
+              <button type="button" class="quick-control" data-view-jump="incident-command" data-critical-queue="true"><span>IC</span><strong>View Critical Queue</strong></button>
+              <button type="button" class="quick-control" data-view-jump="gis"><span>GIS</span><strong>Open GIS</strong></button>
+              <button type="button" class="quick-control" data-view-jump="cctv" data-open-ai-review="true"><span>AI</span><strong>Review AI Observations</strong></button>
+              <button type="button" class="quick-control" data-view-jump="unit-assignment"><span>UA</span><strong>Dispatch / Unit Queue</strong></button>
             </div>
           </section>
           <section class="panel source-panel">
@@ -247,6 +271,12 @@
           </div>
         </section>
 
+        <section class="view" data-panel="police-assignment">
+          <div class="command-page-head"><div><span class="eyebrow">Primary response deployment</span><h2>Police Assignment</h2><p>Deploy officers from the assigned primary response unit.</p></div><button id="backToUnitAssignment" class="ghost" type="button">Back to Unit Assignment</button></div>
+          <section id="policeAssignmentContext" class="panel police-assignment-context"></section>
+          <section class="panel"><div class="panel-head"><div><span class="eyebrow">Primary unit members</span><h2>Officer Deployment</h2></div><button id="assignSelectedOfficers" class="primary" type="button">Assign Selected Officers</button></div><p id="policeAssignmentStatus" class="form-status" role="status" aria-live="polite"></p><div id="policeAssignmentMembers" class="police-assignment-list"></div></section>
+        </section>
+
         <section class="view" data-panel="gis">
           <div class="gis-page-head">
             <div><span class="eyebrow">RakshakAI Operations</span><h2>Operational Map &amp; Routing</h2></div>
@@ -254,19 +284,27 @@
           <div class="gis-layout">
             <section class="panel gis-map-card">
               <div class="gis-toolbar" aria-label="GIS navigation controls">
-                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="false">Street View</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
+                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="true">Street Map</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="toggleFollowLocation" class="ghost" type="button" aria-pressed="false" disabled title="Start GPS tracking to follow your location.">Follow Location</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
                 <div class="gis-tool-group"><span>Points</span><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button></div>
-                <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Choose a point or calculate a route before clearing." disabled>Clear Route</button></div>
+                <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="startNavigation" class="primary" type="button" disabled><span aria-hidden="true">➤</span> Start Navigation</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Clear the calculated route line, distance, and ETA. Start and destination points are kept." disabled>Clear Route</button></div>
               </div>
               <p id="mapNavigationStatus" class="gis-status-bar" aria-live="polite">Select "Set Start," then click the map.</p>
+              <p id="navigationAvailability" class="gis-navigation-availability" aria-live="polite"></p>
               <div id="unitGpsTelemetryStatus" class="unit-gps-status" aria-live="polite">
                 <strong id="unitGpsState">GPS tracking stopped</strong>
                 <span id="unitGpsLastUpdate">Last update: --</span>
                 <span id="unitGpsAccuracy">Accuracy: --</span>
               </div>
-              <div id="gisMap" class="event-map large" data-satellite-map data-map-layer="satellite" data-map-lat="17.5109" data-map-lng="78.3276" data-map-zoom="12"></div>
+              <div id="gisMap" class="event-map large" data-satellite-map data-map-layer="streets" data-map-lat="17.5109" data-map-lng="78.3276" data-map-zoom="12"></div>
             </section>
             <aside class="navigation-panel">
+              <section id="activeNavigationPanel" class="panel active-navigation-panel" hidden aria-live="polite">
+                <span class="eyebrow">Active Navigation</span><h2 id="activeNavigationManeuver">Waiting for GPS</h2>
+                <p id="activeNavigationRoute"></p><p id="activeNavigationProgress">Remaining: -- · ETA: --</p>
+                <p id="activeNavigationGps">GPS: waiting for a fix</p>
+                <button id="navigationRecalculate" class="ghost" type="button" disabled>Recalculate Route</button>
+                <button id="endNavigation" class="ghost" type="button">End Navigation</button>
+              </section>
               <div class="navigation-metrics">
                 <article><span>Distance</span><strong id="routeDistance">--</strong></article>
                 <article><span>ETA</span><strong id="routeEta">--</strong></article>
@@ -306,7 +344,12 @@
               <p>Monitor camera metadata, health checks, and AI observation workflows. Admin configuration is available in Settings → Camera &amp; AI.</p>
             </div>
           </div>
-          <section class="panel">
+          <div class="cctv-tabs" role="tablist" aria-label="CCTV workspace">
+            <button type="button" role="tab" id="cctvTabCameras" aria-controls="cctvCameraPanel" aria-selected="true" data-cctv-tab="cameras">Cameras</button>
+            <button type="button" role="tab" id="cctvTabReview" aria-controls="cctvReviewPanel" aria-selected="false" tabindex="-1" data-cctv-tab="review">AI Review</button>
+            <button type="button" role="tab" id="cctvTabHealth" aria-controls="cctvCameraPanel" aria-selected="false" tabindex="-1" data-cctv-tab="health">Health Issues</button>
+          </div>
+          <section class="panel" id="cctvCameraPanel" role="tabpanel" aria-labelledby="cctvTabCameras">
             <div class="panel-head cctv-registry-head">
               <div><span class="eyebrow">CCTV Monitoring</span><h2>Camera Registry</h2></div>
               <div id="cameraRegistryFilters" class="cctv-filters">
@@ -317,7 +360,7 @@
             </div>
             <div id="cameraGridLarge" class="camera-registry"></div>
           </section>
-          <section class="panel ai-observation-panel">
+          <section class="panel ai-observation-panel" id="cctvReviewPanel" role="tabpanel" aria-labelledby="cctvTabReview" hidden>
             <div class="panel-head">
               <div><span class="eyebrow">Mandatory Human Review</span><h2>AI Observation Queue</h2><p>AI detections are advisory. Confirmation creates an alert; it never creates an incident directly.</p></div>
               <button id="refreshAiObservations" class="ghost" type="button">Refresh Queue</button>
@@ -460,7 +503,6 @@
                     <option value="Medical">Medical</option>
                     <option value="Security">Security</option>
                     <option value="Weather">Weather</option>
-                    <option value="TEST_ALERT">TEST_ALERT</option>
                   </select>
                 </label>
                 <label>
@@ -481,14 +523,17 @@
                 Message
                 <input name="message" placeholder="Describe what happened and the action required" maxlength="160" required />
               </label>
-              <div class="manual-alert-row manual-alert-footer">
+              <button id="alertUseLocation" class="ghost" type="button">Use Current Location</button>
+              <p id="alertLocationStatus" role="status" aria-live="polite">Location is optional.</p>
+              <details class="alert-coordinates"><summary>Advanced: manual coordinates</summary>
+              <div class="manual-alert-row">
                 <label>
                   Latitude
-                  <input name="lat" type="number" step="0.0001" placeholder="Latitude" />
+                  <input name="lat" type="number" min="-90" max="90" step="any" placeholder="Latitude" />
                 </label>
                 <label>
                   Longitude
-                  <input name="lng" type="number" step="0.0001" placeholder="Longitude" />
+                  <input name="lng" type="number" min="-180" max="180" step="any" placeholder="Longitude" />
                 </label>
                 <button id="sendAlert" class="primary alert-create" type="submit">Send Alert</button>
               </div>
@@ -727,7 +772,7 @@
         <section class="view" data-panel="police-management">
           <div class="police-management-page">
             <div class="page-intro">
-              <div><span class="eyebrow">Staff Access Control</span><h2>Officer Registry</h2><p>Search and manage police accounts, assignments, duty state, and access status.</p></div>
+              <div><span class="eyebrow">Personnel Operations</span><h2>Officer Directory</h2><p>Manage police personnel, station affiliation, response-unit membership, duty state and operational records.</p></div>
               <button id="addPoliceUserBtn" class="primary" type="button">+ Add Police Officer</button>
             </div>
             <div id="policeManagementKpis" class="police-management-kpis" aria-label="Police account summary"></div>
@@ -753,8 +798,8 @@
             </section>
             <section class="panel police-management-panel">
               <div class="panel-head">
-                <div><span class="eyebrow">Officer Directory</span><h2>Police Users</h2></div>
-                <span id="policeUserCount" class="chip">-- accounts</span>
+                <div><span class="eyebrow">Officer Directory</span><h2>Police Officers</h2></div>
+                <span id="policeUserCount" class="chip">-- officers</span>
               </div>
               <div id="policeUserList" class="police-user-list"></div>
             </section>

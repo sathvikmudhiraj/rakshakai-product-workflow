@@ -10,6 +10,15 @@ const browserNames = String(process.env.RELEASE_TEST_BROWSERS || "chromium,firef
   .map((value) => value.trim())
   .filter(Boolean);
 
+async function openNavigation(page, view) {
+  const item = page.locator(`.nav-item[data-view="${view}"]`);
+  const group = item.locator("xpath=ancestor::details[1]");
+  if (await group.count() && !await group.evaluate((element) => element.open)) {
+    await group.locator("summary").click();
+  }
+  await item.click();
+}
+
 for (const name of browserNames) {
   if (!browserTypes[name]) throw new Error(`Unsupported release browser: ${name}`);
 }
@@ -131,9 +140,22 @@ async function syntheticEvidenceFor(page) {
 
 async function checkEvidenceUpload(page, role, width, browserName) {
   const media = await syntheticEvidenceFor(page);
-  await page.locator('.nav-item[data-view="video-evidence"]').click();
+  await openNavigation(page, "video-evidence");
   await page.waitForFunction(() => document.querySelector("#videoLinkedIncident").options.length > 1);
   await page.locator("#videoLinkedIncident").selectOption({ index: 1 });
+  if (role === "Admin") {
+    // This runs only against the isolated release stack. Give its fixture
+    // incident an explicit investigator before exercising scoped evidence access.
+    const assignment = await page.evaluate(async () => {
+      const incidentId = document.querySelector("#videoLinkedIncident").value;
+      const response = await fetch(`/api/incidents/${encodeURIComponent(incidentId)}/investigation/assign-officer`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ officerId: "u_fixture_officer" })
+      });
+      return response.status;
+    });
+    assert.equal(assignment, 200, "Admin must assign the release fixture investigator");
+  }
   await page.locator("#videoEvidenceFile").setInputFiles({
     name: `acceptance-${role.replaceAll(" ", "-")}-${width}.${media.mimeType.includes("mp4") ? "mp4" : "webm"}`,
     mimeType: media.mimeType.split(";")[0], buffer: Buffer.from(media.bytes)
@@ -172,9 +194,7 @@ async function checkEvidenceUpload(page, role, width, browserName) {
 }
 
 async function checkCctnsWorkspace(page, viewport, screenshots, browserName, role) {
-  const nav = page.locator('.nav-item[data-view="cctns"]');
-  await nav.waitFor({ state: "visible" });
-  await nav.click();
+  await openNavigation(page, "cctns");
   const workspace = page.locator("#cctnsWorkspace");
   await workspace.locator("h2", { hasText: "CCTNS Search" }).waitFor({ state: "visible" });
   assert.match(await workspace.innerText(), /SIMULATED CCTNS RECORDS/i);
@@ -274,7 +294,7 @@ async function checkTrackingLayout(page, viewport, screenshots, browserName, rol
     if (details[sessionId]) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(details[sessionId]) });
     return route.continue();
   });
-  await page.locator('.nav-item[data-view="multi-camera-tracking"]').click();
+  await openNavigation(page, "multi-camera-tracking");
   const panel = page.locator('[data-panel="multi-camera-tracking"]');
   await panel.locator(".tracking-header h1").waitFor({ state: "visible" });
   await page.waitForFunction(() => !document.querySelector("#trackingSessionsList .tracking-loading"));
@@ -434,7 +454,7 @@ async function runBrowserChecks({ baseUrl, password }) {
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
           } else {
             if (role === "Police Officer") assert.equal(await page.locator('.nav-item[data-view="settings"]').isVisible(), false);
-            await page.locator('.nav-item[data-view="gis"]').click();
+            await openNavigation(page, "gis");
             await page.locator("#gisMap .leaflet-tile-pane").waitFor({ state: "attached" });
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.locator("#streetMapLayer").click();
@@ -462,7 +482,7 @@ async function runBrowserChecks({ baseUrl, password }) {
             assert.equal(await page.locator("#clearMapRoute").isDisabled(), true);
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.screenshot({ path: path.join(screenshots, `gis-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
-            await page.locator('.nav-item[data-view="live-vision"]').click();
+            await openNavigation(page, "live-vision");
             await page.locator("#startLiveVision").click();
             const cameraSupported = await page.evaluate(() => Boolean(navigator.mediaDevices?.getUserMedia));
             if (cameraSupported) {

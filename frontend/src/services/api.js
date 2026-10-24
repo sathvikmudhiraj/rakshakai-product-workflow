@@ -84,27 +84,37 @@ function safeApiMessage(path, status, data = {}, code = "") {
 async function parseResponseBody(res) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
-    return res.json().catch(() => ({}));
+    return res.json().catch((error) => { if (error instanceof SyntaxError) return {}; throw error; });
   }
-  const text = await res.text().catch(() => "");
+  const text = await res.text();
   return text ? { error: text } : {};
 }
 
 export async function api(path, options = {}) {
-  let res;
+  let res, data, timeout;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs || API_TIMEOUT_MS);
   try {
-    res = await fetch(normalizeApiPath(path), {
-      method: options.method || "GET",
-      credentials: "include",
-      signal: controller.signal,
-      headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...(options.headers || {})
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined
+    // Bound the whole response, not just its headers. The race also settles
+    // callers if a transport fails to reject its pending body on abort.
+    const deadline = new Promise((_, reject) => {
+      timeout = window.setTimeout(() => {
+        reject(Object.assign(new Error("Request timed out"), { name: "AbortError" }));
+        controller.abort();
+      }, options.timeoutMs || API_TIMEOUT_MS);
     });
+    ({ res, data } = await Promise.race([deadline, (async () => {
+      const response = await fetch(normalizeApiPath(path), {
+        method: options.method || "GET",
+        credentials: "include",
+        signal: controller.signal,
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(options.headers || {})
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined
+      });
+      return { res: response, data: await parseResponseBody(response) };
+    })()]));
   } catch (cause) {
     const code = cause?.name === "AbortError" ? "API_TIMEOUT" : "API_UNAVAILABLE";
     const error = new Error(safeApiMessage(path, 0, {}, code));
@@ -114,7 +124,6 @@ export async function api(path, options = {}) {
   } finally {
     window.clearTimeout(timeout);
   }
-  const data = await parseResponseBody(res);
   if (!res.ok) {
     const error = new Error(safeApiMessage(path, res.status, data));
     error.status = res.status;

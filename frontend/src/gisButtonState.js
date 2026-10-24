@@ -33,7 +33,7 @@ export function gisRouteButtonStates({
   return {
     street: {
       disabled: false,
-      label: "Street View",
+      label: "Street Map",
       icon: "street",
       title: "Show street map tiles.",
       pressed: baseLayer === "streets",
@@ -122,7 +122,7 @@ export function gisRouteButtonStates({
       disabled: !hasRouteWork || routeLoading,
       label: "Clear Route",
       icon: "trash",
-      title: "Clear route points, lines, options, and warnings.",
+      title: "Clear the calculated route line, distance, and ETA. Start and destination points are kept.",
       reason: routeLoading ? "Wait for route calculation to finish." : !hasRouteWork ? "Choose a point or calculate a route before clearing." : ""
     },
     clearStart: {

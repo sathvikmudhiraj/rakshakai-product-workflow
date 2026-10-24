@@ -118,7 +118,7 @@ class FakeBox:
 class FakeResult:
     def __init__(self, boxes):
         self.boxes = boxes
-        self.names = {0: "person", 1: "backpack"}
+        self.names = {0: "person", 1: "backpack", 2: "tie", 3: "car"}
 
 
 class FakeModel:
@@ -135,6 +135,15 @@ class AuthTests(unittest.TestCase):
 
     def tearDown(self):
         reload_service()
+
+    def test_raw_irrelevant_class_is_filtered_without_losing_operational_targets(self):
+        self.service.model = FakeModel([
+            FakeBox(0, 0.92, [0, 0, 10, 10]),
+            FakeBox(2, 0.95, [0, 0, 5, 5]),
+            FakeBox(3, 0.88, [0, 0, 15, 15]),
+        ])
+        detections, _ = self.service.detect(np.zeros((32, 32, 3), dtype=np.uint8))
+        self.assertEqual([item["label"] for item in detections], ["person", "car"])
 
     def test_missing_api_key_rejects_inference(self):
         status, payload = asgi_response(

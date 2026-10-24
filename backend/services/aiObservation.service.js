@@ -173,7 +173,7 @@ function reviewObservation(db, observation, action, user, notes = "") {
   observation.reviewedBy = { id: user.id, name: user.name, role: user.role };
   observation.reviewNotes = String(notes || "").trim().slice(0, 500);
   let alert = null;
-  if (decision === "CONFIRMED") {
+  if (decision === "CONFIRMED" && observation.sourceType !== "evidence_image") {
     const strongest = [...observation.detections].sort((a, b) => b.confidence - a.confidence)[0];
     alert = {
       id: uid("alt"), incidentId: null, linkedIncidentId: null,

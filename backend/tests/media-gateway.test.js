@@ -19,6 +19,32 @@ const frame = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9]);
 const aiResult = (detections = [{ label: "person", confidence: 0.91, box: [1, 2, 3, 4] }]) => ({ configured: true, detections, model: "test-yolo" });
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+test("stale capture timestamps never update stream health or create observations", async () => {
+  let now = Date.parse("2026-10-20T12:00:00Z"), analyses = 0, observations = 0;
+  const connector = new FakeConnector();
+  const gateway = new MediaGateway({ clock: () => now, noFramesMs: 1000, connectorFactory: () => connector,
+    analyzeFrame: async () => { analyses++; return aiResult(); }, persistObservation: async () => { observations++; return {}; } });
+  await gateway.startCamera(camera());
+  const session = gateway.sessions.get("cam_real_1");
+  await gateway.frame(session, frame, { capturedAt: new Date(now - 1001).toISOString() });
+  assert.equal(session.lastFrameAt, null);
+  assert.equal(analyses, 0); assert.equal(observations, 0);
+  await gateway.frame(session, frame, { capturedAt: "invalid" });
+  assert.equal(analyses, 0);
+  await gateway.stopAll();
+});
+
+test("frames aging out during inference cannot create observations", async () => {
+  let now = Date.parse("2026-10-20T12:00:00Z"), observations = 0;
+  const connector = new FakeConnector();
+  const gateway = new MediaGateway({ clock: () => now, noFramesMs: 1000, connectorFactory: () => connector,
+    analyzeFrame: async () => { now += 1001; return aiResult(); }, persistObservation: async () => { observations++; return {}; } });
+  await gateway.startCamera(camera());
+  await gateway.frame(gateway.sessions.get("cam_real_1"), frame, { capturedAt: new Date(now).toISOString() });
+  assert.equal(observations, 0);
+  await gateway.stopAll();
+});
+
 test("valid configured stream connects, reports real frames, and disabled stream does not connect", async () => {
   const connector = new FakeConnector(); let factoryCalls = 0;
   const gateway = new MediaGateway({ connectorFactory: () => { factoryCalls += 1; return connector; }, analyzeFrame: async () => aiResult(), persistObservation: async () => null });

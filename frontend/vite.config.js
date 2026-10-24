@@ -58,12 +58,25 @@ function rakshakaiStylesheetFallbackGuard() {
   };
 }
 
+function developmentHttpsOptions() {
+  const keyPath = process.env.VITE_DEV_HTTPS_KEY;
+  const certPath = process.env.VITE_DEV_HTTPS_CERT;
+  if (!keyPath || !certPath) return undefined;
+  if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+    throw new Error(
+      "VITE_DEV_HTTPS_KEY/VITE_DEV_HTTPS_CERT are set but the PEM files do not exist. Generate a trusted local certificate first (see docs/GIS_REAL_DEVICE_ACCEPTANCE.md)."
+    );
+  }
+  return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+}
+
 export default defineConfig({
   plugins: [rakshakaiDevelopmentCsp(), rakshakaiStylesheetFallbackGuard()],
   server: {
     host: "0.0.0.0",
     port: 3000,
     strictPort: true,
+    https: developmentHttpsOptions(),
     proxy: {
       "/api": {
         target: process.env.VITE_BACKEND_PROXY_TARGET || "http://127.0.0.1:5000",

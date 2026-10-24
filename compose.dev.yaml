@@ -10,8 +10,8 @@ services:
   backend:
     environment:
       NODE_ENV: development
-      CORS_ORIGIN: http://localhost:3000
-      FRONTEND_ORIGINS: http://127.0.0.1:3000
+      CORS_ORIGIN: http://localhost:3000,http://localhost:3001
+      FRONTEND_ORIGINS: http://127.0.0.1:3000,http://127.0.0.1:3001
     ports:
       - "127.0.0.1:5000:5000"
 
@@ -20,5 +20,3 @@ services:
       CSP_ENV: development
       CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
       CSP_IMG_SRC: ${CSP_IMG_SRC:-}
-    ports:
-      - "3000:80"

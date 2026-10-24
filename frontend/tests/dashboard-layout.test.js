@@ -48,6 +48,7 @@ test("queue navigation marks critical attention seen only after this user's snap
   assert.equal(document.querySelector('[data-panel="incident-command"] #command-critical-summary')?.tagName, "SECTION");
   assert.match(css, /\.critical-queue-summary \{[^}]*display: flex/);
   assert.match(css, /\.topbar \{ position: sticky; top: var\(--critical-banner-height\); min-height: 68px/);
+  assert.match(css, /@media \(max-width: 720px\) \{\s*\.topbar[^}]*\}[\s\S]*?body\[data-view="gis"\] \.topbar \{ position: static; top: auto; \}/);
 });
 
 test("responsive dashboard stacks Attention, Live Incidents, then Timeline", () => {

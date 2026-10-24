@@ -63,7 +63,7 @@ try {
 Write-Check "Docker daemon" $dockerAvailable $(if ($dockerAvailable) { "available" } else { "unavailable; Docker Desktop was not started" })
 
 $occupiedPorts = @()
-foreach ($port in 3000, 5000, 8000) {
+foreach ($port in 3001, 5000, 8000) {
   $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
   if (-not $listeners.Count) {
     Write-Check "port $port" $true "available"

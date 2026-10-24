@@ -1,3 +1,5 @@
+const { activeOfficerDeployments } = require("./incidentOfficerAssignment.service");
+
 function normalized(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
@@ -46,6 +48,7 @@ function officerUserId(officer = {}) {
 function officerUnavailableReason(officer, user, db, reservedOfficerIds, incidentId) {
   const id = officerUserId(officer);
   if (!id || reservedOfficerIds.has(id)) return "ALREADY ASSIGNED";
+  if (activeOfficerDeployments(db, { officerId: id }).length) return "BUSY";
   if (!user || user.role !== "Police Officer" || user.status === "inactive" || officer.active === false) return "OFF DUTY";
   if (["off_duty", "leave", "suspended"].includes(normalized(officer.dutyStatus || officer.duty_status))) return "OFF DUTY";
   if (["busy", "unavailable"].includes(normalized(officer.availabilityStatus || officer.availability_status))) return "BUSY";

@@ -15,6 +15,10 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.14.1+cpu" "torchvision==0.29.1+cpu" \
     && python -m pip install -r requirements.txt
 
+# The base image carries an older setuptools; keep the runtime advisory gate clean.
+RUN python -m pip install "setuptools==83.0.0" \
+    && python -m pip check
+
 COPY main.py ./
 RUN mkdir -p /models \
     && useradd --create-home --uid 10001 rakshakai \
