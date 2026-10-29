@@ -1,5 +1,7 @@
 const crypto = require("node:crypto");
-const { readDatabase, writeDatabase } = require("./core.service");
+const { readDatabase, writeSelectedRecords } = require("./core.service");
+const copilotConversationsRepository = require("../repositories/copilotConversations.repository");
+const copilotMessagesRepository = require("../repositories/copilotMessages.repository");
 const { getDatabaseMode } = require("./postgres.service");
 
 const TTL_MS = Math.max(60_000, Number(process.env.COPILOT_CONVERSATION_TTL_MS || 30 * 60 * 1000));
@@ -45,10 +47,14 @@ async function saveConversationToDb(conversation, messages) {
     writeDb(db);
     return;
   }
-  await writeDatabase({
-    copilotConversations: [conversation],
-    copilotMessages: limitedMessages
-  });
+  const db = await readDatabase();
+  await writeSelectedRecords(
+    db,
+    [
+      [copilotConversationsRepository, [conversation]],
+      [copilotMessagesRepository, limitedMessages]
+    ]
+  );
 }
 
 async function deleteConversationFromDb(conversationId) {

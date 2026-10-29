@@ -94,16 +94,16 @@ export async function api(path, options = {}) {
   let res, data, timeout;
   const controller = new AbortController();
   try {
-    // Bound the whole response, not just its headers. The race also settles
-    // callers if a transport fails to reject its pending body on abort.
+    // Bound the whole response, not just its headers: aborting the controller
+    // also terminates a pending body read after the headers have settled.
     const deadline = new Promise((_, reject) => {
       timeout = window.setTimeout(() => {
         reject(Object.assign(new Error("Request timed out"), { name: "AbortError" }));
         controller.abort();
       }, options.timeoutMs || API_TIMEOUT_MS);
     });
-    ({ res, data } = await Promise.race([deadline, (async () => {
-      const response = await fetch(normalizeApiPath(path), {
+    const result = await Promise.race([deadline, (async () => {
+      res = await fetch(normalizeApiPath(path), {
         method: options.method || "GET",
         credentials: "include",
         signal: controller.signal,
@@ -113,9 +113,18 @@ export async function api(path, options = {}) {
         },
         body: options.body ? JSON.stringify(options.body) : undefined
       });
-      return { res: response, data: await parseResponseBody(response) };
-    })()]));
+      const data = await parseResponseBody(res);
+      if (!res.ok) {
+        const error = new Error(safeApiMessage(path, res.status, data));
+        error.status = res.status;
+        error.data = data;
+        throw error;
+      }
+      return data;
+    })()]);
+    return result;
   } catch (cause) {
+    if (cause && cause.status) throw cause;
     const code = cause?.name === "AbortError" ? "API_TIMEOUT" : "API_UNAVAILABLE";
     const error = new Error(safeApiMessage(path, 0, {}, code));
     error.cause = cause;
@@ -124,13 +133,6 @@ export async function api(path, options = {}) {
   } finally {
     window.clearTimeout(timeout);
   }
-  if (!res.ok) {
-    const error = new Error(safeApiMessage(path, res.status, data));
-    error.status = res.status;
-    error.data = data;
-    throw error;
-  }
-  return data;
 }
 
 export function googleWorkspaceSignInUrl() { return normalizeApiPath("/api/auth/google/start"); }

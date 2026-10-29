@@ -67,6 +67,7 @@ function roster(db) {
     const active = activeValues.includes(false) || /^(?:inactive|disabled|deactivated)$/.test(key(user?.status)) ? false : activeValues.includes(true) ? true : accountActive;
     const duty = value(record, "dutyStatus", "duty_status") || value(user, "dutyStatus", "duty_status");
     const availability = operationalAvailability(db, id, value(record, "availabilityStatus", "availability_status") || value(user, "availabilityStatus", "availability_status"));
+    const isDemo = Boolean(user?.data?.isDemo === true || record?.data?.isDemo === true);
     return [{ id: String(record.id || id), userId: id, badgeId: value(record, "badgeId", "badge_id") || user?.badgeId || user?.staffId || null,
       name: user?.name || record.name || "Name not recorded", stationId: station || null,
       accountActive, hasAccount: Boolean(user), active, dutyStatus: duty || null, availabilityStatus: availability || null,
@@ -74,7 +75,7 @@ function roster(db) {
       jurisdiction: record.jurisdiction || user?.jurisdiction || assignedStation?.jurisdiction || null,
       beat: record.beat || user?.beat || null, unitIds: [...new Set(units.map((unit) => unit.id))],
       unitId: units[0]?.unitCode || units[0]?.id || user?.unitId || null,
-      updatedAt: value(record, "updatedAt", "updated_at", "lastUpdated") || user?.updatedAt || null }];
+      updatedAt: value(record, "updatedAt", "updated_at", "lastUpdated") || user?.updatedAt || null, isDemo }];
   });
 }
 
@@ -222,11 +223,16 @@ function policeManagementUsers(db) {
       return [{ id: incident.id, station: allocation.stationName || allocation.stationCode || allocation.stationId || null, homeStation: profile?.stationName || null, reason: allocation.reason || null, source: "Hybrid Dispatch" }];
     });
     const investigations = rows(db, "incidents").filter((incident) => String(value(incident, "investigatingOfficerId", "investigating_officer_id") || "") === String(user.id)).map((incident) => ({ id: incident.id, type: incident.type || incident.category || incident.title || null, status: value(incident, "investigationStatus", "investigation_status") || null, assignedAt: value(incident, "investigationStartedAt", "investigation_started_at") || null, updatedAt: value(incident, "lastInvestigationUpdateAt", "last_investigation_update_at") || null }));
+    const isDemo = Boolean(user.isDemo === true || officer?.data?.isDemo === true || profile?.isDemo === true);
+    const deploymentHistory = rows(db, "incidentOfficerAssignments").filter((assignment) => assignment.officerId === user.id).map((assignment) => ({ id: assignment.id, incidentId: assignment.incidentId, unitId: assignment.unitId, responseRole: assignment.responseRole, status: assignment.status, assignedAt: assignment.assignedAt, releasedAt: assignment.releasedAt, releaseReason: assignment.releaseReason }));
     return { ...profile, id: user.id, name: user.name, email: user.email, role: user.role,
+      rankId: officer?.rankId || officer?.rank_id || null, beatId: officer?.beatId || officer?.beat_id || null, deploymentHistory,
+      operationalRole: user.operationalRole || user.data?.operationalRole || null,
       rank: rank?.name || rank?.code || null, deployments, supportDeployments, investigations,
       station: profile?.stationName || user.station || "", badgeId: profile?.badgeId || "", unitId: profile?.unitId || "",
-      status: profile?.accountActive ? "active" : "inactive", active: profile?.accountActive,
-      createdBy: user.createdBy || null, createdAt: user.createdAt || null, updatedAt: profile?.updatedAt || user.updatedAt || null };
+      availabilityStatus: deployments.length || supportDeployments.length ? "busy" : profile?.availabilityStatus || "unknown",
+      status: profile?.accountActive ? "active" : "inactive", active: profile?.accountActive, isDemo,
+      createdBy: user.createdBy || null, createdAt: user.createdAt || null, updatedAt: user.updatedAt || user.createdAt || profile?.updatedAt || null };
   });
 }
 

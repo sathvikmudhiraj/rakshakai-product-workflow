@@ -49,12 +49,12 @@ function officerUnavailableReason(officer, user, db, reservedOfficerIds, inciden
   const id = officerUserId(officer);
   if (!id || reservedOfficerIds.has(id)) return "ALREADY ASSIGNED";
   if (activeOfficerDeployments(db, { officerId: id }).length) return "BUSY";
-  if (!user || user.role !== "Police Officer" || user.status === "inactive" || officer.active === false) return "OFF DUTY";
-  if (["off_duty", "leave", "suspended"].includes(normalized(officer.dutyStatus || officer.duty_status))) return "OFF DUTY";
-  if (["busy", "unavailable"].includes(normalized(officer.availabilityStatus || officer.availability_status))) return "BUSY";
+  if (!user || user.role !== "Police Officer" || user.active === false || ["inactive", "disabled", "deactivated"].includes(normalized(user.status)) || officer.active === false) return "OFF DUTY";
+  if (normalized(officer.dutyStatus || officer.duty_status) !== "on_duty") return "OFF DUTY";
+  if (normalized(officer.availabilityStatus || officer.availability_status) !== "available") return "BUSY";
   const assignedIncidentId = officer.assignedIncidentId || officer.assigned_incident_id;
   if (assignedIncidentId && assignedIncidentId !== incidentId) return "ALREADY ASSIGNED";
-  const memberships = (db.responseUnitMembers || []).filter((member) => (member.officerUserId || member.officer_user_id) === id);
+  const memberships = (db.responseUnitMembers || []).filter((member) => member.active !== false && (member.officerUserId || member.officer_user_id) === id);
   const occupied = memberships.some((member) => {
     const unitId = member.unitId || member.unit_id;
     const unit = (db.responseUnits || []).find((candidate) => candidate.id === unitId);

@@ -785,9 +785,17 @@
                 <label>Officer Name<input name="name" placeholder="Inspector Kavya Rao" required /></label>
                 <label>Email<input name="email" type="email" placeholder="officer@rakshakai.local" required /></label>
                 <label>Temporary Password<input name="temporaryPassword" type="password" minlength="8" placeholder="Minimum 8 characters" required /></label>
-                <label>Badge / Staff ID<input name="badgeId" placeholder="Badge / staff ID" /></label>
-                <label>Unit ID<input name="unitId" placeholder="Unit code" /></label>
-                <label>Station<input name="station" placeholder="Station or command post" /></label>
+                <label>Badge / Staff ID<input name="badgeId" placeholder="Badge / staff ID" required /></label>
+                <label>Response Unit<select name="unitId"><option value="">No primary unit</option></select></label>
+                <label>Registered Station<select name="stationId" required><option value="">Select a registered station</option></select></label>
+                <label>Rank<select name="rankId" required><option value="">Select an active rank</option></select></label>
+                <label>Operational Role<select name="operationalRole">
+                  <option value="">Standard Police Officer</option>
+                  <option value="DISPATCHER">Dispatcher</option>
+                  <option value="SUPERVISOR">Supervisor</option>
+                  <option value="CALL_TAKER">Call Taker</option>
+                  <option value="FIELD_OFFICER">Field Officer</option>
+                </select></label>
                 <label>Beat / Sector<input name="beat" placeholder="Beat / sector" /></label>
                 <label>Jurisdiction<input name="jurisdiction" placeholder="Jurisdiction" /></label>
                 <div class="police-user-actions">
@@ -800,8 +808,37 @@
               <div class="panel-head">
                 <div><span class="eyebrow">Officer Directory</span><h2>Police Officers</h2></div>
                 <span id="policeUserCount" class="chip">-- officers</span>
+                <label class="checkbox-inline"><input type="checkbox" id="showDemoOfficers" /> Show demo/test officers</label>
               </div>
+              <div class="police-directory-filters">
+                <label>Search officers<input id="policeSearch" type="search" placeholder="Name, badge, station or unit" /></label>
+                <label>Status<select id="policeStatusFilter"><option value="">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+                <label>Duty<select id="policeDutyFilter"><option value="">All duty states</option><option value="on_duty">On duty</option><option value="off_duty">Off duty</option><option value="leave">Leave</option><option value="suspended">Suspended</option></select></label>
+                <label>Sort<select id="policeSort"><option value="name">Name</option><option value="badgeId">Badge</option><option value="station">Station</option></select></label>
+              </div>
+              <p id="policeDirectoryStatus" class="form-status police-directory-status" role="status"></p>
               <div id="policeUserList" class="police-user-list"></div>
+              <div class="police-pagination"><button id="policePrevious" type="button" class="ghost">Previous</button><span id="policePageStatus"></span><button id="policeNext" type="button" class="ghost">Next</button></div>
+            </section>
+            <section class="panel police-management-panel" id="unitMembershipPanel">
+              <div class="panel-head">
+                <div><span class="eyebrow">Unit Membership</span><h2>Response Unit Members</h2><p>Admin-controlled officer-to-unit membership. Changes are audited and require an active officer profile.</p></div>
+                <select id="unitMembershipUnitSelect" class="unit-select">
+                  <option value="">Select a response unit</option>
+                </select>
+              </div>
+              <div id="unitMembershipList" class="unit-membership-list"></div>
+              <div class="unit-membership-actions"><button id="openUnitMembershipAdd" type="button" class="primary">Add Officer to Unit</button><button id="retryUnitMembership" type="button" class="ghost">Refresh Members</button></div>
+              <p id="unitMembershipStatus" class="form-status" role="status"></p>
+              <form id="unitMembershipAddForm" class="unit-membership-form" hidden>
+                <h3>Add Member to Unit</h3>
+                <label>Officer<select name="officerUserId" required><option value="">Select officer</option></select></label>
+                <label>Role<select name="role"><option value="member">Member</option><option value="commander">Commander</option><option value="driver">Driver</option><option value="deputy">Deputy</option></select></label>
+                <div class="unit-membership-actions">
+                  <button type="submit" class="primary">Add Member</button>
+                  <button type="button" class="ghost" id="cancelUnitMembershipAdd">Cancel</button>
+                </div>
+              </form>
             </section>
           </div>
         </section>

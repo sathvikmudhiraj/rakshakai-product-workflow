@@ -603,9 +603,25 @@ function incidentRespondersAnswer(db, reference, actor, supportOnly = false) {
   };
   if (!supportOnly && unit) {
     lines.push(`Primary Response: ${idOf(unit, "unitCode", "unitId")}`);
+    const named = new Set();
+    const explicitlyTracked = new Set((db.incidentOfficerAssignments || [])
+      .filter((deployment) => deployment.incidentId === incident.id)
+      .map((deployment) => String(deployment.officerId)));
     for (const deployment of activeOfficerDeployments(db, { incidentId: incident.id })) {
       const name = allowedName(deployment.officerId);
-      if (name) lines.push(`- ${name} (${deployment.responseRole})`);
+      if (name) { lines.push(`- ${name} (${deployment.responseRole})`); named.add(String(deployment.officerId)); }
+    }
+    // Unit assignment makes the configured, active on-duty crew visible as the
+    // primary unit roster. Explicit officer deployments remain listed above and
+    // are never replaced by membership-derived entries.
+    for (const member of db.responseUnitMembers || []) {
+      if ((member.unitId || member.unit_id) !== unit.id || member.active === false) continue;
+      const officerId = member.officerUserId || member.officer_user_id;
+      if (!officerId || named.has(String(officerId)) || explicitlyTracked.has(String(officerId))) continue;
+      const officer = findOfficer(db, officerId);
+      if (!officer || officer.active === false || !same(valueFrom(officer, "dutyStatus", "duty_status"), "on_duty")) continue;
+      const name = allowedName(officerId);
+      if (name) { lines.push(`- ${name} (unit crew)`); named.add(String(officerId)); }
     }
   }
   if (!incident.resourcesReleasedAt) for (const allocation of incident.supportAllocations || []) {

@@ -886,8 +886,8 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
     email: "meera.singh@rakshakai.local",
     temporaryPassword: "TempPolice123",
     badgeId: "DL-2042",
-    unitId: "PCR-11",
-    station: "Central Command",
+    unitId: "P-01",
+    station: "Patancheru Police Station",
     beat: "Sector 7",
     jurisdiction: "North Zone"
   };
@@ -947,7 +947,7 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
   const updated = await request(`/api/admin/police-users/${createdBody.user.id}`, {
     method: "PATCH",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Metro Command", beat: "Sector 8" })
+    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Patancheru Police Station", beat: "Sector 8" })
   });
   assert.equal(updated.status, 200);
   assert.equal((await updated.json()).user.name, "Inspector Meera Rao");

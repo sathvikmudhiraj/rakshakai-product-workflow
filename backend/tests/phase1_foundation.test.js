@@ -32,13 +32,21 @@ function createTestClient() {
 
 async function setupTestData(client) {
   await client.query(`
-    DELETE FROM police_officers;
-    DELETE FROM response_units;
-    DELETE FROM police_beats;
-    DELETE FROM police_stations;
+    DELETE FROM response_unit_members
+      WHERE unit_id LIKE 'test_unit_%' OR unit_id LIKE 'json_unit_test%'
+         OR officer_user_id LIKE 'test_officer_%' OR officer_user_id LIKE 'json_officer_test%'
+         OR officer_user_id IN ('test_admin', 'test_citizen');
+    DELETE FROM response_units WHERE id LIKE 'test_unit_%' OR id LIKE 'json_unit_test%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_officer_%' OR user_id LIKE 'json_officer_test%'
+      OR user_id IN ('test_admin', 'test_citizen');
+    DELETE FROM police_beats WHERE id IN ('beat_1', 'beat_2', 'beat_3', 'beat_dup', 'beat_a', 'beat_b')
+      OR id LIKE 'json_beat_test%';
+    DELETE FROM police_stations WHERE id IN ('station_1', 'station_2', 'station_a', 'station_b')
+      OR id LIKE 'json_station_test%';
     DELETE FROM officer_ranks WHERE code IN ('SI', 'ASI', 'CI', 'TEST_RANK');
-    DELETE FROM users WHERE role = 'Police Officer';
-    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+    DELETE FROM users WHERE id LIKE 'test_officer_%' OR id IN ('test_admin', 'test_citizen')
+      OR id LIKE 'json_officer_test%' OR email LIKE 'test_%@example.com'
+      OR email LIKE 'json_officer_test%@example.com';
   `);
 
   await client.query(`
@@ -65,13 +73,21 @@ async function setupTestData(client) {
 
 async function cleanupTestData(client) {
   await client.query(`
-    DELETE FROM police_officers;
-    DELETE FROM response_units;
-    DELETE FROM police_beats;
-    DELETE FROM police_stations;
+    DELETE FROM response_unit_members
+      WHERE unit_id LIKE 'test_unit_%' OR unit_id LIKE 'json_unit_test%'
+         OR officer_user_id LIKE 'test_officer_%' OR officer_user_id LIKE 'json_officer_test%'
+         OR officer_user_id IN ('test_admin', 'test_citizen');
+    DELETE FROM response_units WHERE id LIKE 'test_unit_%' OR id LIKE 'json_unit_test%';
+    DELETE FROM police_officers WHERE user_id LIKE 'test_officer_%' OR user_id LIKE 'json_officer_test%'
+      OR user_id IN ('test_admin', 'test_citizen');
+    DELETE FROM police_beats WHERE id IN ('beat_1', 'beat_2', 'beat_3', 'beat_dup', 'beat_a', 'beat_b')
+      OR id LIKE 'json_beat_test%';
+    DELETE FROM police_stations WHERE id IN ('station_1', 'station_2', 'station_a', 'station_b')
+      OR id LIKE 'json_station_test%';
     DELETE FROM officer_ranks WHERE code IN ('TEST_RANK');
-    DELETE FROM users WHERE role = 'Police Officer';
-    DELETE FROM users WHERE email LIKE 'test_%@example.com';
+    DELETE FROM users WHERE id LIKE 'test_officer_%' OR id IN ('test_admin', 'test_citizen')
+      OR id LIKE 'json_officer_test%' OR email LIKE 'test_%@example.com'
+      OR email LIKE 'json_officer_test%@example.com';
     DELETE FROM app_state WHERE key = 'operational';
   `);
 }
@@ -107,8 +123,8 @@ test("Phase 1: same beat code across different stations is allowed", async () =>
 
   await client.query(`
     INSERT INTO police_stations (id, station_code, name, jurisdiction, operational) VALUES
-      ('station_a', 'PS-A', 'Station A', 'Area A', TRUE),
-      ('station_b', 'PS-B', 'Station B', 'Area B', TRUE)
+      ('station_a', 'PS-PHASE1-A', 'Station A', 'Area A', TRUE),
+      ('station_b', 'PS-PHASE1-B', 'Station B', 'Area B', TRUE)
   `);
 
   await client.query(`

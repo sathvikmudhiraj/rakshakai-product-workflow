@@ -737,6 +737,15 @@ app.post("/api/logout", legacyHandler("/api/logout"));
 app.get("/api/admin/users", legacyHandler("/api/admin/users"));
 app.post("/api/admin/users", legacyHandler("/api/admin/users"));
 app.get("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
+app.get("/api/admin/police-reference", legacyHandler("/api/admin/police-reference"));
+for (const resource of ["officer-ranks", "police-beats"]) {
+  app.post(`/api/admin/${resource}`, legacyHandler(`/api/admin/${resource}`));
+  app.patch(`/api/admin/${resource}/:id`, legacyHandler((req) => `/api/admin/${resource}/${req.params.id}`));
+}
+app.get("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
+app.post("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
+app.patch("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
+app.delete("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
 app.post("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
 app.patch("/api/admin/police-users/:id", legacyHandler((req) => `/api/admin/police-users/${req.params.id}`));
 app.patch("/api/admin/police-users/:id/activate", legacyHandler((req) => `/api/admin/police-users/${req.params.id}/activate`));

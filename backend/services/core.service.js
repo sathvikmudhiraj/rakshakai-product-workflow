@@ -34,6 +34,7 @@ const policeOfficersRepository = require("../repositories/policeOfficers.reposit
 const responseUnitMembersRepository = require("../repositories/responseUnitMembers.repository");
 const incidentOfficerAssignmentsRepository = require("../repositories/incidentOfficerAssignments.repository");
 const { policeManagementUsers } = require("./copilotOfficers.service");
+const policeManagement = require("./policeManagement.service");
 const unitCapabilitiesRepository = require("../repositories/unitCapabilities.repository");
 const dispatchEscalationLogRepository = require("../repositories/dispatchEscalationLog.repository");
 const dispatchEscalationRulesRepository = require("../repositories/dispatchEscalationRules.repository");
@@ -374,6 +375,7 @@ async function readDatabase() {
     officerRanks,
     policeOfficers,
     responseUnitMembers,
+    incidentOfficerAssignments,
     unitCapabilities,
     dispatchEscalationLogs,
     dispatchEscalationRules,
@@ -419,6 +421,7 @@ async function readDatabase() {
     officerRanksRepository.list(defaults),
     policeOfficersRepository.list(defaults),
     responseUnitMembersRepository.list(defaults),
+    incidentOfficerAssignmentsRepository.list(defaults),
     unitCapabilitiesRepository.list(defaults),
     dispatchEscalationLogRepository.list(defaults),
     dispatchEscalationRulesRepository.list(defaults),
@@ -479,6 +482,7 @@ async function readDatabase() {
     officerRanks,
     policeOfficers,
     responseUnitMembers,
+    incidentOfficerAssignments,
     unitCapabilities,
     dispatchEscalationLogs,
     dispatchEscalationRules,
@@ -1129,7 +1133,7 @@ function releaseHybridDispatchResources(db, incident, releasedAt = now()) {
 }
 
 async function assignNearestIncident(incidentId, user) {
-  if (!hasDispatchRole(user)) return { status: 403, payload: { error: "Dispatcher or Admin authorization is required", code: "DISPATCH_FORBIDDEN" } };
+  if (!hasRole(user, ["Police Officer", "Admin"])) return { status: 403, payload: { error: "Police Officer or Admin authorization is required", code: "DISPATCH_FORBIDDEN" } };
   return withAssignmentLock(async () => {
     const lockedDb = await readDatabase();
     const incident = lockedDb.incidents.find((item) => item.id === incidentId);
@@ -2802,10 +2806,11 @@ function aiIncidentKey(incident) {
   const sourceName = normalizedIncidentValue(incident?.sourceName || incident?.source);
   const threatType = normalizedIncidentValue(incident?.threatType || incident?.type);
   const zone = normalizedIncidentValue(incident?.zone);
+  const observationId = String(incident?.sourceObservationId || "");
   const isAiSource = incident?.source === "AI" || sourceType.includes("ai") || sourceType.includes("camera");
   if (!isAiSource) return "";
   if (!sourceType || !sourceName || !threatType || !zone || !isActiveIncident(incident)) return "";
-  return [sourceType, sourceName, threatType, zone].join("|");
+  return [sourceType, sourceName, threatType, zone, observationId].join("|");
 }
 
 function consolidateActiveAiIncidents(incidents) {
@@ -2845,8 +2850,9 @@ function consolidateActiveAiAlerts(alerts) {
     const sourceName = normalizedIncidentValue(alert.sourceName);
     const threatType = normalizedIncidentValue(alert.threatType || alert.type);
     const zone = normalizedIncidentValue(alert.zone);
+    const observationId = String(alert.sourceObservationId || "");
     const key = sourceType && sourceName && threatType && zone && isActiveIncident(alert)
-      ? [sourceType, sourceName, threatType, zone].join("|")
+      ? [sourceType, sourceName, threatType, zone, observationId].join("|")
       : "";
     const existing = key ? activeByKey.get(key) : null;
     if (!existing) {
@@ -3003,8 +3009,8 @@ function policeUserForResponse(user, officer = null, db = null) {
   };
 }
 
-function policeUsersForResponse(db) {
-  return policeManagementUsers(db);
+function policeUsersForResponse(db, includeDemo = false) {
+  return policeManagementUsers(db).filter((user) => includeDemo || !user.isDemo);
 }
 
 function jwtSecret() {
@@ -4376,33 +4382,13 @@ function getEscalationRuleForUnit(unit, db) {
 }
 
 function checkCrewReadiness(unit, db) {
-  const unitId = unit.id || unit.unitId;
-  if (!unitId) return { ready: true, roles: {}, missing: [], reason: "No unit ID" };
-  const members = (db.responseUnitMembers || []).filter((m) => m.unitId === unitId || m.unit_id === unitId);
-  const roles = {};
-  for (const m of members) {
-    const role = m.role || "member";
-    roles[role] = (roles[role] || 0) + 1;
-  }
-  const hasCommander = (roles.commander || 0) > 0;
-  const hasDriver = (roles.driver || 0) > 0;
-  const hasMedic = (roles.medic || 0) > 0;
-  const missing = [];
-  if (!hasCommander) missing.push("commander");
-  if (!hasDriver) missing.push("driver");
-  const ready = missing.length === 0;
-  return {
-    ready,
-    roles,
-    missing,
-    reason: ready ? "Crew requirements satisfied" : `Missing roles: ${missing.join(', ')}`
-  };
+  return policeManagement.crewReadiness(db, unit);
 }
 
 function deployableUnitOfficerIds(unit, db, incidentId = null) {
   const unitId = unit.id || unit.unitId;
   const memberIds = (db.responseUnitMembers || [])
-    .filter((member) => (member.unitId || member.unit_id) === unitId)
+    .filter((member) => (member.unitId || member.unit_id) === unitId && member.active !== false)
     .map((member) => member.officerUserId || member.officer_user_id)
     .filter(Boolean);
   return [...new Set(memberIds)].filter((officerId) => {
@@ -5103,10 +5089,11 @@ async function apiInternal(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/reports") {
     if (!user) return sendJson(res, 401, { error: "Authentication required" });
+    const newestFirst = (a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
     return sendJson(res, 200, {
       reports: user.role === "Citizen"
-        ? db.reports.filter((report) => report.createdBy === user.id).map((report) => citizenReportForResponse(db, report))
-        : db.reports
+        ? db.reports.filter((report) => report.createdBy === user.id).map((report) => citizenReportForResponse(db, report)).sort(newestFirst)
+        : [...db.reports].sort(newestFirst)
     });
   }
 
@@ -5467,7 +5454,7 @@ async function apiInternal(req, res, url) {
       ? db.responseUnits.find((unit) => [unit.id, unit.unitId, unit.unitCode].some((id) => authorisedIds.includes(id)))
       : null;
     return sendJson(res, 200, {
-      units: db.responseUnits.map(unitForResponse),
+      units: db.responseUnits.map((unit) => ({ ...unitForResponse(unit), crewReadiness: checkCrewReadiness(unit, db) })),
       summary: responseUnitSummary(db.responseUnits),
       telemetryUnit: telemetryUnit ? unitForResponse(telemetryUnit) : null
     });
@@ -5625,6 +5612,122 @@ async function apiInternal(req, res, url) {
       return sendJson(res, error.status || 400, { error: error.message });
     }
   }
+  const adminUnitMembersMatch = url.pathname.match(/^\/api\/admin\/response-units\/([^/]+)\/members$/);
+  const adminUnitMemberMatch = url.pathname.match(/^\/api\/admin\/response-units\/([^/]+)\/members\/([^/]+)$/);
+  if (adminUnitMembersMatch || adminUnitMemberMatch) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const unitId = adminUnitMembersMatch ? adminUnitMembersMatch[1] : adminUnitMemberMatch[1];
+    const unit = db.responseUnits.find((item) => item.id === unitId || item.unitCode === unitId || item.unitId === unitId);
+    if (!unit) return sendJson(res, 404, { error: "Response unit not found" });
+    if (req.method === "GET" && adminUnitMembersMatch) {
+      const members = (db.responseUnitMembers || []).filter((member) => (member.unitId || member.unit_id) === unit.id);
+      const enriched = members.map((member) => {
+        const officerUser = db.users.find((u) => u.id === (member.officerUserId || member.officer_user_id));
+        const officerProfile = (db.policeOfficers || []).find((o) => (o.userId || o.user_id || o.id) === (member.officerUserId || member.officer_user_id));
+        const rank = officerProfile ? (db.officerRanks || []).find((r) => r.id === (officerProfile.rankId || officerProfile.rank_id)) : null;
+        return {
+          id: member.id,
+          unitId: unit.id,
+          unitCode: unit.unitCode || unit.unitId || unit.id,
+          officerUserId: member.officerUserId || member.officer_user_id,
+          role: member.role || "member",
+          active: member.active !== false,
+          updatedAt: member.updatedAt || member.assignedAt || member.createdAt || null,
+          locked: policeManagement.unitCommitted(db, unit) || policeManagement.officerCommitted(db, member.officerUserId || member.officer_user_id),
+          assignedAt: member.assignedAt || member.createdAt || null,
+          officer: officerUser ? {
+            id: officerUser.id,
+            name: officerUser.name,
+            badgeId: officerProfile?.badgeId || officerUser.badgeId || null,
+            rank: rank?.name || rank?.code || null,
+            dutyStatus: officerProfile?.dutyStatus || officerProfile?.duty_status || null,
+            station: policeManagement.stationFor(db, officerProfile?.stationId)?.name || policeManagement.stationFor(db, officerProfile?.stationId)?.stationName || null,
+            availabilityStatus: policeManagement.officerCommitted(db, officerUser.id) ? "busy" : officerProfile?.availabilityStatus || officerProfile?.availability_status || null,
+            currentIncidentId: incidentOfficerAssignmentService.activeOfficerDeployments(db, { officerId: officerUser.id })[0]?.incidentId || officerProfile?.assignedIncidentId || null,
+            active: officerProfile?.active !== false && officerUser?.status !== "inactive" && officerUser?.active !== false,
+            isDemo: Boolean(officerUser?.data?.isDemo === true || officerProfile?.data?.isDemo === true)
+          } : null
+        };
+      });
+      return sendJson(res, 200, { members: enriched, crewReadiness: checkCrewReadiness(unit, db), locked: policeManagement.unitCommitted(db, unit) });
+    }
+    if (req.method === "POST" && adminUnitMembersMatch) {
+      const officerUserId = String(body.officerUserId || "").trim();
+      const role = String(body.role || "member").trim();
+      if (!officerUserId) return sendJson(res, 400, { error: "officerUserId is required" });
+      policeManagement.validateMember(db, unit, officerUserId, role);
+      const officerUser = db.users.find((u) => u.id === officerUserId && u.role === "Police Officer");
+      if (!officerUser) return sendJson(res, 404, { error: "Police officer not found" });
+      const officerProfile = (db.policeOfficers || []).find((o) => (o.userId || o.user_id || o.id) === officerUserId);
+      if (!officerProfile) return sendJson(res, 400, { error: "Officer profile not found. Create a police officer profile first." });
+      if (officerProfile.active === false || officerUser.status === "inactive") return sendJson(res, 409, { error: "Officer is inactive" });
+      const existing = (db.responseUnitMembers || []).find((m) => (m.unitId || m.unit_id) === unit.id && (m.officerUserId || m.officer_user_id) === officerUserId);
+      if (existing) return sendJson(res, 409, { error: "Officer is already an active member of this unit" });
+      const membership = {
+        id: uid("member"),
+        unitId: unit.id,
+        officerUserId,
+        role,
+        assignedAt: now(),
+        active: true
+      };
+      db.responseUnitMembers.push(membership);
+      const audit = addAuditLog(db, "unit_member_added", user, null, `${unit.unitCode || unit.id}: added ${officerUser.name} (${officerUserId}) as ${role}`, now());
+      await writeSelectedRecords(db, [[responseUnitMembersRepository, [membership]], [auditLogsRepository, [audit]]]);
+      return sendJson(res, 201, { member: membership });
+    }
+    if (req.method === "PATCH" && adminUnitMemberMatch) {
+      const memberId = adminUnitMemberMatch[2];
+      const member = (db.responseUnitMembers || []).find((m) => m.id === memberId && (m.unitId || m.unit_id) === unit.id);
+      if (!member) return sendJson(res, 404, { error: "Unit member not found" });
+      policeManagement.assertVersion(member, body.expectedUpdatedAt);
+      policeManagement.assertMembershipChange(db, unit, member.officerUserId || member.officer_user_id);
+      const role = String(body.role || "").trim();
+      const previousRole = member.role || "member";
+      if (role) {
+        if (!policeManagement.MEMBERSHIP_ROLES.includes(role)) return sendJson(res, 400, { error: "Invalid role" });
+        member.role = role;
+      }
+      const active = body.active;
+      if (active !== undefined && typeof active !== "boolean") return sendJson(res, 400, { error: "Active must be a boolean" });
+      if (active === true) policeManagement.validateMember(db, unit, member.officerUserId || member.officer_user_id, member.role);
+      if (active !== undefined) member.active = Boolean(active);
+      member.updatedAt = now();
+      const audit = addAuditLog(db, "unit_member_updated", user, null, JSON.stringify({
+        unitId: unit.id,
+        memberId: member.id,
+        officerUserId: member.officerUserId || member.officer_user_id,
+        previousRole,
+        role: member.role || "member",
+        active: member.active !== false
+      }), now());
+      await writeSelectedRecords(db, [[responseUnitMembersRepository, [member]], [auditLogsRepository, [audit]]]);
+      return sendJson(res, 200, { member });
+    }
+    if (req.method === "DELETE" && adminUnitMemberMatch) {
+      const memberId = adminUnitMemberMatch[2];
+      const idx = (db.responseUnitMembers || []).findIndex((m) => m.id === memberId && (m.unitId || m.unit_id) === unit.id);
+      if (idx === -1) return sendJson(res, 404, { error: "Unit member not found" });
+      const member = db.responseUnitMembers[idx];
+      policeManagement.assertVersion(member, body.expectedUpdatedAt);
+      policeManagement.assertMembershipChange(db, unit, member.officerUserId || member.officer_user_id);
+      db.responseUnitMembers.splice(idx, 1);
+      const officerUserId = member.officerUserId || member.officer_user_id;
+      const officer = (db.users || []).find((item) => item.id === officerUserId);
+      const audit = addAuditLog(db, "unit_member_removed", user, null, JSON.stringify({
+        unitId: unit.id,
+        memberId: member.id,
+        officerUserId,
+        officerName: officer?.name || null,
+        role: member.role || "member",
+        active: member.active !== false
+      }), now());
+      if (getDatabaseMode() === "postgres") await query("DELETE FROM response_unit_members WHERE id = $1 AND unit_id = $2", [member.id, unit.id]);
+      await writeSelectedRecords(db, [[responseUnitMembersRepository, db.responseUnitMembers, true], [auditLogsRepository, [audit]]]);
+      return sendJson(res, 200, { removed: true });
+    }
+    return sendJson(res, 405, { error: "Method not allowed" });
+  }
   if (req.method === "GET" && url.pathname === "/api/response-units/nearest") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     const lat = numberParam(url, "lat");
@@ -5686,9 +5789,38 @@ async function apiInternal(req, res, url) {
     return sendJson(res, 201, { user: publicUser(created) });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/admin/police-reference") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    return sendJson(res, 200, { stations: db.policeStations.map(stationForResponse), ranks: db.officerRanks, beats: db.policeBeats });
+  }
+  const policeReferenceMatch = url.pathname.match(/^\/api\/admin\/(officer-ranks|police-beats)(?:\/([^/]+))?$/);
+  if (policeReferenceMatch && ["POST", "PATCH"].includes(req.method)) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const ranks = policeReferenceMatch[1] === "officer-ranks";
+    const records = ranks ? db.officerRanks : db.policeBeats;
+    const existing = policeReferenceMatch[2] ? records.find((record) => record.id === policeReferenceMatch[2]) : null;
+    if (req.method === "PATCH" && !existing) return sendJson(res, 404, { error: "Reference record not found" });
+    if (existing) policeManagement.assertVersion(existing, body.expectedUpdatedAt);
+    const name = String(body.name ?? existing?.name ?? "").trim();
+    const code = String(body.code ?? body.beatCode ?? existing?.code ?? existing?.beatCode ?? "").trim();
+    if (!name || !code) return sendJson(res, 400, { error: "Name and code are required" });
+    if (body.active !== undefined && typeof body.active !== "boolean") return sendJson(res, 400, { error: "Active must be a boolean" });
+    const station = ranks ? null : policeManagement.stationFor(db, body.stationId ?? existing?.stationId);
+    if (!ranks && !station) return sendJson(res, 400, { error: "Select a registered police station" });
+    if (records.some((record) => record.id !== existing?.id && String(record.code || record.beatCode).toLowerCase() === code.toLowerCase() && (ranks || record.stationId === station.id))) return sendJson(res, 409, { error: "Code is already registered" });
+    const level = Number(body.level ?? existing?.level ?? 1);
+    if (ranks && (!Number.isInteger(level) || level < 0)) return sendJson(res, 400, { error: "Rank level must be a non-negative integer" });
+    if (existing && (body.active === false || (!ranks && station.id !== existing.stationId)) && (db.policeOfficers || []).some((officer) => (ranks ? officer.rankId === existing.id : officer.beatId === existing.id))) return sendJson(res, 409, { error: "Reference is in use by officers. Update their profiles first." });
+    const record = { ...existing, id: existing?.id || uid(ranks ? "rank" : "beat"), name, createdAt: existing?.createdAt || now(), updatedAt: now(), ...(ranks ? { code, level, active: body.active ?? existing?.active ?? true } : { beatCode: code, stationId: station.id, jurisdiction: String(body.jurisdiction ?? existing?.jurisdiction ?? "").trim(), operational: body.active ?? existing?.operational ?? true }) };
+    const audit = addAuditLog(db, ranks ? "officer_rank_updated" : "police_beat_updated", user, null, `${record.id}: ${code}`);
+    await writeSelectedRecords(db, [[ranks ? officerRanksRepository : policeBeatsRepository, [record]], [auditLogsRepository, [audit]]]);
+    return sendJson(res, existing ? 200 : 201, { record });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/admin/police-users") {
     if (!hasRole(user, ["Admin"])) return forbidden(res);
-    return sendJson(res, 200, { users: policeUsersForResponse(db) });
+    const includeDemo = url.searchParams.get("includeDemo") === "true";
+    return sendJson(res, 200, { users: policeUsersForResponse(db, includeDemo) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/admin/police-users") {
@@ -5700,6 +5832,7 @@ async function apiInternal(req, res, url) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: "Enter a valid email" });
     if (password.length < 8) return sendJson(res, 400, { error: "Temporary password must be at least 8 characters" });
     if (db.users.some((item) => normalizeEmail(item.email) === email)) return sendJson(res, 409, { error: "Email is already registered" });
+    const validatedPersonnel = policeManagement.validatePersonnel(db, body);
     const createdAt = now();
     const created = {
       id: uid("u"),
@@ -5707,9 +5840,11 @@ async function apiInternal(req, res, url) {
       email,
       role: "Police Officer",
       passwordHash: await bcrypt.hash(password, 12),
-      badgeId: String(body.badgeId || "").trim(),
+      operationalRole: validatedPersonnel.operationalRole,
+      badgeId: validatedPersonnel.badgeId,
       unitId: String(body.unitId || "").trim(),
-      station: String(body.station || "").trim(),
+      station: validatedPersonnel.station?.id ?? String(body.station || "").trim(),
+      stationId: validatedPersonnel.station?.id ?? null,
       beat: String(body.beat || "").trim(),
       jurisdiction: String(body.jurisdiction || "").trim(),
       status: body.status === "inactive" ? "inactive" : "active",
@@ -5718,24 +5853,27 @@ async function apiInternal(req, res, url) {
     };
     db.users.push(created);
     const linkedStation = findLinkedStation({ stationId: created.station, stationName: created.station }, db.policeStations || []);
-    const defaultRank = (db.officerRanks || []).find((rank) => rank.active !== false);
+    const defaultRank = validatedPersonnel.rank;
     const officer = linkedStation && defaultRank ? {
       id: created.id,
       userId: created.id,
       badgeId: created.badgeId || null,
       stationId: linkedStation.id,
       rankId: defaultRank.id,
+      beatId: validatedPersonnel.beatId,
       beat: created.beat,
       jurisdiction: created.jurisdiction,
       active: created.status !== "inactive",
-      dutyStatus: body.dutyStatus || "on_duty",
-      availabilityStatus: body.availabilityStatus || "available",
+      dutyStatus: validatedPersonnel.dutyStatus,
+      availabilityStatus: validatedPersonnel.availabilityStatus,
       assignedIncidentId: null,
       createdAt,
       updatedAt: createdAt
     } : null;
     if (officer) db.policeOfficers.push(officer);
     const linkedUnit = db.responseUnits.find((unit) => [unit.id, unit.unitId, unit.unitCode].includes(created.unitId));
+    if (created.unitId && !linkedUnit) return sendJson(res, 400, { error: "Select a registered response unit", code: "INVALID_UNIT" });
+    if (linkedUnit && officer) policeManagement.validateMember(db, linkedUnit, created.id, "member");
     const membership = officer && linkedUnit ? {
       id: uid("member"), unitId: linkedUnit.id, officerUserId: created.id, role: "member", assignedAt: createdAt
     } : null;
@@ -5759,15 +5897,20 @@ async function apiInternal(req, res, url) {
     }
     const currentAssignment = policeUserForResponse(policeUser, null, db);
     const beforeOfficer = (db.policeOfficers || []).find((candidate) => (candidate.userId || candidate.user_id || candidate.id) === policeUser.id);
-    const beforeFields = { station: currentAssignment.station, beat: currentAssignment.beat, jurisdiction: currentAssignment.jurisdiction, dutyStatus: beforeOfficer?.dutyStatus || beforeOfficer?.duty_status, availabilityStatus: beforeOfficer?.availabilityStatus || beforeOfficer?.availability_status };
+    const validatedPersonnel = policeManagement.validatePersonnel(db, body, policeUser, beforeOfficer);
+    const beforeFields = { station: currentAssignment.station, beat: currentAssignment.beat, jurisdiction: currentAssignment.jurisdiction, dutyStatus: beforeOfficer?.dutyStatus || beforeOfficer?.duty_status, availabilityStatus: beforeOfficer?.availabilityStatus || beforeOfficer?.availability_status, operationalRole: policeUser.operationalRole || policeUser.data?.operationalRole || null };
     const previousMembers = (db.responseUnitMembers || []).filter((member) => (member.officerUserId || member.officer_user_id) === policeUser.id);
     const currentUnit = db.responseUnits.find((candidate) => [candidate.id, candidate.unitId, candidate.unitCode].filter(Boolean).includes(currentAssignment.unitId));
     const unitSpecified = Object.prototype.hasOwnProperty.call(body, "unitId") && body.unitId != null;
     policeUser.name = name;
     policeUser.email = email;
-    const requestedBadgeId = String(body.badgeId ?? policeUser.badgeId ?? "").trim();
+    policeUser.operationalRole = validatedPersonnel.operationalRole;
+    policeUser.data = { ...(policeUser.data || {}) };
+    if (validatedPersonnel.operationalRole) policeUser.data.operationalRole = validatedPersonnel.operationalRole;
+    else delete policeUser.data.operationalRole;
+    const requestedBadgeId = validatedPersonnel.badgeId;
     const requestedUnitId = String(body.unitId ?? currentAssignment.unitId ?? "").trim();
-    const requestedStation = String(body.station ?? currentAssignment.stationId ?? policeUser.station ?? "").trim();
+    const requestedStation = String(body.stationId ?? body.station ?? currentAssignment.stationId ?? policeUser.station ?? "").trim();
     policeUser.badgeId = requestedBadgeId;
     policeUser.unitId = requestedUnitId;
     policeUser.station = requestedStation;
@@ -5782,18 +5925,20 @@ async function apiInternal(req, res, url) {
       : null;
     if (unitSpecified && requestedUnitId && !linkedUnit && officer) return sendJson(res, 400, { error: "Select a valid response unit" });
     const unitChanged = unitSpecified && (linkedUnit ? linkedUnit.id !== currentUnit?.id : requestedUnitId !== (currentAssignment.unitId || ""));
+    const removedMembers = unitChanged && currentUnit
+      ? previousMembers.filter((member) => (member.unitId || member.unit_id) === currentUnit.id)
+      : [];
+    const retainedMembers = previousMembers.filter((member) => !removedMembers.includes(member));
     if (unitChanged) {
+      if (policeManagement.officerCommitted(db, policeUser.id)) return sendJson(res, 409, { error: "Release the officer's active deployment before changing membership" });
       const deployed = [currentUnit, linkedUnit].filter(Boolean).some((unit) => {
         const linkedId = unit.assignedIncidentId || unit.currentIncidentId;
         return (db.incidents || []).some((incident) => isActiveIncident(incident)
           && (incident.assignedUnitId === unit.id || (linkedId && incident.id === linkedId)));
       });
       if (deployed) return sendJson(res, 409, { error: "Unit membership cannot be changed while the response unit has an active deployment." });
+      if (linkedUnit) policeManagement.assertMembershipChange(db, linkedUnit, policeUser.id);
     }
-    const removedMembers = unitChanged && currentUnit
-      ? previousMembers.filter((member) => (member.unitId || member.unit_id) === currentUnit.id)
-      : [];
-    const retainedMembers = previousMembers.filter((member) => !removedMembers.includes(member));
     if (linkedStation && Object.prototype.hasOwnProperty.call(body, "station")) {
       const conflictingMember = retainedMembers.some((member) => {
         const unit = db.responseUnits.find((candidate) => candidate.id === (member.unitId || member.unit_id));
@@ -5806,6 +5951,7 @@ async function apiInternal(req, res, url) {
       const unitStation = findLinkedStation(linkedUnit, db.policeStations || []);
       if (unitStation && unitStation.id !== linkedStation.id) return sendJson(res, 400, { error: "Response unit belongs to another police station" });
     }
+    if (linkedUnit) policeManagement.validateMember(db, linkedUnit, policeUser.id, "member");
     if (!officer && linkedStation) {
       const defaultRank = (db.officerRanks || []).find((rank) => rank.active !== false);
       if (defaultRank) {
@@ -5828,6 +5974,8 @@ async function apiInternal(req, res, url) {
       }
     }
     if (officer) {
+      if (validatedPersonnel.rank) officer.rankId = officer.rank_id = validatedPersonnel.rank.id;
+      officer.beatId = officer.beat_id = validatedPersonnel.beatId;
       if (linkedStation) officer.stationId = linkedStation.id;
       if (requestedBadgeId) officer.badgeId = requestedBadgeId;
       const dutyStatus = normalizedIncidentValue(body.dutyStatus ?? officer.dutyStatus ?? officer.duty_status ?? "on_duty").replace(/\s+/g, "_");
@@ -5857,8 +6005,11 @@ async function apiInternal(req, res, url) {
     }
     const audit = addAuditLog(db, "police_account_updated", user, null, `${policeUser.name}: ${policeUser.email}`, policeUser.updatedAt);
     const changeAudits = [];
-    for (const [field, after] of Object.entries({ station: policeUser.station, beat: policeUser.beat, jurisdiction: policeUser.jurisdiction, dutyStatus: officer?.dutyStatus, availabilityStatus: officer?.availabilityStatus })) {
-      if (String(beforeFields[field] || "") !== String(after || "")) changeAudits.push(addAuditLog(db, `police_${field}_changed`, user, null, `${policeUser.id}: ${beforeFields[field] || "Not recorded"} -> ${after || "Not recorded"}`, policeUser.updatedAt));
+    for (const [field, after] of Object.entries({ station: policeUser.station, beat: policeUser.beat, jurisdiction: policeUser.jurisdiction, dutyStatus: officer?.dutyStatus, availabilityStatus: officer?.availabilityStatus, operationalRole: policeUser.operationalRole })) {
+      if (String(beforeFields[field] || "") !== String(after || "")) {
+        const auditField = field === "operationalRole" ? "operational_role" : field;
+        changeAudits.push(addAuditLog(db, `police_${auditField}_changed`, user, null, `${policeUser.id}: ${beforeFields[field] || "Not recorded"} -> ${after || "Not recorded"}`, policeUser.updatedAt));
+      }
     }
     if (unitChanged) changeAudits.push(addAuditLog(db, "police_unit_membership_changed", user, null, `${policeUser.id}: ${currentAssignment.unitId || "Unassigned"} -> ${policeUser.unitId || "Unassigned"}`, policeUser.updatedAt));
     if (getDatabaseMode() === "postgres" && removedMembers.length) {
@@ -5876,6 +6027,8 @@ async function apiInternal(req, res, url) {
     const policeUser = db.users.find((item) => item.id === policeStatusMatch[1] && item.role === "Police Officer");
     if (!policeUser) return sendJson(res, 404, { error: "Police account not found" });
     const active = policeStatusMatch[2] === "activate";
+    policeManagement.assertVersion(policeUser, body.expectedUpdatedAt);
+    if (!active && policeManagement.officerCommitted(db, policeUser.id)) return sendJson(res, 409, { code: "ACTIVE_DEPLOYMENT", error: "Release the officer's active deployments before deactivation" });
     policeUser.status = active ? "active" : "inactive";
     policeUser.updatedAt = now();
     if (!active) policeUser.sessionVersion = crypto.randomUUID();
@@ -6314,7 +6467,7 @@ async function apiInternal(req, res, url) {
   }
   const assignNearestMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/assign-nearest$/);
   if (req.method === "POST" && assignNearestMatch) {
-    if (!hasDispatchRole(user)) return forbidden(res);
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     const response = await assignNearestIncident(assignNearestMatch[1], user);
     return sendJson(res, response.status, response.payload);
   }

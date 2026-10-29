@@ -175,5 +175,10 @@ test("ERSS dispatcher workflow: review creates recommendation, approval requests
   assert.equal(persisted.rows[0].status, "REQUESTED");
   assert.ok(persisted.rows[0].timeout_at);
 
+  // This verification test shares the isolated integration schema with the
+  // Phase 1 tests, which reset users and response_units. Delete the test event
+  // so its cascading ERSS requests cannot hold those fixtures through FKs.
+  await query("DELETE FROM erss_events WHERE id = $1", [event.id]);
+
   await closePool();
 });

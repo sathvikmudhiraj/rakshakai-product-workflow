@@ -114,6 +114,8 @@ const state = {
   videoEvidence: { evidence: [], observations: [] },
   activeEvidenceId: null,
   policeUsers: [],
+  policeReference: { stations: [], ranks: [] },
+  policeDirectory: { search: "", status: "", duty: "", sort: "name", page: 1, pageSize: 8, includeDemo: false },
   dashboardSummary: {},
   activeDashboardKpi: null,
   activeCommandKpi: null,
@@ -411,6 +413,7 @@ function setView(view, options = {}) {
   if (view === "erss-assistance") renderErssAssistance();
   if (view === "erss-supervisor") renderErssSupervisor();
   if (view === "erss-field") renderErssField();
+  if (view === "police-management") loadUnitMembershipData();
   requestAnimationFrame(renderSatelliteMaps);
 }
 
@@ -2357,6 +2360,23 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
   panel.append(alternatives);
   if (recommendation.status === "recommended") {
     const actions = node("div", "hybrid-dispatch-actions");
+    const incidentForConfirm = activeIncident();
+    const primaryConfirm = primary && incidentForConfirm && !incidentForConfirm.assignedUnitId && canDispatchUnits(state.user)
+      ? node("button", "primary", "Confirm Dispatch")
+      : null;
+    if (primaryConfirm) {
+      primaryConfirm.type = "button";
+      primaryConfirm.addEventListener("click", () => withButtonBusy(primaryConfirm, "Confirming...", async () => {
+        await api(`/api/incidents/${encodeURIComponent(recommendation.incidentId)}/assign-unit`, {
+          method: "POST",
+          body: { unitId: primary.unitId, expectedAssignedUnitId: null, reason: "Confirmed recommended primary dispatch" }
+        });
+        assignmentRecommendationCoordinator.clear();
+        state.dispatchRecommendation = null;
+        state.dispatchSupportRoutes = [];
+        await refresh();
+      }).catch((error) => alert(dispatchErrorMessage(error))));
+    }
     const confirm = supportAllowed ? node("button", "primary", "Confirm Hybrid / Emergency Support") : null;
     if (confirm) {
       confirm.type = "button";
@@ -2381,7 +2401,7 @@ function renderHybridDispatchRecommendation(panel, recommendation) {
       await refresh();
       setText("#routeSummary", "Dispatch recommendation cancelled.");
     }).catch((error) => alert(dispatchErrorMessage(error))));
-    actions.append(...[confirm, viewAlternatives, cancel].filter(Boolean));
+    actions.append(...[primaryConfirm, confirm, viewAlternatives, cancel].filter(Boolean));
     panel.append(actions);
   }
 }
@@ -4906,7 +4926,7 @@ async function assignSelectedPoliceOfficers() {
 async function submitPoliceAssignmentMutation(incidentId, path, options) {
   if (state.policeAssignment.mutationInFlight) return;
   state.policeAssignment.mutationInFlight = true;
-  const controls = $$("#policeAssignmentMembers input, #policeAssignmentMembers select, #policeAssignmentMembers button, #assignSelectedOfficers");
+  const controls = [...$$("#policeAssignmentMembers input, #policeAssignmentMembers select, #policeAssignmentMembers button, #assignSelectedOfficers")];
   const disabled = controls.map((control) => control.disabled);
   controls.forEach((control) => { control.disabled = true; });
   let errorMessage = null;
@@ -5282,6 +5302,7 @@ function renderStationRegistry(stations = state.policeStations) {
 }
 
 function policeUserCard(user) {
+  const operationalRoleLabels = { DISPATCHER: "Dispatcher", SUPERVISOR: "Supervisor", CALL_TAKER: "Call Taker", FIELD_OFFICER: "Field Officer" };
   const card = node("article", `police-user-card ${user.status === "inactive" ? "inactive" : "active"}`);
   const head = node("div", "police-user-head");
   const identity = node("div", "police-user-identity");
@@ -5292,6 +5313,7 @@ function policeUserCard(user) {
     ["Badge / Staff ID", user.badgeId],
     ["Rank", user.rank],
     ["Police role", user.role],
+    ["Operational role", operationalRoleLabels[user.operationalRole] || "Standard Police Officer"],
     ["Response Unit", user.unitId || "Not Assigned"],
     ["Station", user.station],
     ["Beat / Sector", user.beat],
@@ -5340,8 +5362,6 @@ function policeUserCard(user) {
     ["name", "Name", user.name],
     ["email", "Email", user.email],
     ["badgeId", "Badge ID", user.badgeId],
-    ["unitId", "Unit ID", user.unitId],
-    ["station", "Station", user.station],
     ["beat", "Beat", user.beat],
     ["jurisdiction", "Jurisdiction", user.jurisdiction]
   ].forEach(([name, label, value]) => {
@@ -5355,7 +5375,14 @@ function policeUserCard(user) {
     field.append(input);
     form.append(field);
   });
+  const linkedUnitId = user.unitIds?.[0] || state.responseUnits.find((unit) => [unit.id, unit.unitId, unit.unitCode].includes(user.unitId))?.id || "";
+  form.append(responseUnitSelect("unitId", linkedUnitId));
+  const stationOption = state.policeReference.stations.find((station) => station.id === user.stationId
+    || String(station.stationName || station.name || "").toLocaleLowerCase() === String(user.station || "").toLocaleLowerCase());
+  form.append(referenceSelect("stationId", "Registered Station", state.policeReference.stations, stationOption?.id || "", "Select a registered station"));
+  form.append(referenceSelect("rankId", "Rank", state.policeReference.ranks, user.rankId || "", "Select an active rank"));
   [
+    ["operationalRole", "Operational Role", user.operationalRole || "", [["", "Standard Police Officer"], ["DISPATCHER", "Dispatcher"], ["SUPERVISOR", "Supervisor"], ["CALL_TAKER", "Call Taker"], ["FIELD_OFFICER", "Field Officer"]]],
     ["dutyStatus", "Duty Status", user.dutyStatus || "on_duty", [["on_duty", "On Duty"], ["off_duty", "Off Duty"], ["leave", "Leave"], ["suspended", "Suspended"]]],
     ["availabilityStatus", "Availability", user.availabilityStatus || "available", [["available", "Available"], ["busy", "Busy"], ["unavailable", "Unavailable"]]]
   ].forEach(([name, label, value, options]) => {
@@ -5413,17 +5440,73 @@ function renderPoliceManagementKpis(users = []) {
 function renderPoliceUsers(users = []) {
   state.policeUsers = users;
   renderPoliceManagementKpis(users);
-  setText("#policeUserCount", `${users.length} officer${users.length === 1 ? "" : "s"}`);
+  const directory = state.policeDirectory;
+  const query = directory.search.trim().toLocaleLowerCase();
+  const filtered = users.filter((user) => {
+    if (directory.status && String(user.status || "active").toLowerCase() !== directory.status) return false;
+    if (directory.duty && String(user.dutyStatus || "").toLowerCase() !== directory.duty) return false;
+    if (query && ![user.name, user.email, user.badgeId, user.station, user.unitId, user.rank, user.operationalRole]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(query))) return false;
+    return true;
+  });
+  filtered.sort((a, b) => String(a[directory.sort] || "").localeCompare(String(b[directory.sort] || ""), undefined, { sensitivity: "base" }));
+  const pages = Math.max(1, Math.ceil(filtered.length / directory.pageSize));
+  directory.page = Math.min(Math.max(1, directory.page), pages);
+  const start = (directory.page - 1) * directory.pageSize;
+  const visible = filtered.slice(start, start + directory.pageSize);
+  setText("#policeUserCount", `${filtered.length} of ${users.length} officer${users.length === 1 ? "" : "s"}`);
+  setText("#policePageStatus", filtered.length ? `Page ${directory.page} of ${pages} · ${start + 1}–${Math.min(start + directory.pageSize, filtered.length)} of ${filtered.length}` : "Page 1 of 1 · 0 officers");
+  const previous = $("#policePrevious");
+  const next = $("#policeNext");
+  if (previous) previous.disabled = directory.page <= 1;
+  if (next) next.disabled = directory.page >= pages;
+  setText("#policeDirectoryStatus", filtered.length ? "" : users.length ? "No officers match these filters." : "No police accounts yet.");
   const list = $("#policeUserList");
   if (!list) return;
   list.textContent = "";
-  if (!users.length) {
+  if (!visible.length) {
     const empty = node("article", "police-user-empty");
-    empty.append(node("strong", "", "No police accounts yet"), node("small", "", "Create staff accounts here. Public signup remains Citizen-only."));
+    empty.append(node("strong", "", users.length ? "No matching officers" : "No police accounts yet"), node("small", "", users.length ? "Change the search or filter selections and try again." : "Create staff accounts here. Public signup remains Citizen-only."));
     list.append(empty);
     return;
   }
-  users.forEach((user) => list.append(policeUserCard(user)));
+  visible.forEach((user) => list.append(policeUserCard(user)));
+}
+
+function referenceSelect(name, label, options, selectedValue, placeholder) {
+  const field = node("label", "");
+  field.append(document.createTextNode(label));
+  const select = document.createElement("select");
+  select.name = name;
+  select.required = true;
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = placeholder;
+  select.append(blank);
+  options.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.label || item.stationName || item.name || item.code || item.id;
+    option.selected = item.id === selectedValue;
+    select.append(option);
+  });
+  field.append(select);
+  return field;
+}
+
+function responseUnitSelect(name, selectedValue = "") {
+  const field = node("label", "");
+  field.append(document.createTextNode("Response Unit"));
+  const select = document.createElement("select");
+  select.name = name;
+  select.add(new Option("No primary unit", ""));
+  state.responseUnits.forEach((unit) => {
+    const value = unit.id || unit.unitId || unit.unitCode;
+    const label = unit.unitCode || unit.unitId || value;
+    select.add(new Option(`${label} · ${unit.unitName || unit.name || "Response Unit"}`, value, false, value === selectedValue));
+  });
+  field.append(select);
+  return field;
 }
 
 function integrationStatusLabel(status) {
@@ -6318,9 +6401,14 @@ async function captureLiveVisionFrame() {
   }
 }
 
+let refreshInFlight = false;
+
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   document.body.classList.add("ui-loading");
-  const me = await api("/api/me");
+  try {
+    const me = await api("/api/me");
   const previousRole = state.user?.role || null;
   state.user = me.user;
   if (previousRole && previousRole !== state.user?.role) {
@@ -6428,6 +6516,10 @@ async function refresh() {
   startUnitTelemetryPolling();
   renderPersistentEscalations();
   initializeRealtimeAlerts();
+} finally {
+  document.body.classList.remove("ui-loading");
+  refreshInFlight = false;
+}
 }
 
 async function pollResponseUnitTelemetry() {
@@ -7488,7 +7580,8 @@ function handlePoliceDialogKeydown(event) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }
 
-$("#addPoliceUserBtn")?.addEventListener("click", () => {
+$("#addPoliceUserBtn")?.addEventListener("click", async () => {
+  if (!state.policeReference.stations.length || !state.policeReference.ranks.length) await loadUnitMembershipData();
   const dialog = $("#policeCreateDialog");
   if (!dialog) return;
   policeDialogPreviousFocus = document.activeElement;
@@ -7518,7 +7611,9 @@ $("#policeUserForm")?.addEventListener("submit", async (event) => {
         temporaryPassword: data.get("temporaryPassword"),
         badgeId: data.get("badgeId"),
         unitId: data.get("unitId"),
-        station: data.get("station"),
+        stationId: data.get("stationId"),
+        rankId: data.get("rankId"),
+        operationalRole: data.get("operationalRole"),
         beat: data.get("beat"),
         jurisdiction: data.get("jurisdiction"),
         dutyStatus: data.get("dutyStatus"),
@@ -7560,7 +7655,9 @@ $("#policeUserList")?.addEventListener("submit", async (event) => {
         email: data.get("email"),
         badgeId: data.get("badgeId"),
         unitId: data.get("unitId"),
-        station: data.get("station"),
+        stationId: data.get("stationId"),
+        rankId: data.get("rankId"),
+        operationalRole: data.get("operationalRole"),
         beat: data.get("beat"),
         jurisdiction: data.get("jurisdiction"),
         dutyStatus: data.get("dutyStatus"),
@@ -7617,6 +7714,267 @@ $("#policeUserList")?.addEventListener("click", async (event) => {
     }
   } finally {
     button.disabled = false;
+  }
+});
+
+async function loadUnitMembershipData() {
+  try {
+    const [unitsResponse, referenceResponse] = await Promise.all([
+      api("/api/response-units"),
+      api("/api/admin/police-reference")
+    ]);
+    const units = unitsResponse.units || [];
+    state.responseUnits = units;
+    state.policeReference = {
+      stations: (referenceResponse.stations || []).filter((station) => station.operational !== false).map((station) => ({
+        id: station.id,
+        stationName: station.stationName || station.name || station.stationId || station.id
+      })),
+      ranks: (referenceResponse.ranks || []).filter((rank) => rank.active !== false).map((rank) => ({
+        id: rank.id,
+        name: rank.name || rank.code || rank.id
+      }))
+    };
+    const populateReference = (select, items, getLabel, placeholder) => {
+      if (!select) return;
+      const previous = select.value;
+      select.replaceChildren(new Option(placeholder, ""));
+      items.forEach((item) => select.add(new Option(getLabel(item), item.id)));
+      if (items.some((item) => item.id === previous)) select.value = previous;
+    };
+    populateReference($("#policeUserForm select[name='stationId']"), state.policeReference.stations, (station) => station.stationName, "Select a registered station");
+    populateReference($("#policeUserForm select[name='rankId']"), state.policeReference.ranks, (rank) => rank.name, "Select an active rank");
+    populateReference($("#policeUserForm select[name='unitId']"), units.map((unit) => ({
+      id: unit.id || unit.unitId || unit.unitCode,
+      label: `${unit.unitCode || unit.unitId || unit.id} · ${unit.unitName || unit.name || "Response Unit"}`
+    })), (unit) => unit.label, "No primary unit");
+    if (state.policeUsers.length) renderPoliceUsers(state.policeUsers);
+    const select = $("#unitMembershipUnitSelect");
+    if (select) {
+      const currentValue = select.value;
+      select.innerHTML = '<option value="">Select a response unit</option>';
+      units.forEach((unit) => {
+        const option = document.createElement("option");
+        option.value = unit.id;
+        option.textContent = `${unit.unitCode || unit.unitId || unit.id} - ${unit.unitName || unit.name || "Response Unit"}`;
+        select.appendChild(option);
+      });
+      if (units.some((u) => u.id === currentValue)) select.value = currentValue;
+      const addButton = $("#openUnitMembershipAdd");
+      if (addButton) addButton.disabled = !select.value;
+    }
+    if (select?.value) await loadUnitMembers(select.value);
+    else {
+      const list = $("#unitMembershipList");
+      if (list) list.replaceChildren(node("div", "empty-state", "Select a response unit to manage its members."));
+    }
+  } catch (error) {
+    console.error("Failed to load unit membership data:", error);
+    const status = $("#unitMembershipStatus");
+    if (status) { status.className = "form-status error"; status.textContent = error.message; }
+  }
+}
+
+async function loadUnitMembers(unitId) {
+  try {
+    const response = await api(`/api/admin/response-units/${unitId}/members`);
+    const members = response.members || [];
+    const list = $("#unitMembershipList");
+    if (!list) return;
+    list.textContent = "";
+    if (!members.length) {
+      list.append(node("div", "empty-state", "No members assigned to this unit."));
+      return;
+    }
+    members.forEach((member) => {
+      const card = node("article", "unit-member-card");
+      const officer = member.officer || {};
+      const isDemo = officer.isDemo ? " (Demo)" : "";
+      card.innerHTML = `
+        <div class="unit-member-info">
+          <strong>${escapeHtml(officer.name || member.officerUserId)}${isDemo}</strong>
+          <small>Role: ${escapeHtml(member.role || "member")} · ${officer.rank ? `Rank: ${escapeHtml(officer.rank)}` : ""} ${officer.badgeId ? `· Badge: ${escapeHtml(officer.badgeId)}` : ""}</small>
+          <small>Duty: ${escapeHtml(officer.dutyStatus || "Unknown")} · Availability: ${escapeHtml(officer.availabilityStatus || "Unknown")} · ${officer.active ? "Active" : "Inactive"}</small>
+        </div>
+        <div class="unit-member-actions">
+          <select data-member-role data-member-id="${escapeHtml(member.id)}">
+            <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
+            <option value="commander" ${member.role === "commander" ? "selected" : ""}>Commander</option>
+            <option value="driver" ${member.role === "driver" ? "selected" : ""}>Driver</option>
+            <option value="deputy" ${member.role === "deputy" ? "selected" : ""}>Deputy</option>
+          </select>
+          <button class="ghost" data-member-remove data-member-id="${escapeHtml(member.id)}">Remove</button>
+        </div>
+      `;
+      list.appendChild(card);
+    });
+  } catch (error) {
+    console.error("Failed to load unit members:", error);
+    const list = $("#unitMembershipList");
+    if (list) list.textContent = "Failed to load members.";
+  }
+}
+
+async function addUnitMember(unitId, officerUserId, role) {
+  try {
+    const status = $("#unitMembershipStatus");
+    if (status) { status.className = "form-status"; status.textContent = ""; }
+    await api(`/api/admin/response-units/${unitId}/members`, {
+      method: "POST",
+      body: { officerUserId, role }
+    });
+    if (status) { status.classList.add("success"); status.textContent = "Member added successfully."; }
+    await loadUnitMembers(unitId);
+    const form = $("#unitMembershipAddForm");
+    if (form) { form.hidden = true; form.reset(); }
+    const officerSelect = form?.querySelector("select[name='officerUserId']");
+    if (officerSelect) await populateOfficerSelect(officerSelect);
+  } catch (error) {
+    const status = $("#unitMembershipStatus");
+    if (status) { status.classList.add("error"); status.textContent = error.message; }
+  }
+}
+
+async function updateUnitMemberRole(unitId, memberId, role) {
+  try {
+    await api(`/api/admin/response-units/${unitId}/members/${memberId}`, {
+      method: "PATCH",
+      body: { role }
+    });
+    await loadUnitMembers(unitId);
+  } catch (error) {
+    alert(error.message);
+    await loadUnitMembers(unitId);
+  }
+}
+
+async function removeUnitMember(unitId, memberId) {
+  if (!confirm("Remove this officer from the unit?")) return;
+  try {
+    await api(`/api/admin/response-units/${unitId}/members/${memberId}`, { method: "DELETE" });
+    await loadUnitMembers(unitId);
+    const form = $("#unitMembershipAddForm");
+    const officerSelect = form?.querySelector("select[name='officerUserId']");
+    if (officerSelect) await populateOfficerSelect(officerSelect);
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function populateOfficerSelect(select) {
+  try {
+    const response = await api("/api/admin/police-users?includeDemo=true");
+    const users = response.users || [];
+    const currentValue = select.value;
+    select.innerHTML = '<option value="">Select officer</option>';
+    users.forEach((user) => {
+      if (!user.isDemo) {
+        const option = document.createElement("option");
+        option.value = user.id;
+        option.textContent = `${user.name} (${user.badgeId || user.id})${user.unitId ? ` - ${user.unitId}` : ""}`;
+        select.appendChild(option);
+      }
+    });
+    if (users.some((u) => u.id === currentValue)) select.value = currentValue;
+  } catch (error) {
+    console.error("Failed to load officers:", error);
+  }
+}
+
+$("#openUnitMembershipAdd")?.addEventListener("click", async () => {
+  const unitId = $("#unitMembershipUnitSelect")?.value;
+  const form = $("#unitMembershipAddForm");
+  if (!unitId || !form) return;
+  const officerSelect = form.querySelector("select[name='officerUserId']");
+  if (officerSelect) await populateOfficerSelect(officerSelect);
+  form.hidden = false;
+  officerSelect?.focus();
+});
+
+$("#retryUnitMembership")?.addEventListener("click", async () => {
+  const unitId = $("#unitMembershipUnitSelect")?.value;
+  if (unitId) await loadUnitMembers(unitId);
+  else await loadUnitMembershipData();
+});
+
+$("#unitMembershipUnitSelect")?.addEventListener("change", async (event) => {
+  const unitId = event.target.value;
+  if (unitId) await loadUnitMembers(unitId);
+  else {
+    const list = $("#unitMembershipList");
+    if (list) list.replaceChildren(node("div", "empty-state", "Select a response unit to manage its members."));
+  }
+  const addButton = $("#openUnitMembershipAdd");
+  if (addButton) addButton.disabled = !unitId;
+});
+
+$("#unitMembershipList")?.addEventListener("change", async (event) => {
+  if (event.target.matches("[data-member-role]")) {
+    const memberId = event.target.dataset.memberId;
+    const unitId = $("#unitMembershipUnitSelect").value;
+    const role = event.target.value;
+    if (unitId && memberId) await updateUnitMemberRole(unitId, memberId, role);
+  }
+});
+
+$("#unitMembershipList")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-member-remove]");
+  if (!button) return;
+  const memberId = button.dataset.memberId;
+  const unitId = $("#unitMembershipUnitSelect").value;
+  if (unitId && memberId) await removeUnitMember(unitId, memberId);
+});
+
+$("#unitMembershipAddForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const unitId = $("#unitMembershipUnitSelect").value;
+  if (!unitId) return alert("Select a unit first.");
+  const data = new FormData(form);
+  await addUnitMember(unitId, data.get("officerUserId"), data.get("role"));
+});
+
+$("#cancelUnitMembershipAdd")?.addEventListener("click", () => {
+  const form = $("#unitMembershipAddForm");
+  if (form) { form.hidden = true; form.reset(); }
+});
+
+function updatePoliceDirectoryFilters() {
+  const directory = state.policeDirectory;
+  directory.search = $("#policeSearch")?.value || "";
+  directory.status = $("#policeStatusFilter")?.value || "";
+  directory.duty = $("#policeDutyFilter")?.value || "";
+  directory.sort = $("#policeSort")?.value || "name";
+  directory.page = 1;
+  renderPoliceUsers(state.policeUsers);
+}
+
+$("#policeSearch")?.addEventListener("input", updatePoliceDirectoryFilters);
+$("#policeStatusFilter")?.addEventListener("change", updatePoliceDirectoryFilters);
+$("#policeDutyFilter")?.addEventListener("change", updatePoliceDirectoryFilters);
+$("#policeSort")?.addEventListener("change", updatePoliceDirectoryFilters);
+$("#policePrevious")?.addEventListener("click", () => {
+  state.policeDirectory.page = Math.max(1, state.policeDirectory.page - 1);
+  renderPoliceUsers(state.policeUsers);
+});
+$("#policeNext")?.addEventListener("click", () => {
+  state.policeDirectory.page += 1;
+  renderPoliceUsers(state.policeUsers);
+});
+
+$("#showDemoOfficers")?.addEventListener("change", async (event) => {
+  const includeDemo = event.target.checked;
+  state.policeDirectory.includeDemo = includeDemo;
+  try {
+    const response = await api(`/api/admin/police-users${includeDemo ? "?includeDemo=true" : ""}`);
+    state.policeDirectory.page = 1;
+    renderPoliceUsers(response.users);
+    const status = $("#policeDirectoryStatus");
+    if (status) status.textContent = includeDemo ? "Demo and test officers are included." : "Demo and test officers are hidden.";
+  } catch (error) {
+    console.error("Failed to load police users:", error);
+    const status = $("#policeDirectoryStatus");
+    if (status) { status.className = "form-status error"; status.textContent = error.message; }
   }
 });
 

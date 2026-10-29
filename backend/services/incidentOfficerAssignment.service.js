@@ -36,7 +36,7 @@ function context(db, incidentId) {
 function memberRecords(db, incidentId) {
   const { incident, unit, unitId } = context(db, incidentId);
   const deployments = (db.incidentOfficerAssignments || []).filter((item) => item.incidentId === incident.id);
-  const members = (db.responseUnitMembers || []).filter((item) => item.unitId === unitId && item.active !== false).map((membership) => {
+  const members = (db.responseUnitMembers || []).filter((item) => (item.unitId || item.unit_id) === unitId && item.active !== false).map((membership) => {
     const id = membership.officerUserId || membership.officer_user_id;
     const user = (db.users || []).find((item) => item.id === id);
     const profile = (db.policeOfficers || []).find((item) => officerId(item) === id);
@@ -44,10 +44,12 @@ function memberRecords(db, incidentId) {
     const primaryDeployment = activeOfficerDeployments(db, { officerId: id })[0] || null;
     const deployment = deployments.find((item) => item.officerId === id && active(item)) || null;
     const supportIncidentId = assignedIncidentId(profile);
+    const station = (db.policeStations || []).find((item) => item.id === (profile?.stationId || profile?.station_id));
+    const stationName = station?.stationName || station?.name || null;
     const isDemo = [user, profile, membership].some((record) => record?.isDemo === true || record?.isTest === true || /^(demo_seed|demo|fixture|test|synthetic)$/.test(record?.source || ""));
-    return { officerId: id, name: user?.name || null, rank: rank?.name || rank?.rankName || null, badgeId: profile?.badgeId || profile?.badge_id || user?.badgeId || null, availability: primaryDeployment || supportIncidentId ? "busy" : profile?.availabilityStatus || profile?.availability_status || "unknown", dutyStatus: profile?.dutyStatus || profile?.duty_status || null, active: Boolean(profile && user?.role === "Police Officer" && profile.active !== false && user.active !== false && user.status !== "inactive"), currentIncidentId: primaryDeployment?.incidentId || supportIncidentId, membershipRole: membership.role || null, isDemo, deployment };
+    return { officerId: id, name: user?.name || null, rank: rank?.name || rank?.rankName || null, stationName, badgeId: profile?.badgeId || profile?.badge_id || user?.badgeId || null, availability: primaryDeployment || supportIncidentId ? "busy" : profile?.availabilityStatus || profile?.availability_status || "unknown", dutyStatus: profile?.dutyStatus || profile?.duty_status || null, active: Boolean(profile && user?.role === "Police Officer" && profile.active !== false && user.active !== false && !["inactive", "disabled", "deactivated"].includes(user.status)), currentIncidentId: primaryDeployment?.incidentId || supportIncidentId, membershipRole: membership.role || null, isDemo, deployment };
   });
-  return { incident, unit, members, assignments: deployments, deploymentAllowed: deploymentAllowed(incident),
+  return { incident, unit, unitId, members, assignments: deployments, deploymentAllowed: deploymentAllowed(incident),
     deploymentUnavailableReason: deploymentAllowed(incident) ? null : "This incident is not active for officer deployment. Existing officers may still be released." };
 }
 function listAssignments(db, incidentId) {
@@ -67,7 +69,7 @@ function assign(db, incidentId, requested, actor, at = new Date().toISOString())
     if (seen.has(id)) fail(409, "DUPLICATE_OFFICER", "An officer cannot appear twice in one request"); seen.add(id);
     const member = members.find((entry) => entry.officerId === id);
     if (!member) fail(409, "OFFICER_NOT_UNIT_MEMBER", "Officer is not an active member of the assigned primary unit");
-    if (!member.active || ["off_duty", "leave", "suspended"].includes(String(member.dutyStatus || "").toLowerCase())) fail(409, "OFFICER_UNAVAILABLE", "Officer is not active and operational");
+    if (!member.active || String(member.dutyStatus || "").toLowerCase() !== "on_duty") fail(409, "OFFICER_UNAVAILABLE", "Officer must be active and on duty");
     const prior = (db.incidentOfficerAssignments || []).find((entry) => entry.officerId === id && active(entry));
     if (prior) fail(409, prior.incidentId === incident.id ? "DUPLICATE_DEPLOYMENT" : "OFFICER_BUSY", prior.incidentId === incident.id ? "Officer is already deployed to this incident" : `Officer is already deployed to ${prior.incidentId}`);
     if (member.currentIncidentId && member.currentIncidentId !== incident.id) fail(409, "OFFICER_BUSY", `Officer is committed to ${member.currentIncidentId} through emergency support`);
