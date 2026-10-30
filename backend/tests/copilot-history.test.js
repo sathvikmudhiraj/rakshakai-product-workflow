@@ -109,6 +109,20 @@ test("conversation history survives simulated restart (JSON mode)", async () => 
   assert.equal(histBody.messages.length, 4);
 });
 
+test("history endpoint reloads a saved conversation after its in-memory cache is cleared", async () => {
+  const admin = await login("admin@history.test");
+  const first = await query(admin, { message: "Show INC-HIST-1", pageContext: { page: "incident-command" } });
+  const { conversationId } = await first.json();
+  await query(admin, { message: "What is the status?", conversationId, pageContext: { page: "incident-command" } });
+  require("../services/copilotConversation.service").clear();
+  const restored = await history(admin, conversationId);
+  assert.equal(restored.status, 200);
+  const body = await restored.json();
+  assert.equal(body.messages.length, 4);
+  assert.equal(body.messages[0].content, "Show INC-HIST-1");
+  assert.equal(body.messages[3].role, "assistant");
+});
+
 test("50-exchange limit is enforced (100 messages max)", async () => {
   const admin = await login("admin@history.test");
   

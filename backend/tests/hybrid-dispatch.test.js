@@ -109,6 +109,28 @@ test("station with no deployable capacity is skipped for the next capable statio
   assert.equal(result.candidates.find((candidate) => candidate.stationId === "station-a").rejectionReason, "INSUFFICIENT CAPACITY");
 });
 
+test("approximate station distances can allocate support without inventing an ETA", async () => {
+  const db = fixture();
+  const result = await recommendStationSupport({
+    db,
+    incident: { id: "incident-approx", lat: 17.51, lng: 78.31 },
+    requirements: { supportingOfficers: 1, responseUnits: 0, requiredCapabilities: [] },
+    routeForStation: async (station) => ({
+      distanceMeters: station.id === "station-a" ? 2000 : 5000,
+      durationSeconds: null,
+      approximate: true,
+      provider: "local-fallback"
+    })
+  });
+
+  assert.equal(result.allocations.length, 1);
+  assert.equal(result.allocations[0].stationId, "station-a");
+  assert.equal(result.allocations[0].officerIds.length, 1);
+  assert.equal(result.allocations[0].etaMinutes, null);
+  assert.equal(result.allocations[0].approximate, true);
+  assert.equal(result.complete, true);
+});
+
 test("maintenance and decommissioned units are never deployable", () => {
   assert.equal(unitUnavailableReason({ id: "maintained", status: "maintenance", operational: true }, new Set()), "MAINTENANCE");
   assert.equal(unitUnavailableReason({ id: "retired", status: "decommissioned", operational: true }, new Set()), "DECOMMISSIONED");

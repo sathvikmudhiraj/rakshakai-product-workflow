@@ -7,6 +7,7 @@ let removeGlobalListeners = null;
 let conversationId = null;
 let openMountedCopilot = null;
 const POSITION_KEY = "rakshakai_copilot_launcher_position";
+const CONVERSATION_KEY = "rakshakai_copilot_conversation_id";
 
 export function configureCopilot({ context } = {}) { if (typeof context === "function") getContext = context; }
 function el(tag, className = "", text = null) { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; }
@@ -21,11 +22,11 @@ async function loadConversationHistory(convId) {
     const response = await api(`/api/copilot/history?conversationId=${encodeURIComponent(convId)}`, { method: "GET" });
     return response.messages || [];
   } catch {
-    return [];
+    return null;
   }
 }
 
-function renderHistoryMessage(role, text, response = {}, locale) {
+function renderHistoryMessage(role, text, response = {}, locale, onNavigate) {
   const article = el("article", `copilot-message ${role}`);
   article.append(el("strong", "copilot-message-role", role === "user" ? locale.you : locale.assistant), el("p", "copilot-message-text", text));
   if (role === "assistant" && response.sources?.length) {
@@ -42,7 +43,7 @@ function renderHistoryMessage(role, text, response = {}, locale) {
     const button = el("button", "copilot-navigation", locale.open);
     button.type = "button";
     button.setAttribute("aria-label", `${locale.open}: ${titleCase(response.navigation.view)}${response.navigation.entityId ? ` ${response.navigation.entityId}` : ""}`);
-    button.addEventListener("click", () => navigate(response.navigation));
+    button.addEventListener("click", () => onNavigate?.(response.navigation));
     article.append(button);
   }
   return article;
@@ -65,6 +66,7 @@ export function mountCopilot() {
   document.body.append(root);
   const launcher = root.querySelector(".copilot-launcher"), drawer = root.querySelector(".copilot-drawer"), backdrop = root.querySelector(".copilot-backdrop"), close = root.querySelector(".copilot-close"), messages = root.querySelector(".copilot-messages"), empty = root.querySelector(".copilot-empty"), contextText = root.querySelector(".copilot-context"), suggestionBox = root.querySelector(".copilot-suggestions"), form = root.querySelector(".copilot-form"), input = root.querySelector("textarea"), status = root.querySelector(".copilot-status"), send = root.querySelector(".copilot-send"), languageSelect = root.querySelector(".copilot-language");
   let previousFocus = null, drag = null, suppressClick = false, responseLanguage = "en", languageMode = storedLanguage();
+  try { conversationId = window.sessionStorage.getItem(CONVERSATION_KEY) || null; } catch { conversationId = null; }
   const compact = window.matchMedia?.("(max-width: 1120px)") || { matches: false, addEventListener() {}, removeEventListener() {} };
   languageSelect.value = languageMode;
   const effectiveLanguage = () => languageMode === "auto" ? responseLanguage : languageMode;
@@ -82,22 +84,22 @@ export function mountCopilot() {
   };
   const navigate = ({ view, entityId }) => { const nav = [...document.querySelectorAll(".nav-item")].find((button) => button.dataset.view === view && !button.hidden); if (nav) { if (entityId) document.body.dataset.copilotEntityId = entityId; nav.click(); hide(); } };
   const appendMessage = (role, text, response = {}) => {
-    empty.hidden = true; const copy = locale(); messages.append(renderHistoryMessage(role, text, response, copy)); messages.scrollTop = messages.scrollHeight;
+    empty.hidden = true; const copy = locale(); messages.append(renderHistoryMessage(role, text, response, copy, navigate)); messages.scrollTop = messages.scrollHeight;
   };
   const appendError = (query) => { empty.hidden = true; const copy = locale(), article = el("article", "copilot-message system-error"); article.append(el("strong", "copilot-message-role", copy.assistant), el("p", "copilot-message-text", copy.error)); const retry = el("button", "copilot-retry", copy.retry); retry.type = "button"; retry.addEventListener("click", () => submitQuery(query, false)); article.append(retry); messages.append(article); messages.scrollTop = messages.scrollHeight; };
 
   const loadAndRenderHistory = async () => {
     if (!conversationId) return;
     const history = await loadConversationHistory(conversationId);
-    if (history.length) {
-      empty.hidden = true;
-      const copy = locale();
-      for (const msg of history) {
-        const response = msg.metadata || {};
-        messages.append(renderHistoryMessage(msg.role, msg.content, response, copy));
-      }
-      messages.scrollTop = messages.scrollHeight;
-    }
+    if (!history) return;
+    messages.replaceChildren();
+    const latestAssistant = [...history].reverse().find((msg) => msg.role === "assistant");
+    if (languageMode === "auto" && ["en", "te", "hi"].includes(latestAssistant?.metadata?.responseLanguage)) responseLanguage = latestAssistant.metadata.responseLanguage;
+    empty.hidden = history.length > 0;
+    applyLocale();
+    const copy = locale();
+    for (const msg of history) messages.append(renderHistoryMessage(msg.role, msg.content, msg.metadata || {}, copy, navigate));
+    messages.scrollTop = messages.scrollHeight;
   };
 
   const clamp = ({ left, top }) => { const margin = 10, size = launcher.getBoundingClientRect().width || 58; return { left: Math.min(Math.max(margin, Number(left) || margin), Math.max(margin, window.innerWidth - size - margin)), top: Math.min(Math.max(margin, Number(top) || margin), Math.max(margin, window.innerHeight - size - margin)) }; };
@@ -116,7 +118,7 @@ export function mountCopilot() {
 
   const submitQuery = async (message, showUser = true) => {
     const query = String(message || "").trim(); if (!query || send.disabled) return; if (showUser) appendMessage("user", query); input.value = ""; send.disabled = true; input.disabled = true; status.classList.add("loading"); status.textContent = locale().checking;
-    try { const response = await api("/api/copilot/query", { method: "POST", body: { message: query, pageContext: getContext(), conversationId, selectedLanguage: languageMode } }); conversationId = response.conversationId || conversationId; responseLanguage = response.responseLanguage || response.detectedLanguage || responseLanguage; applyLocale(); appendMessage("assistant", response.answer, response); status.textContent = locale().generated; }
+    try { const response = await api("/api/copilot/query", { method: "POST", body: { message: query, pageContext: getContext(), conversationId, selectedLanguage: languageMode } }); conversationId = response.conversationId || conversationId; if (conversationId) try { window.sessionStorage.setItem(CONVERSATION_KEY, conversationId); } catch {} responseLanguage = response.responseLanguage || response.detectedLanguage || responseLanguage; applyLocale(); appendMessage("assistant", response.answer, response); status.textContent = locale().generated; }
     catch { appendError(query); status.textContent = locale().error; }
     finally { status.classList.remove("loading"); send.disabled = false; input.disabled = false; input.focus(); }
   };
@@ -141,4 +143,4 @@ export function mountCopilot() {
 }
 
 export function openCopilot() { openMountedCopilot?.(); }
-export function unmountCopilot() { removeGlobalListeners?.(); removeGlobalListeners = null; const root = document.getElementById("rakshakCopilot"); document.querySelector(".copilot-launcher.docked")?.remove(); root?.remove(); conversationId = null; openMountedCopilot = null; mounted = false; }
+export function unmountCopilot() { removeGlobalListeners?.(); removeGlobalListeners = null; const root = document.getElementById("rakshakCopilot"); document.querySelector(".copilot-launcher.docked")?.remove(); root?.remove(); conversationId = null; try { window.sessionStorage.removeItem(CONVERSATION_KEY); } catch {} openMountedCopilot = null; mounted = false; }

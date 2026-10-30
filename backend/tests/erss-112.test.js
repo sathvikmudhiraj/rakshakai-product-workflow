@@ -66,6 +66,7 @@ test("ERSS dispatch creates one canonical incident and never writes an ERSS id i
   assert.ok(incidentId);
   assert.ok(db.incidents.some((incident) => incident.id === incidentId));
   assert.notEqual(incidentId, event.id);
+  assert.equal(db.erssDispatchRequests[0].incidentId, incidentId, "approved dispatch request must persist its canonical incident link");
 
   const request = await createUnitRequest(db, "dispatch_test_request", event.id, unit.id, "POLICE", 60, actor);
   unit.status = "idle";

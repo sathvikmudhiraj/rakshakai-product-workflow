@@ -1285,6 +1285,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .topbar { position: sticky; top: var(--critical-banner-height); min-height: 68px; padding: 11px 15px; }
   /* Keep the mobile map controls clear without changing dashboard banner offsets. */
   body[data-view="gis"] .topbar { position: static; top: auto; }
+  /* The long officer directory must remain visible below the mobile header after refresh/navigation. */
+  body[data-view="police-management"] .topbar { position: static; top: auto; }
   .page-eyebrow, .live-pill { display: none; }
   .view { padding: 15px; }
   .cctv-page-head, .cctv-registry-head { flex-direction: column; }

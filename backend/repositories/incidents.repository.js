@@ -41,7 +41,7 @@ module.exports = createRepository({
     { name: "updated_at", value: (item) => dateValue(item.lastDetectedAt || item.updatedAt || item.createdAt) }
   ],
   serialize: (record) => {
-    const { assignedUnitId, requiredCapabilities, responseRequirements, dispatchRecommendation, supportAllocations, dispatchConfirmedAt, dispatchConfirmedBy, escalationStatus, escalationStartedAt, primaryUnitAckedAt, ...rest } = record;
+    const { assignedUnitId, assigned_unit_id, requiredCapabilities, responseRequirements, dispatchRecommendation, supportAllocations, dispatchConfirmedAt, dispatchConfirmedBy, escalationStatus, escalationStartedAt, primaryUnitAckedAt, ...rest } = record;
     return rest;
   },
   deserialize: (row) => ({

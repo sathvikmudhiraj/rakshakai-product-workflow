@@ -105,3 +105,36 @@ test("Enter sends once, Shift+Enter and IME preserve text, and pending/empty mes
     dom.window.close();
   }
 });
+
+test("conversation history restores after drawer reopen without duplicates and clears on unmount", async () => {
+  const dom = new JSDOM('<body></body>', { url: "http://localhost:3000" });
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  const conversationId = "00000000-0000-0000-0000-000000000099";
+  dom.window.sessionStorage.setItem("rakshakai_copilot_conversation_id", conversationId);
+  const messages = [
+    { role: "user", content: "Show INC-1", metadata: {} },
+    { role: "assistant", content: "Incident INC-1: VERIFIED", metadata: { responseLanguage: "te" } }
+  ];
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), new RegExp(`conversationId=${conversationId}`));
+    return new Response(JSON.stringify({ messages }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const module = await import(`../src/components/RakshakCopilot.js?history=${Date.now()}`);
+  try {
+    module.mountCopilot();
+    document.querySelector(".copilot-launcher").click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(document.querySelectorAll(".copilot-message").length, 2);
+    assert.equal(document.querySelector(".copilot-drawer").lang, "te");
+    document.querySelector(".copilot-close").click();
+    document.querySelector(".copilot-launcher").click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(document.querySelectorAll(".copilot-message").length, 2, "reopening replaces the view with saved history instead of duplicating it");
+  } finally {
+    module.unmountCopilot();
+    assert.equal(dom.window.sessionStorage.getItem("rakshakai_copilot_conversation_id"), null, "unmount clears the session-scoped history pointer");
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch;
+    dom.window.close();
+  }
+});

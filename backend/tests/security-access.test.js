@@ -206,6 +206,10 @@ database.responseUnitMembers = [
     createdAt: new Date().toISOString()
   }
 ];
+database.officerRanks = [
+  ...(database.officerRanks || []),
+  { id: "fixture_security_rank", code: "FX-SI", name: "Fixture Sub Inspector", level: 1, active: true }
+];
 database.cameraSources.push(
   {
     id: "test-camera",
@@ -886,8 +890,8 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
     email: "meera.singh@rakshakai.local",
     temporaryPassword: "TempPolice123",
     badgeId: "DL-2042",
-    unitId: "P-01",
-    station: "Patancheru Police Station",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Sector 7",
     jurisdiction: "North Zone"
   };
@@ -905,7 +909,7 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
   assert.equal(createdBody.user.role, "Police Officer");
   assert.equal(createdBody.user.status, "active");
@@ -947,9 +951,9 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
   const updated = await request(`/api/admin/police-users/${createdBody.user.id}`, {
     method: "PATCH",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Patancheru Police Station", beat: "Sector 8" })
+    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Fixture Station", beat: "Sector 8" })
   });
-  assert.equal(updated.status, 200);
+  assert.equal(updated.status, 200, await updated.clone().text());
   assert.equal((await updated.json()).user.name, "Inspector Meera Rao");
 
   const inactive = await request(`/api/admin/police-users/${createdBody.user.id}/deactivate`, {
@@ -1006,8 +1010,8 @@ test("password reset rejects old police sessions", async () => {
     email: `session.reset.${timestamp}@rakshakai.local`,
     temporaryPassword: "TempPolice123",
     badgeId: `RESET-${timestamp}`,
-    unitId: `RESET-${timestamp}`,
-    station: "Session Test Station",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Session Test Beat",
     jurisdiction: "Session Test Jurisdiction"
   };
@@ -1016,7 +1020,7 @@ test("password reset rejects old police sessions", async () => {
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
 
   const oldLogin = await request("/api/auth/login", {
@@ -1056,8 +1060,8 @@ test("account deactivation rejects old police sessions", async () => {
     email: `session.deactivate.${timestamp}@rakshakai.local`,
     temporaryPassword: "TempPolice123",
     badgeId: `DEACT-${timestamp}`,
-    unitId: `DEACT-${timestamp}`,
-    station: "Session Test Station",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Session Test Beat",
     jurisdiction: "Session Test Jurisdiction"
   };
@@ -1066,7 +1070,7 @@ test("account deactivation rejects old police sessions", async () => {
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
 
   const activeLogin = await request("/api/auth/login", {
@@ -4726,14 +4730,14 @@ test("frontend GIS route button state table keeps controls visible and synchroni
   assert.match(startOnly.calculate.reason, /destination/);
   assert.equal(startOnly.recalculate.disabled, true);
   assert.equal(startOnly.external.disabled, true);
-  assert.equal(startOnly.clear.disabled, false);
+  assert.equal(startOnly.clear.disabled, true);
 
   const pointsOnly = gisRouteButtonStates({ start, destination, hasRouteWork: true });
   assert.equal(pointsOnly.calculate.disabled, false);
   assert.equal(pointsOnly.calculate.label, "Calculate Route");
   assert.equal(pointsOnly.recalculate.disabled, true);
   assert.equal(pointsOnly.external.disabled, true);
-  assert.equal(pointsOnly.clear.disabled, false);
+  assert.equal(pointsOnly.clear.disabled, true);
 
   const invalidPoints = gisRouteButtonStates({ start, destination, hasRouteWork: true, routePointError: "Route start and destination cannot be the same point." });
   assert.equal(invalidPoints.calculate.disabled, true);
@@ -4757,7 +4761,7 @@ test("frontend GIS route button state table keeps controls visible and synchroni
   assert.equal(failed.calculate.disabled, false);
   assert.equal(failed.recalculate.disabled, true);
   assert.equal(failed.external.disabled, true);
-  assert.equal(failed.clear.disabled, false);
+  assert.equal(failed.clear.disabled, true);
 
   const loading = gisRouteButtonStates({ start, destination, route, routeLoading: true, hasRouteWork: true });
   assert.equal(loading.calculate.disabled, true);

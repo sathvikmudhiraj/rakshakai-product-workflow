@@ -169,7 +169,7 @@ async function open(userId, suppliedId) {
           userId: conv.user_id,
           entities: conv.entities || [],
           language: conv.language || "en",
-          messages: msgResult.rows,
+          messages: msgResult.rows.map((row) => ({ id: row.id, conversationId: row.conversation_id, role: row.role, content: row.content, metadata: row.metadata || {}, createdAt: row.created_at })),
           updatedAt: Date.parse(conv.updated_at)
         };
         conversationCache.set(key, state);
@@ -259,7 +259,15 @@ async function appendMessage(key, role, content, metadata = {}) {
 }
 
 async function getMessages(key) {
-  const state = conversationCache.get(key);
+  let state = conversationCache.get(key);
+  if (!state) {
+    const separator = String(key || "").indexOf(":");
+    if (separator <= 0) return [];
+    const userId = key.slice(0, separator), conversationId = key.slice(separator + 1);
+    if (!ID_PATTERN.test(conversationId)) return [];
+    await open(userId, conversationId);
+    state = conversationCache.get(key);
+  }
   return state?.messages || [];
 }
 

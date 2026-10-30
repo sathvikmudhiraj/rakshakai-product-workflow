@@ -49,12 +49,13 @@ async function main() {
         const banner = page.locator("#global-critical-banner");
         await banner.waitFor({ state: "visible" });
         async function checkLayout() {
+          await page.waitForFunction(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const layout = await page.evaluate(() => {
             const banner = document.getElementById("global-critical-banner");
             return { overflow: document.documentElement.scrollWidth > innerWidth, bannerBottom: banner.hidden ? 0 : banner.getBoundingClientRect().bottom, headerTop: document.querySelector(".topbar").getBoundingClientRect().top };
           });
           assert.equal(layout.overflow, false, `${width}: horizontal overflow`);
-          assert.ok(layout.headerTop + 1 >= layout.bannerBottom, `${width}: header covered by banner`);
+          assert.ok(layout.headerTop + 1 >= layout.bannerBottom, `${width}: header covered by banner (${JSON.stringify(layout)})`);
         }
         await checkLayout();
         await page.evaluate(() => scrollTo(0, 400));

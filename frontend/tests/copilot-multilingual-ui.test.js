@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 
 test("language preference localizes captions, suggestions, requests, sources, freshness, and safe navigation", async () => {
   const dom = new JSDOM('<body><div class="topbar-actions"></div><button class="nav-item" data-view="incident-command">Incident Command</button></body>', { url: "http://localhost:3000" });
+  dom.window.document.querySelector(".nav-item").addEventListener("click", () => { dom.window.document.body.dataset.view = "incident-command"; });
   const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
   globalThis.window = dom.window; globalThis.document = dom.window.document;
   dom.window.localStorage.setItem("rakshakai_copilot_language", "te");
@@ -28,6 +29,9 @@ test("language preference localizes captions, suggestions, requests, sources, fr
     assert.match(document.querySelector(".copilot-source-box").textContent, /Incident INC-1/);
     assert.match(document.querySelector(".copilot-source-box").textContent, /నవీకరణ/);
     assert.match(document.querySelector(".copilot-navigation").textContent, /వివరాలు/);
+    document.querySelector(".copilot-navigation").click();
+    assert.equal(document.body.dataset.view, "incident-command");
+    assert.equal(document.querySelector(".copilot-drawer").getAttribute("aria-hidden"), "true");
     const select = document.querySelector(".copilot-language"); select.value = "hi"; select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     assert.match(input.placeholder, /घटनाओं/);
     assert.equal(dom.window.localStorage.getItem("rakshakai_copilot_language"), "hi");

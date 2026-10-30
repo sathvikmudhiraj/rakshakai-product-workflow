@@ -189,13 +189,17 @@ async function recommendStationSupport({ db, incident, primaryUnitId = null, req
     };
     candidates.push(candidate);
   }
-  const eligible = candidates.filter((candidate) => candidate.eligible && candidate.etaSeconds && candidate.distanceMeters).sort((left, right) =>
-    left.etaSeconds - right.etaSeconds
-      || left.distanceMeters - right.distanceMeters
+  const eligible = candidates.filter((candidate) => candidate.eligible && Number.isFinite(candidate.distanceMeters) && candidate.distanceMeters >= 0).sort((left, right) => {
+    if (left.etaSeconds !== right.etaSeconds) {
+      if (left.etaSeconds === null) return 1;
+      if (right.etaSeconds === null) return -1;
+      return left.etaSeconds - right.etaSeconds;
+    }
+    return left.distanceMeters - right.distanceMeters
       || left.jurisdictionRank - right.jurisdictionRank
       || left.workload - right.workload
-      || String(left.stationCode).localeCompare(String(right.stationCode))
-  );
+      || String(left.stationCode).localeCompare(String(right.stationCode));
+  });
   let officersRemaining = requirements.supportingOfficers;
   let unitsRemaining = requirements.responseUnits;
   const allocations = [];

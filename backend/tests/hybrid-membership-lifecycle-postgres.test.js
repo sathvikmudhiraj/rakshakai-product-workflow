@@ -1,13 +1,14 @@
 require('../services/testDatabaseSafety').prepareIntegrationTestEnvironment();
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const postgresTest = process.env.TEST_DATABASE_URL ? test : test.skip;
 const { query, closePool } = require('../services/postgres.service');
 const { readDatabase } = require('../services/core.service');
 const { policeManagementUsers } = require('../services/copilotOfficers.service');
 const { answer } = require('../services/copilotRead.service');
 test.after(closePool);
 
-test('actual hybrid confirmation and releases preserve membership and separate support roles', async () => {
+postgresTest('actual hybrid confirmation and releases preserve membership and separate support roles', async () => {
   process.env.JWT_SECRET = 'disposable-test-only-secret';
   process.env.PUBLIC_OSRM_FALLBACK = 'false';
   const jwt = require('jsonwebtoken');

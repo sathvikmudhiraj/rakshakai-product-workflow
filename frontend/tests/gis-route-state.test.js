@@ -62,6 +62,12 @@ test("recalculate and Clear Route remove stale alternatives and selectedRouteId"
   assert.deepEqual(cleared.routes, []);
   assert.deepEqual(cleared.routeOptions, []);
   assert.equal(cleared.route, null);
+  assert.equal(gisRouteButtonStates({
+    start: { lat: 17.51, lng: 78.32 },
+    destination: { lat: 17.53, lng: 78.38 },
+    route: cleared.route,
+    hasRouteWork: true
+  }).clear.disabled, true, "Keep route points but disable Clear Route after there is no route to remove");
 });
 
 test("approximate fallback disables full navigation while a real OSRM route enables it", () => {

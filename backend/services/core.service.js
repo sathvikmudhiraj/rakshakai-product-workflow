@@ -1443,7 +1443,7 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
       if (previousAssignedUnit) Object.assign(previousAssignedUnit, { status: "available", assignedIncidentId: null, currentIncidentId: null, lastUpdated: now() });
     }
     const ackTimeout = unit.ackTimeoutSeconds || unit.ack_timeout_seconds || 60;
-    incident.assignedUnitId = unit.id;
+    incident.assignedUnitId = incident.assigned_unit_id = unit.id;
     incident.recommendedUnitId = incident.recommendedUnitId || unit.id;
     incident.status = "Assigned";
     incident.escalationStatus = incident.escalation_status = "pending";
@@ -5833,6 +5833,8 @@ async function apiInternal(req, res, url) {
     if (password.length < 8) return sendJson(res, 400, { error: "Temporary password must be at least 8 characters" });
     if (db.users.some((item) => normalizeEmail(item.email) === email)) return sendJson(res, 409, { error: "Email is already registered" });
     const validatedPersonnel = policeManagement.validatePersonnel(db, body);
+    db.policeOfficers ||= [];
+    db.responseUnitMembers ||= [];
     const createdAt = now();
     const created = {
       id: uid("u"),
@@ -6438,31 +6440,56 @@ async function apiInternal(req, res, url) {
       return sendJson(res, 200, { assignments: incidentOfficerAssignmentService.listIncidentOfficerAssignments(db, officerAssignmentsMatch[1]) });
     }
     if (req.method === "POST" && officerAssignmentsMatch) {
-      const assignments = incidentOfficerAssignmentService.assignIncidentOfficers(db, officerAssignmentsMatch[1], body.assignments, user);
-      const audits = assignments.map((item) => addAuditLog(db, "incident_officer_assigned", user, item.incidentId, JSON.stringify({ unitId: item.unitId, officerId: item.officerId, responseRole: item.responseRole })));
-      await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, assignments], [auditLogsRepository, audits]]);
+      const assignments = await withAssignmentLock(async () => {
+        const db = await readDatabase();
+        const created = incidentOfficerAssignmentService.assignIncidentOfficers(db, officerAssignmentsMatch[1], body.assignments, user);
+        const audits = created.map((item) => addAuditLog(db, "incident_officer_assigned", user, item.incidentId, JSON.stringify({ unitId: item.unitId, officerId: item.officerId, responseRole: item.responseRole })));
+        const events = created.map((item) => {
+          const officer = (db.users || []).find((candidate) => candidate.id === item.officerId);
+          return addDispatchEvent(db, item.incidentId, "incident_officer_assigned", `${officer?.name || item.officerId} assigned as ${item.responseRole.replaceAll("_", " ")}`, user.name, item.assignedAt);
+        });
+        await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, created], [auditLogsRepository, audits], [dispatchEventsRepository, events]]);
+        return created;
+      });
       const payload = { incidentId: officerAssignmentsMatch[1], action: "assigned", assignments };
       realtimeEvents.emit("incident_officer_assignment_changed", payload);
       return sendJson(res, 201, payload);
     }
     if (req.method === "PATCH" && officerAssignmentMatch) {
-      const changed = incidentOfficerAssignmentService.updateIncidentOfficerRole(db, officerAssignmentMatch[1], officerAssignmentMatch[2], body.responseRole, user, body.reason);
-      const audit = addAuditLog(db, "incident_officer_role_changed", user, changed.assignment.incidentId, JSON.stringify({ unitId: changed.assignment.unitId, officerId: changed.assignment.officerId, previousRole: changed.previousRole, responseRole: changed.assignment.responseRole, reason: body.reason || null }));
-      await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, [changed.assignment]], [auditLogsRepository, [audit]]]);
+      const changed = await withAssignmentLock(async () => {
+        const db = await readDatabase();
+        const result = incidentOfficerAssignmentService.updateIncidentOfficerRole(db, officerAssignmentMatch[1], officerAssignmentMatch[2], body.responseRole, user, body.reason);
+        const audit = addAuditLog(db, "incident_officer_role_changed", user, result.assignment.incidentId, JSON.stringify({ unitId: result.assignment.unitId, officerId: result.assignment.officerId, previousRole: result.previousRole, responseRole: result.assignment.responseRole, reason: body.reason || null }));
+        const officer = (db.users || []).find((candidate) => candidate.id === result.assignment.officerId);
+        const event = addDispatchEvent(db, result.assignment.incidentId, "incident_officer_role_changed", `${officer?.name || result.assignment.officerId} response role changed from ${result.previousRole.replaceAll("_", " ")} to ${result.assignment.responseRole.replaceAll("_", " ")}`, user.name, result.assignment.updatedAt);
+        await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, [result.assignment]], [auditLogsRepository, [audit]], [dispatchEventsRepository, [event]]]);
+        return result;
+      });
       const payload = { incidentId: officerAssignmentMatch[1], action: "role_changed", assignment: changed.assignment };
       realtimeEvents.emit("incident_officer_assignment_changed", payload);
       return sendJson(res, 200, payload);
     }
     if (req.method === "POST" && officerReleaseMatch) {
-      const assignment = incidentOfficerAssignmentService.releaseIncidentOfficer(db, officerReleaseMatch[1], officerReleaseMatch[2], body.reason, user);
-      const audit = addAuditLog(db, "incident_officer_released", user, assignment.incidentId, JSON.stringify({ unitId: assignment.unitId, officerId: assignment.officerId, responseRole: assignment.responseRole, reason: assignment.releaseReason }));
-      await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, [assignment]], [auditLogsRepository, [audit]]]);
+      const assignment = await withAssignmentLock(async () => {
+        const db = await readDatabase();
+        const released = incidentOfficerAssignmentService.releaseIncidentOfficer(db, officerReleaseMatch[1], officerReleaseMatch[2], body.reason, user);
+        const audit = addAuditLog(db, "incident_officer_released", user, released.incidentId, JSON.stringify({ unitId: released.unitId, officerId: released.officerId, responseRole: released.responseRole, reason: released.releaseReason }));
+        const officer = (db.users || []).find((candidate) => candidate.id === released.officerId);
+        const event = addDispatchEvent(db, released.incidentId, "incident_officer_released", `${officer?.name || released.officerId} released from incident: ${released.releaseReason}`, user.name, released.releasedAt);
+        await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, [released]], [auditLogsRepository, [audit]], [dispatchEventsRepository, [event]]]);
+        return released;
+      });
       const payload = { incidentId: officerReleaseMatch[1], action: "released", assignment };
       realtimeEvents.emit("incident_officer_assignment_changed", payload);
       return sendJson(res, 200, payload);
     }
   } catch (error) {
-    if (unitMembersMatch || officerAssignmentsMatch || officerAssignmentMatch || officerReleaseMatch) return sendJson(res, error.status || 400, { error: error.message, code: error.code || "OFFICER_ASSIGNMENT_ERROR" });
+    if (unitMembersMatch || officerAssignmentsMatch || officerAssignmentMatch || officerReleaseMatch) {
+      if (error.code === "23505" && error.constraint === "uq_incident_officer_one_active_per_officer") {
+        return sendJson(res, 409, { error: "Officer is already deployed to another incident", code: "OFFICER_BUSY" });
+      }
+      return sendJson(res, error.status || 400, { error: error.message, code: error.code || "OFFICER_ASSIGNMENT_ERROR" });
+    }
     throw error;
   }
   const assignNearestMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/assign-nearest$/);

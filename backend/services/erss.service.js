@@ -429,7 +429,8 @@ async function approveDispatchRequest(db, requestId, user, modifiedRecommendatio
 
   const event = db.erssEvents?.find(e => e.id === request.erssEventId);
   if (event) {
-    ensureCanonicalIncident(db, event, user);
+    const incident = ensureCanonicalIncident(db, event, user);
+    request.incidentId = incident.id;
     event.triageStatus = "DISPATCH_RECOMMENDED";
     event.updatedAt = now();
   }

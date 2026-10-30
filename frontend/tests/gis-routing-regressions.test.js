@@ -58,6 +58,7 @@ function runRouteManagementSlice(state) {
     clearCalculatedRoutes,
     validMapPoint: (point) => (point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng)) ? { lat: Number(point.lat), lng: Number(point.lng) } : null),
     updateNavigationPanel: (message = "") => { state.lastMessage = message; },
+    updateGisButtonStates: () => { state.gisButtonRefreshes = (state.gisButtonRefreshes || 0) + 1; },
     renderSatelliteMaps: () => { state.rerenders = (state.rerenders || 0) + 1; },
     unitLabel: (unit) => unit?.name || "Unit",
     window: { confirm: () => true }
@@ -162,6 +163,7 @@ test("clear start, clear destination, clear route, and swap keep route state con
   assert.equal(state.mapNavigation.selectedRouteId, null);
   assert.equal(state.mapNavigation.start?.lat, 17.51);
   assert.equal(state.mapNavigation.destination?.lat, 17.53);
+  assert.equal(state.gisButtonRefreshes, 1);
 
   context.swapRoutePoints();
   assert.equal(state.mapNavigation.start?.lat, 17.53);

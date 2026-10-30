@@ -32,6 +32,51 @@ test("English, Telugu, Roman Telugu, Hindi, Roman Hindi, and mixed incident quer
   }
 });
 
+test("required native-script and Romanized active-incident count prompts detect language and return the factual count", () => {
+  const prompts = [
+    ["How many active incidents are there?", "en"],
+    ["\\u0C2A\\u0C4D\\u0C30\\u0C38\\u0C4D\\u0C24\\u0C41\\u0C24\\u0C02 \\u0C0E\\u0C28\\u0C4D\\u0C28\\u0C3F \\u0C2F\\u0C3E\\u0C15\\u0C4D\\u0C1F\\u0C3F\\u0C35\\u0C4D \\u0C07\\u0C28\\u0C4D\\u0C38\\u0C3F\\u0C21\\u0C46\\u0C02\\u0C1F\\u0C4D\\u0C38\\u0C4D \\u0C09\\u0C28\\u0C4D\\u0C28\\u0C3E\\u0C2F\\u0C3F?", "te"],
+    ["Ippudu enni active incidents unnayi?", "te"],
+    ["\\u0905\\u092D\\u0940 \\u0915\\u093F\\u0924\\u0928\\u0947 \\u0938\\u0915\\u094D\\u0930\\u093F\\u092F \\u0907\\u0928\\u094D\\u0938\\u093F\\u0921\\u0947\\u0902\\u091F \\u0939\\u0948\\u0902?", "hi"],
+    ["Abhi kitne active incidents hain?", "hi"]
+  ].map(([text, language]) => [text.replace(/\\u([0-9a-f]{4})/gi, (_, code) => String.fromCharCode(parseInt(code, 16))), language]);
+  for (const [prompt, language] of prompts) {
+    const response = answer(fixture(), prompt, { currentTime: NOW });
+    assert.equal(response.intent, "incident_search", prompt);
+    assert.equal(response.detectedLanguage, language, prompt);
+    assert.equal(response.responseLanguage, language, prompt);
+    assert.match(response.answer, /INC-1/, prompt);
+    if (language !== "en") assert.doesNotMatch(response.answer, /(?:High|Medium|Low) incidents:/, prompt);
+  }
+});
+
+test("mixed Telugu-English unit roster question only returns officers in the referenced unit", () => {
+  const data = fixture();
+  data.users = [
+    { id: "u1", name: "One Unit Officer", role: "Police Officer", active: true },
+    { id: "u2", name: "Other Unit Officer", role: "Police Officer", active: true }
+  ];
+  data.policeStations = [{ id: "s1", stationCode: "PS-1", stationName: "Station One" }, { id: "s2", stationCode: "PS-2", stationName: "Station Two" }];
+  data.responseUnits = [
+    { id: "unit-one", unitCode: "P-01", status: "available", stationId: "s1" },
+    { id: "unit-two", unitCode: "P-02", status: "available", stationId: "s2" }
+  ];
+  data.policeOfficers = [
+    { userId: "u1", stationId: "s1", active: true, dutyStatus: "On Duty", availabilityStatus: "Available" },
+    { userId: "u2", stationId: "s2", active: true, dutyStatus: "On Duty", availabilityStatus: "Available" }
+  ];
+  data.responseUnitMembers = [
+    { unitId: "unit-one", officerUserId: "u1", active: true },
+    { unitId: "unit-two", officerUserId: "u2", active: true }
+  ];
+  const prompt = "P-01 unit lo available officers entha mandi unnaru?";
+  const response = answer(data, prompt, { actor: { id: "admin", role: "Admin" }, currentTime: NOW });
+  assert.equal(response.intent, "OFFICERS_BY_UNIT");
+  assert.equal(response.officers.length, 1);
+  assert.equal(response.officers[0].userId, "u1");
+  assert.doesNotMatch(response.answer, /Other Unit Officer/);
+});
+
 test("technical identifiers remain extractable in every supported language", () => {
   for (const prompt of ["Show INC-1 and CAM-C19", "INC-1 స్థితి, CAM-C19 ఆరోగ్యం", "INC-1 की स्थिति और CAM-C19 health", "INC-1 status cheppu CAM-C19 health", "INC-1 ka status batao CAM-C19 health"]) {
     const refs = extractReferences(prompt);

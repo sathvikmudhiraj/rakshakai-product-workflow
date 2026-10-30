@@ -1,13 +1,14 @@
 require('../services/testDatabaseSafety').prepareIntegrationTestEnvironment();
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const postgresTest = process.env.TEST_DATABASE_URL ? test : test.skip;
 const { withTransaction, query, closePool } = require('../services/postgres.service');
 const incidents = require('../repositories/incidents.repository');
 const officers = require('../repositories/policeOfficers.repository');
 const units = require('../repositories/responseUnits.repository');
 const { releaseHybridSupportResources } = require('../services/hybridSupportRelease.service');
 test.after(closePool);
-test('support release persists while primary unit and investigation remain assigned', async () => {
+postgresTest('support release persists while primary unit and investigation remain assigned', async () => {
   await withTransaction(async (client) => {
     await client.query(`
       INSERT INTO police_stations(id,station_code,name) VALUES ('st_a','PS-A','Station A'),('st_b','PS-B','Station B');
@@ -35,7 +36,7 @@ test('support release persists while primary unit and investigation remain assig
   });
 });
 
-test('support release route enforces roles, records audit and preserves the primary unit', async () => {
+postgresTest('support release route enforces roles, records audit and preserves the primary unit', async () => {
   process.env.JWT_SECRET = 'disposable-test-only-secret';
   const jwt = require('jsonwebtoken');
   const { app } = require('../server');

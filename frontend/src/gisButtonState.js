@@ -119,11 +119,11 @@ export function gisRouteButtonStates({
           : !hasRealRoute ? calculatedRouteReason : ""
     },
     clear: {
-      disabled: !hasRouteWork || routeLoading,
+      disabled: !route || routeLoading,
       label: "Clear Route",
       icon: "trash",
       title: "Clear the calculated route line, distance, and ETA. Start and destination points are kept.",
-      reason: routeLoading ? "Wait for route calculation to finish." : !hasRouteWork ? "Choose a point or calculate a route before clearing." : ""
+      reason: routeLoading ? "Wait for route calculation to finish." : !route ? "Calculate a route before clearing." : ""
     },
     clearStart: {
       disabled: !hasStart || routeLoading,

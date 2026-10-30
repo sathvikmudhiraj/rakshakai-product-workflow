@@ -6,7 +6,7 @@ const ROMAN_TELUGU = [
   /\b(?:ni|ki)\s+(?:assign|close|resolve|delete|confirm|reject)\b/i
 ];
 const ROMAN_HINDI = [
-  /\b(?:dikhao|dikhaiye|batao|bataye|kahan|kya\s+hai|kis(?:ko|\s+unit)|karo|kijiye|hai|ka\s+status|ko\s+assign)\b/i
+  /\b(?:abhi|kitne|kitni|kitna|sakriya|hain|hai|dikhao|dikhaiye|batao|bataye|kahan|kya\s+hai|kis(?:ko|\s+unit)|karo|kijiye|ka\s+status|ko\s+assign)\b/i
 ];
 
 function selectedLanguage(value) {
@@ -73,6 +73,22 @@ function normalizeQuery(query) {
     .replace(/\b(?:evaru|evarunnaru)\b/gi, " who ")
     .replace(/\b(?:unnaro|unnaru|unaru|unar)\b/gi, " present ")
     .replace(/\b(?:ipudu|ippudu)\b/gi, " now ")
+    // Common native-script and Romanized forms used for count/status questions.
+    .replace(/[\u0C2A][\u0C4D][\u0C30][\u0C38][\u0C4D][\u0C24][\u0C41][\u0C24][\u0C02]/gu, " now ")
+    .replace(/[\u0C0E][\u0C28][\u0C4D][\u0C28][\u0C3F]/gu, " how many ")
+    .replace(/[\u0C2F][\u0C3E][\u0C15][\u0C4D][\u0C1F][\u0C3F][\u0C35][\u0C4D]/gu, " active ")
+    .replace(/[\u0C07][\u0C28][\u0C4D][\u0C38][\u0C3F][\u0C21][\u0C46][\u0C02][\u0C1F][\u0C4D][\u0C38][\u0C4D]?/gu, " incidents ")
+    .replace(/[\u0C09][\u0C28][\u0C4D][\u0C28][\u0C3E][\u0C2F][\u0C3F]/gu, " present ")
+    .replace(/[\u0909][\u0928][\u094D][\u0928][\u093E][\u092F][\u093F]/gu, " present ")
+    .replace(/[\u0905][\u092D][\u0940]/gu, " now ")
+    .replace(/[\u0915][\u093F][\u0924][\u0928][\u0947]?/gu, " how many ")
+    .replace(/[\u0938][\u0915][\u094D][\u0930][\u093F][\u092F]/gu, " active ")
+    .replace(/[\u0907][\u0928][\u094D][\u0938][\u093F][\u0921][\u0947][\u0902][\u091F][\u094D]?/gu, " incidents ")
+    .replace(/[\u0939][\u0948][\u0902]?/gu, " present ")
+    .replace(/\b(?:abhi)\b/gi, " now ")
+    .replace(/\b(?:kitne|kitni|kitna)\b/gi, " how many ")
+    .replace(/\b(?:sakriya)\b/gi, " active ")
+    .replace(/\b(?:hain)\b/gi, " present ")
     .replace(/\bps\b(?![-_])/gi, " police station ")
     .replace(/\baccounts?(?:lu)?\b/gi, " accounts ");
   for (const [pattern, replacement] of replacements) canonical = canonical.replace(pattern, replacement);
@@ -135,11 +151,13 @@ const exact = {
 
 const lineLabels = {
   te: {
+    "High incidents": "\u0c05\u0c27\u0c3f\u0c15 \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c24 \u0c18\u0c1f\u0c28\u0c32\u0c41", "Medium incidents": "\u0c2e\u0c27\u0c4d\u0c2f\u0c2e \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c24 \u0c18\u0c1f\u0c28\u0c32\u0c41", "Low incidents": "\u0c24\u0c15\u0c4d\u0c15\u0c41\u0c35 \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c24 \u0c18\u0c1f\u0c28\u0c32\u0c41",
     "Total registered response units": "మొత్తం నమోదైన response units", "Operational": "పనిచేస్తున్న units", "Registry-available": "రిజిస్ట్రీలో అందుబాటులో ఉన్న units", "Busy or committed": "పనిలో లేదా కేటాయించిన units", "Stale or unavailable telemetry": "పాత లేదా అందుబాటులో లేని GPS", "Live dispatch-eligible": "లైవ్ డిస్పాచ్‌కు అర్హమైన units", "Available response units (registry status)": "రిజిస్ట్రీలో అందుబాటులో ఉన్న response units", "All registered response units": "మొత్తం నమోదైన response units", "Busy or committed units": "పనిలో లేదా కేటాయించిన units", "Offline units": "ఆఫ్‌లైన్ units", "Units with stale or unavailable telemetry": "పాత లేదా అందుబాటులో లేని GPS units",
     "Current Operational Summary": "ప్రస్తుత ఆపరేషనల్ సారాంశం", "Matching active incidents": "సరిపోలే యాక్టివ్ ఘటనలు", "Incidents at or beyond SLA breach": "SLA ఉల్లంఘనలో ఉన్న ఘటనలు", "Available response units": "అందుబాటులో ఉన్న response units", "Offline response units": "ఆఫ్‌లైన్ response units", "Cameras needing attention": "శ్రద్ధ అవసరమైన కెమెరాలు", "Authorized officers": "అధీకృత అధికారులు", "Matching investigations": "సరిపోలే దర్యాప్తులు", "Tracking sessions pending review": "సమీక్ష కోసం పెండింగ్‌లో ఉన్న tracking sessions",
     "Severity": "తీవ్రత", "Status": "స్థితి", "Assigned unit": "కేటాయించిన యూనిట్", "Assignment SLA": "కేటాయింపు SLA", "Response SLA": "ప్రతిస్పందన SLA", "Escalation": "ఎస్కలేషన్", "Source Camera": "మూల కెమెరా", "Incident updated": "ఘటన నవీకరణ", "Health": "ఆరోగ్యం", "Location": "స్థానం", "Recorded reason": "నమోదైన కారణం", "Device reachable": "పరికరం అందుబాటులో ఉంది", "Stream connected": "స్ట్రీమ్ కనెక్ట్ అయింది", "Last usable frame": "చివరి ఉపయోగకరమైన ఫ్రేమ్", "Telemetry updated": "టెలిమెట్రీ నవీకరణ", "Station": "స్టేషన్", "Assigned Incident": "కేటాయించిన ఘటన", "Current Location": "ప్రస్తుత స్థానం", "GPS updated": "GPS నవీకరణ", "Officers": "అధికారులు", "Type": "రకం", "Last seen camera": "చివరిగా కనిపించిన కెమెరా", "Time": "సమయం", "Recommended Unit": "సిఫారసు చేసిన యూనిట్", "Distance": "దూరం", "Reason": "కారణం", "Active incidents": "యాక్టివ్ ఘటనలు", "Critical incidents": "CRITICAL ఘటనలు", "Response units": "Response units", "Available response units": "అందుబాటులో ఉన్న response units", "CCTV sources": "CCTV మూలాలు", "Unhealthy cameras": "అనారోగ్య కెమెరాలు", "Active SLA breaches": "యాక్టివ్ SLA ఉల్లంఘనలు", "Investigation": "దర్యాప్తు", "Assigned Officer": "కేటాయించిన అధికారి", "Last Update": "చివరి నవీకరణ", "Evidence Items": "సాక్ష్య అంశాలు"
   },
   hi: {
+    "High incidents": "\u0909\u091a\u094d\u091a \u0917\u0902\u092d\u0940\u0930\u0924\u093e \u0915\u0940 \u0918\u091f\u0928\u093e\u090f\u0901", "Medium incidents": "\u092e\u0927\u094d\u092f\u092e \u0917\u0902\u092d\u0940\u0930\u0924\u093e \u0915\u0940 \u0918\u091f\u0928\u093e\u090f\u0901", "Low incidents": "\u0915\u092e \u0917\u0902\u092d\u0940\u0930\u0924\u093e \u0915\u0940 \u0918\u091f\u0928\u093e\u090f\u0901",
     "Current Operational Summary": "वर्तमान ऑपरेशनल सारांश", "Matching active incidents": "मेल खाती सक्रिय घटनाएँ", "Incidents at or beyond SLA breach": "SLA उल्लंघन वाली घटनाएँ", "Available response units": "उपलब्ध response units", "Offline response units": "ऑफ़लाइन response units", "Cameras needing attention": "ध्यान देने योग्य camera", "Authorized officers": "अधिकृत अधिकारी", "Matching investigations": "मेल खाती जाँच", "Tracking sessions pending review": "समीक्षा के लिए लंबित tracking sessions",
     "Severity": "गंभीरता", "Status": "स्थिति", "Assigned unit": "निर्धारित यूनिट", "Assignment SLA": "असाइनमेंट SLA", "Response SLA": "प्रतिक्रिया SLA", "Escalation": "एस्केलेशन", "Source Camera": "स्रोत camera", "Incident updated": "घटना अपडेट", "Health": "स्थिति", "Location": "स्थान", "Recorded reason": "दर्ज कारण", "Device reachable": "डिवाइस उपलब्ध", "Stream connected": "स्ट्रीम कनेक्टेड", "Last usable frame": "अंतिम उपयोगी फ्रेम", "Telemetry updated": "टेलीमेट्री अपडेट", "Station": "स्टेशन", "Assigned Incident": "निर्धारित घटना", "Current Location": "वर्तमान स्थान", "GPS updated": "GPS अपडेट", "Officers": "अधिकारी", "Type": "प्रकार", "Last seen camera": "अंतिम बार देखा गया camera", "Time": "समय", "Recommended Unit": "अनुशंसित यूनिट", "Distance": "दूरी", "Reason": "कारण", "Active incidents": "सक्रिय घटनाएँ", "Critical incidents": "CRITICAL घटनाएँ", "Response units": "Response units", "Available response units": "उपलब्ध response units", "CCTV sources": "CCTV स्रोत", "Unhealthy cameras": "अस्वस्थ camera", "Active SLA breaches": "सक्रिय SLA उल्लंघन", "Investigation": "जाँच", "Assigned Officer": "निर्धारित अधिकारी", "Last Update": "अंतिम अपडेट", "Evidence Items": "साक्ष्य आइटम"
   }

@@ -46,7 +46,9 @@ test("record-backed officer, incident, unit and camera lookups include freshness
   assert.match(answer(db(), "What station does PO-204 belong to?", { currentTime: NOW }).answer, /Madhapur Police Station/);
   assert.match(answer(db(), "Show INC-1042", { currentTime: NOW }).answer, /Assigned unit: P-14/);
   assert.match(answer(db(), "Where is P-14?", { currentTime: NOW }).answer, /GPS freshness: CURRENT/);
-  assert.match(answer(db(), "Why is CAM-C27 red?", { currentTime: NOW }).answer, /usable video frames are not arriving/);
+  const camera = answer(db(), "Why is CAM-C27 red?", { currentTime: NOW });
+  assert.match(camera.answer, /usable video frames are not arriving/);
+  assert.equal(camera.navigation.view, "cctv", "camera navigation must point to an existing sidebar route");
 });
 
 test("comparison, investigation, tracking confidence, SLA and dashboard intents use current records", () => {

@@ -5,6 +5,7 @@ import { api, erssApi } from "./services/api.js";
 import { cctnsApi } from "./services/api.js";
 import { googleWorkspaceSignInUrl } from "./services/api.js";
 import { gisRouteButtonStates } from "./gisButtonState.js";
+import { createRefreshGate } from "./refreshGate.js";
 import { maneuverText, navigationProgress, shouldRecenterFollow } from "./activeNavigation.js";
 import { prioritizeIncidents, selectedVisibleIncident, criticalQueueFilters } from "./incidentQueue.js";
 import {
@@ -4771,6 +4772,11 @@ async function loadAssignmentRecommendation(incident) {
 }
 
 function selectAssignmentIncident(incident) {
+  if (incident?.assignedUnitId) {
+    state.assignmentFilters.incident = "all";
+    const incidentFilter = $("#assignmentIncidentFilter");
+    if (incidentFilter) incidentFilter.value = "all";
+  }
   state.assignmentSelectedIncidentId = incident.id;
   assignmentRecommendationCoordinator.select(incident);
 }
@@ -6037,6 +6043,7 @@ async function navigateToIncident(incident) {
 function clearMapRoute() {
   clearRouteResult();
   updateNavigationPanel("Route line cleared. Start and destination are kept; distance and ETA were reset.");
+  updateGisButtonStates();
   renderSatelliteMaps();
 }
 
@@ -6401,11 +6408,10 @@ async function captureLiveVisionFrame() {
   }
 }
 
-let refreshInFlight = false;
+const refreshGate = createRefreshGate();
 
 async function refresh() {
-  if (refreshInFlight) return;
-  refreshInFlight = true;
+  if (!refreshGate.begin()) return;
   document.body.classList.add("ui-loading");
   try {
     const me = await api("/api/me");
@@ -6518,7 +6524,9 @@ async function refresh() {
   initializeRealtimeAlerts();
 } finally {
   document.body.classList.remove("ui-loading");
-  refreshInFlight = false;
+  if (refreshGate.finish()) {
+    void refresh().catch((error) => console.error("Queued application refresh failed.", error.message));
+  }
 }
 }
 
@@ -8536,6 +8544,15 @@ function renderErssDispatcher() {
     monitoring?.append(node("div", "empty-state", "Unit ACK monitoring starts after you approve a dispatch."));
   }
 }
+
+async function refreshErssDispatcherData() {
+  await refresh();
+  if ((document.body.dataset.view || "") === "erss-dispatcher") renderErssDispatcher();
+}
+
+$("#refreshErssDispatcher")?.addEventListener("click", () => {
+  refreshErssDispatcherData().catch((error) => console.warn("Could not refresh ERSS dispatcher data:", error.message));
+});
 
 function updateErssDispatchRequestInState(request) {
   if (!request) return;
