@@ -13,22 +13,22 @@ router.get("/history", async (req, res, next) => {
     const user = userFromReq(req, await readDatabase());
     if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
     if (!hasRole(user, ["Admin", "Police Officer"])) throw Object.assign(new Error("Copilot is available to authorized operational personnel only"), { status: 403 });
-    
+
     const conversationId = req.query.conversationId;
     if (!conversationId) {
       return res.json({ messages: [] });
     }
-    
+
     const key = `${user.id}:${conversationId}`;
     const messages = await conversations.getMessages(key);
-    
+
     const formattedMessages = messages.map(msg => ({
       role: msg.role,
       content: msg.content,
       metadata: msg.metadata,
       timestamp: msg.createdAt
     }));
-    
+
     res.json({ messages: formattedMessages });
   } catch (error) {
     next(error);
@@ -41,10 +41,10 @@ router.post("/query", limiter, async (req, res, next) => {
     const user = userFromReq(req, db);
     if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
     if (!hasRole(user, ["Admin", "Police Officer"])) throw Object.assign(new Error("Copilot is available to authorized operational personnel only"), { status: 403 });
-    
+
     const message = String(req.body?.message || "").trim();
     if (!message || message.length > 2000) throw Object.assign(new Error("Message must contain 1 to 2000 characters"), { status: 400 });
-    
+
     const pageContext = copilot.sanitizePageContext(req.body?.pageContext);
     const conversation = await conversations.open(user.id, req.body?.conversationId);
     let result;
@@ -68,7 +68,7 @@ router.post("/query", limiter, async (req, res, next) => {
       await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);
       return res.status(503).json({ error: "Rakshak Copilot is temporarily unavailable.", readOnly: true, generatedAt: new Date().toISOString() });
     }
-    
+
     await conversations.remember(conversation.key, result.entities, result.responseLanguage);
     await conversations.appendMessage(conversation.key, "user", message, {
       pageContext,
@@ -82,7 +82,7 @@ router.post("/query", limiter, async (req, res, next) => {
       sources: result.sources,
       navigation: result.navigation
     });
-    
+
     const audit = addAuditLog(db, "copilot_query", user, null, JSON.stringify({
       page: pageContext.page,
       intent: result.intent,
@@ -93,7 +93,7 @@ router.post("/query", limiter, async (req, res, next) => {
       success: true
     }));
     await writeSelectedRecords(db, [[auditLogsRepository, [audit]]]);
-    
+
     res.json({
       ...result,
       conversationId: conversation.conversationId,

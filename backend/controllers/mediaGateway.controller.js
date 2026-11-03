@@ -36,4 +36,3 @@ exports.stop = async (req, res, next) => {
     res.json({ cameraId: req.params.id, stopped: await gateway.stopCamera(req.params.id) });
   } catch (error) { next(error); }
 };
-

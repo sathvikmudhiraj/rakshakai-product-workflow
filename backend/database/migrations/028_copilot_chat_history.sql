@@ -34,7 +34,7 @@ BEGIN
   SELECT COUNT(*) INTO message_count
   FROM copilot_messages
   WHERE conversation_id = NEW.conversation_id;
-  
+
   IF message_count >= 100 THEN
     -- Delete oldest messages to maintain 50-exchange limit (100 messages total)
     DELETE FROM copilot_messages
@@ -46,7 +46,7 @@ BEGIN
       LIMIT message_count - 99
     );
   END IF;
-  
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

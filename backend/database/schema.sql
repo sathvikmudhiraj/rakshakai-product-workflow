@@ -219,7 +219,7 @@ BEGIN
   SELECT COUNT(*) INTO message_count
   FROM copilot_messages
   WHERE conversation_id = NEW.conversation_id;
-  
+
   IF message_count >= 100 THEN
     DELETE FROM copilot_messages
     WHERE conversation_id = NEW.conversation_id
@@ -230,7 +230,7 @@ BEGIN
       LIMIT message_count - 99
     );
   END IF;
-  
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

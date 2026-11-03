@@ -134,7 +134,7 @@ async function open(userId, suppliedId) {
   const conversationId = ID_PATTERN.test(String(suppliedId || "")) ? String(suppliedId) : crypto.randomUUID();
   const key = `${userId}:${conversationId}`;
   let state = conversationCache.get(key);
-  
+
   if (!state) {
     if (getDatabaseMode() === "json") {
       const { readDb } = require("./core.service");
@@ -176,7 +176,7 @@ async function open(userId, suppliedId) {
       }
     }
   }
-  
+
   if (!state) {
     state = {
       conversationId,
@@ -188,7 +188,7 @@ async function open(userId, suppliedId) {
     };
     conversationCache.set(key, state);
   }
-  
+
   return {
     conversationId: state.conversationId,
     entities: state.entities,
@@ -209,12 +209,12 @@ async function remember(key, entities, language) {
     messages: [],
     updatedAt: now
   };
-  
+
   state.entities = Array.isArray(entities) ? entities.slice(0, 8) : [];
   state.language = ["en", "te", "hi"].includes(language) ? language : "en";
   state.updatedAt = now;
   conversationCache.set(key, state);
-  
+
   const conversation = {
     id: conversationId,
     userId,
@@ -223,14 +223,14 @@ async function remember(key, entities, language) {
     createdAt: state.createdAt || new Date(now).toISOString(),
     updatedAt: new Date(now).toISOString()
   };
-  
+
   await saveConversationToDb(conversation, state.messages);
 }
 
 async function appendMessage(key, role, content, metadata = {}) {
   const state = conversationCache.get(key);
   if (!state) return;
-  
+
   const messageId = crypto.randomUUID();
   const message = {
     id: messageId,
@@ -240,12 +240,12 @@ async function appendMessage(key, role, content, metadata = {}) {
     metadata,
     createdAt: new Date().toISOString()
   };
-  
+
   state.messages.push(message);
   state.messages = enforceMessageLimit(state.messages);
   state.updatedAt = Date.now();
   conversationCache.set(key, state);
-  
+
   const conversation = {
     id: state.conversationId,
     userId: state.userId,
@@ -254,7 +254,7 @@ async function appendMessage(key, role, content, metadata = {}) {
     createdAt: state.createdAt || new Date(state.updatedAt).toISOString(),
     updatedAt: new Date(state.updatedAt).toISOString()
   };
-  
+
   await saveConversationToDb(conversation, state.messages);
 }
 
