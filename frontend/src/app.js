@@ -39,6 +39,7 @@ import { clearBrowserLocationWatch, getBrowserLocation, watchBrowserLocation } f
 import { shouldTransmitUnitTelemetry, unitTelemetryPayload, unitTelemetryRenderFingerprint } from "./unitTelemetry.js";
 import { canDispatchUnits, createUnitAssignmentRecommendationCoordinator, hybridSupportVisible, memberUnavailable, unitAssignmentAction } from "./unitAssignmentRecommendation.js";
 import { initializeSocket, disconnect as disconnectSocket, on as onRealtime } from "./services/realtime.js";
+import { restoreAuthenticatedView } from "./sessionBootstrap.js";
 import { createCriticalModal, syncCriticalAttention, clearCriticalAttention, createRequiresAttentionPanel, removeGlobalBanner, removeRequiresAttentionPanel } from "./components/PersistentAlerts.js";
 import { configureTracking, renderTrackingPage, cleanupTracking, createTrackingSessionModal } from "./components/MultiCameraTracking.js";
 import { configureCopilot, mountCopilot, openCopilot, unmountCopilot } from "./components/RakshakCopilot.js";
@@ -8807,13 +8808,13 @@ window.addEventListener("popstate", () => {
 initSatelliteMaps();
 resetGisNavigationState("GIS map ready. Route markers cleared.");
 
-checkSession()
-  .then(async (hasSession) => {
-    if (hasSession) {
-      await refresh();
-      setView(requestedPortalView());
-    }
-  })
+restoreAuthenticatedView({
+  checkSession,
+  requestedView: requestedPortalView,
+  setView,
+  refresh,
+  onRefreshError: (error) => console.error("Initial application data refresh failed; keeping the restored view.", error)
+})
   .catch((error) => {
     $("#currentUser").textContent = "API unavailable";
     showPortal(error.code === "API_UNAVAILABLE"
