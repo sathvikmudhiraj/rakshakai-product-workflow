@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { isOperatorRole, landingForRole, loadAiVisionData, resolveViewAccess } from "../src/roleAccess.js";
 
@@ -44,6 +45,12 @@ function recordApi(responses = {}) {
 test("Citizen pure helper behavior: landing fallback and non-operator role", () => {
   assert.equal(landingForRole("Citizen"), "missing");
   assert.equal(isOperatorRole("Citizen"), false);
+});
+
+test("restored sessions apply role restrictions before showing a deep link", () => {
+  const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  const restore = appSource.match(/async function checkSession\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(restore, /state\.user = me\.user;\s*applyRoleAccess\(\);\s*showApp\(\);/);
 });
 
 test("Citizen opening /rakshak/live-vision executes production access logic and falls back to missing", () => {

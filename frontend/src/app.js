@@ -6573,6 +6573,7 @@ async function checkSession() {
     return false;
   }
   state.user = me.user;
+  applyRoleAccess();
   showApp();
   return true;
 }

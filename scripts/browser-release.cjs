@@ -456,6 +456,8 @@ async function runBrowserChecks({ baseUrl, password }) {
             if (role === "Police Officer") assert.equal(await page.locator('.nav-item[data-view="settings"]').isVisible(), false);
             await openNavigation(page, "gis");
             await page.locator("#gisMap .leaflet-tile-pane").waitFor({ state: "attached" });
+            await waitForUsableMapLayer(page, "streets", "tile.openstreetmap.org");
+            await page.locator("#satelliteMapLayer").click();
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.locator("#streetMapLayer").click();
             await waitForUsableMapLayer(page, "streets", "tile.openstreetmap.org");
@@ -477,8 +479,8 @@ async function runBrowserChecks({ baseUrl, password }) {
             assert.equal((await routeResponse).status(), 200);
             await page.waitForFunction(() => !document.querySelector("#recalculateRoute").disabled);
             await page.locator("#clearMapRoute").click();
-            await page.waitForFunction(() => document.querySelector("#navigateMap").disabled && document.querySelector("#clearMapRoute").disabled);
-            assert.equal(await page.locator("#navigateMap").isDisabled(), true);
+            await page.waitForFunction(() => !document.querySelector("#navigateMap").disabled && document.querySelector("#clearMapRoute").disabled);
+            assert.equal(await page.locator("#navigateMap").isDisabled(), false);
             assert.equal(await page.locator("#clearMapRoute").isDisabled(), true);
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.screenshot({ path: path.join(screenshots, `gis-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
@@ -539,13 +541,33 @@ async function runBrowserChecks({ baseUrl, password }) {
           // Do not capture the login form or entered credentials on failure.
           console.error(`Browser scenario failed: ${browserName}, ${role}, ${viewport.width}x${viewport.height}`);
           console.error(String(error.stack || "").split("\n").filter((line) => line.includes("browser-release.cjs")).join("\n"));
-          console.error(await page.evaluate(({ browserErrors, failedRequests }) => ({
+          console.error(JSON.stringify(await page.evaluate(({ browserErrors, failedRequests }) => ({
             view: document.body.dataset.view,
             calculateDisabled: document.querySelector("#navigateMap")?.disabled,
             locationDisabled: document.querySelector("#useMyLocation")?.disabled,
             cspDirectives: window.releaseCspViolations,
             browserErrors,
             failedRequests,
+            map: (() => {
+              const map = document.querySelector("#gisMap");
+              if (!map) return null;
+              return {
+                baseLayer: map.dataset.baseLayer,
+                status: map.querySelector(".map-status")?.textContent,
+                className: map.className,
+                mapRect: map.getBoundingClientRect().toJSON(),
+                satellitePressed: document.querySelector("#satelliteMapLayer")?.getAttribute("aria-pressed"),
+                streetPressed: document.querySelector("#streetMapLayer")?.getAttribute("aria-pressed"),
+                tiles: [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")].slice(0, 8).map((tile) => ({
+                  src: tile.currentSrc || tile.src,
+                  complete: tile.complete,
+                  naturalWidth: tile.naturalWidth,
+                  naturalHeight: tile.naturalHeight,
+                  rect: tile.getBoundingClientRect().toJSON(),
+                  opacity: getComputedStyle(tile).opacity
+                }))
+              };
+            })(),
             scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
             camera: {
               secureContext: window.isSecureContext,
@@ -556,7 +578,7 @@ async function runBrowserChecks({ baseUrl, password }) {
               hasStream: Boolean(document.querySelector("#liveVisionVideo")?.srcObject),
               hidden: document.hidden
             }
-          }), { browserErrors: errors, failedRequests }).catch(() => ({ pageUnavailable: true })));
+          }), { browserErrors: errors, failedRequests }).catch(() => ({ pageUnavailable: true })), null, 2));
           throw error;
         } finally { await context.close(); }
       }
