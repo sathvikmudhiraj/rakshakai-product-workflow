@@ -2,6 +2,12 @@
 # locally; the Python 3.11 Docker build remains a required release gate.
 # torch/torchvision are installed first from the CPU wheel index in the
 # Dockerfile; these pins keep local installs deterministic as well.
+setuptools==84.1.0
+# Transitive dependencies of the pins above; held at versions that pass the
+# pip-audit advisory gate so CI, Docker, and local audits stay consistent.
+certifi==2026.10.23
+filelock==4.2.8
+pillow==13.0.0
 ultralytics==8.3.253
 torch==2.14.1
 torchvision==0.29.1

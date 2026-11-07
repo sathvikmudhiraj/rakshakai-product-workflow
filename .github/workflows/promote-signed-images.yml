@@ -1,0 +1,151 @@
+name: Promote signed images
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Release checks run ID on main
+        required: true
+        type: string
+      commit_sha:
+        description: Full 40-character main commit SHA from that run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-promotion-main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - name: Require a green release gate for current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+        run: |
+          node <<'NODE'
+          const repo = process.env.GITHUB_REPOSITORY;
+          const id = process.env.RELEASE_RUN_ID;
+          const sha = process.env.RELEASE_SHA;
+          if (!/^\d+$/.test(id) || !/^[a-f0-9]{40}$/.test(sha)) throw new Error('Run ID or commit SHA is invalid');
+          const headers = { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+          async function get(path) {
+            const response = await fetch(`https://api.github.com/repos/${repo}${path}`, { headers });
+            if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
+            return response.json();
+          }
+          const run = await get(`/actions/runs/${id}`);
+          const main = await get('/branches/main');
+          const jobs = await get(`/actions/runs/${id}/jobs?per_page=100`);
+          if (run.event !== 'push' || run.head_branch !== 'main' || run.head_sha !== sha || run.conclusion !== 'success'
+              || String(run.path || '').split('@')[0] !== '.github/workflows/release-checks.yml'
+              || main.commit?.sha !== sha
+              || !jobs.jobs?.some(job => job.name === 'release-gate' && job.conclusion === 'success')) {
+            throw new Error('Release run is not a successful release gate for current main');
+          }
+          console.log(`Approved release run ${id} for ${sha}`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish frontend
+        id: frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          build-args: VITE_API_BASE_URL=/api
+          tags: ${{ env.IMAGE_PREFIX }}/frontend:sha-${{ inputs.commit_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.commit_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Sign frontend digest provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/frontend
+          subject-digest: ${{ steps.frontend.outputs.digest }}
+          push-to-registry: true
+
+      - name: Build and publish backend
+        id: backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/backend:sha-${{ inputs.commit_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.commit_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Sign backend digest provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/backend
+          subject-digest: ${{ steps.backend.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify both signed digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+        run: |
+          gh attestation verify "oci://${IMAGE_PREFIX}/frontend@${FRONTEND_DIGEST}" --repo "$GITHUB_REPOSITORY" --source-ref refs/heads/main --source-digest "$RELEASE_SHA" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/promote-signed-images.yml"
+          gh attestation verify "oci://${IMAGE_PREFIX}/backend@${BACKEND_DIGEST}" --repo "$GITHUB_REPOSITORY" --source-ref refs/heads/main --source-digest "$RELEASE_SHA" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/promote-signed-images.yml"
+
+      - name: Record immutable release manifest
+        env:
+          RELEASE_SHA: ${{ inputs.commit_sha }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const image = process.env.IMAGE_PREFIX;
+          const record = {
+            commit: process.env.RELEASE_SHA,
+            releaseChecksRunId: process.env.RELEASE_RUN_ID,
+            promotionRunId: process.env.GITHUB_RUN_ID,
+            frontend: `${image}/frontend@${process.env.FRONTEND_DIGEST}`,
+            backend: `${image}/backend@${process.env.BACKEND_DIGEST}`,
+            signedProvenanceVerified: true
+          };
+          fs.writeFileSync('release-manifest.json', JSON.stringify(record, null, 2) + '\n');
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-manifest-${{ inputs.commit_sha }}-${{ github.run_id }}
+          path: release-manifest.json
+          if-no-files-found: error
