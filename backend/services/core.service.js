@@ -40,6 +40,7 @@ const dispatchEscalationLogRepository = require("../repositories/dispatchEscalat
 const dispatchEscalationRulesRepository = require("../repositories/dispatchEscalationRules.repository");
 const evidenceCustodyRepository = require("../repositories/evidenceCustody.repository");
 const slaConfigRepository = require("../repositories/slaConfig.repository");
+const { activePolicyFor, buildSlaDeadlinePlan, isExplicitDemoIncident } = require("./slaDataQuality.service");
 const severityRecommendationRulesRepository = require("../repositories/severityRecommendationRules.repository");
 const investigationCategoriesRepository = require("../repositories/investigationCategories.repository");
 const incidentSeverityAuditRepository = require("../repositories/incidentSeverityAudit.repository");
@@ -1484,7 +1485,8 @@ async function assignSelectedIncidentUnit(incidentId, body, user) {
       createdAt: incident.updatedAt
     });
     const audit = addAuditLog(lockedDb, isReassignment ? "unit_reassigned" : "unit_assigned", user, incident.id,
-      isReassignment ? `previousUnitId=${previousAssignedUnit?.id || ""}; unitId=${unit.id}; reason=${assignmentReason}` : unit.unitCode);
+      JSON.stringify({ previousUnitId: previousAssignedUnit?.id || null, previousUnit: previousAssignedUnit?.unitCode || null,
+        unitId: unit.id, unit: unit.unitCode, reason: assignmentReason || null }));
     const overrideAudit = body.unitId ? addAuditLog(lockedDb, "manual_unit_override", user, incident.id, `${unit.unitCode}: ${incident.title}`) : null;
     const escalationAudit = addAuditLog(lockedDb, "escalation_started", user, incident.id, `ACK timeout ${ackTimeout}s started for ${unit.unitCode}`, incident.updatedAt);
     await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit, previousAssignedUnit], reports: [linkedReport], events: [statusEvent, assignEvent], audits: [audit, overrideAudit, escalationAudit] });
@@ -1532,7 +1534,8 @@ async function releaseAssignedIncidentUnit(incidentId, body, user) {
       description: `${unit.unitCode} released: ${reason}`,
       metadata: { unitId: unit.id, unitCode: unit.unitCode, reason }, createdAt: releasedAt
     });
-    const audit = addAuditLog(lockedDb, "unit_released", user, incident.id, `unitId=${unit.id}; reason=${reason}`, releasedAt);
+    const audit = addAuditLog(lockedDb, "unit_released", user, incident.id,
+      JSON.stringify({ unitId: unit.id, unit: unit.unitCode, previousStatus: "assigned", newStatus: "available", reason }), releasedAt);
     const linkedReport = syncLinkedCitizenReportStatus(lockedDb, incident);
     await writeIncidentWorkflowRecords(lockedDb, incident, { units: [unit], reports: [linkedReport], events: [event], audits: [audit] });
     const payload = { incident: incidentForResponse(lockedDb, incident), unit: unitForResponse(unit) };
@@ -3011,6 +3014,18 @@ function policeUserForResponse(user, officer = null, db = null) {
 
 function policeUsersForResponse(db, includeDemo = false) {
   return policeManagementUsers(db).filter((user) => includeDemo || !user.isDemo);
+}
+
+function passwordPolicyError(password, subject = "Password") {
+  const value = String(password || "");
+  if (value.length < 12
+    || value.length > 128
+    || !/[a-z]/.test(value)
+    || !/[A-Z]/.test(value)
+    || !/\d/.test(value)) {
+    return `${subject} must be 12 to 128 characters and include uppercase, lowercase, and a number`;
+  }
+  return null;
 }
 
 function jwtSecret() {
@@ -4746,7 +4761,7 @@ function incidentForResponse(db, incident) {
   const locationSafetyLabel = !location
     ? "Location missing - verify before dispatch"
     : incident.locationStatus === "Verified" && hasDispatchableLocation(incident)
-      ? "Ready for dispatch"
+      ? "Location verified"
       : incident.locationStatus === "Verified"
         ? "Location source unconfirmed"
         : incident.locationStatus === "Approximate"
@@ -4824,12 +4839,19 @@ function createIncidentRecord(db, input, user, timestamp = now()) {
   const severity = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(explicitSeverity)
     ? explicitSeverity
     : getRecommendedSeverity(input, db.severityRecommendationRules || []);
+  const isDemo = input.isDemo === true || input.sourceType === "command_center_demo" || input.source === "demo_seed";
+  if (!isDemo && !activePolicyFor({ severity }, db.slaConfig || [])) {
+    const error = new Error(`An active ${severity} SLA policy is required before creating an operational incident`);
+    error.status = 409;
+    throw error;
+  }
   const incident = {
     id: uid("inc"),
     title: String(input.title || input.category || "Operational incident").trim().slice(0, 160),
     type: String(input.category || input.type || "operational_incident").trim().slice(0, 80),
     category: String(input.category || input.type || "Operational incident").trim().slice(0, 80),
     severity,
+    isDemo,
     status,
     source: input.source || "Manual",
     sourceType: input.sourceType || "manual",
@@ -4953,13 +4975,8 @@ async function apiInternal(req, res, url) {
     const role = "Citizen";
     if (name.length < 2) return sendJson(res, 400, { error: "Enter a valid name" });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: "Enter a valid email" });
-    if (password.length < 12
-      || password.length > 128
-      || !/[a-z]/.test(password)
-      || !/[A-Z]/.test(password)
-      || !/\d/.test(password)) {
-      return sendJson(res, 400, { error: "Password must be 12 to 128 characters and include uppercase, lowercase, and a number" });
-    }
+    const registrationPasswordError = passwordPolicyError(password);
+    if (registrationPasswordError) return sendJson(res, 400, { error: registrationPasswordError });
     if (db.users.some((u) => normalizeEmail(u.email) === email)) return sendJson(res, 409, { error: "Email already registered. Please login." });
     const created = { id: uid("u"), name, email, role, passwordHash: await bcrypt.hash(password, 12), createdAt: now() };
     const token = signSessionToken(created, { userAgent: req.headers["user-agent"] });
@@ -5027,12 +5044,8 @@ async function apiInternal(req, res, url) {
     if (!await verifyPassword(user, currentPassword)) {
       return sendJson(res, 401, { error: "Current password is incorrect" });
     }
-    if (newPassword.length < 10
-      || !/[a-z]/.test(newPassword)
-      || !/[A-Z]/.test(newPassword)
-      || !/\d/.test(newPassword)) {
-      return sendJson(res, 400, { error: "New password must be at least 10 characters and include uppercase, lowercase, and a number" });
-    }
+    const newPasswordError = passwordPolicyError(newPassword, "New password");
+    if (newPasswordError) return sendJson(res, 400, { error: newPasswordError });
     if (await verifyPassword(user, newPassword)) {
       return sendJson(res, 400, { error: "New password must be different from the current password" });
     }
@@ -5430,6 +5443,77 @@ async function apiInternal(req, res, url) {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     return sendJson(res, 200, { incidents: db.incidents.filter(isActiveIncident).map((incident) => incidentForResponse(db, incident)) });
   }
+  if (req.method === "GET" && url.pathname === "/api/sla/monitoring") {
+    if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
+    const asOfMs = Date.now();
+    const asOf = new Date(asOfMs).toISOString();
+    let visibleIncidents = db.incidents || [];
+    if (user.role !== "Admin") {
+      const profile = policeManagementUsers(db).find((item) => item.userId === String(user.id));
+      const stationRefs = new Set([user.stationId, user.data?.stationId, profile?.stationId].filter(Boolean).map(String));
+      const stations = (db.policeStations || []).filter((station) => [station.id, station.stationId, station.stationCode].some((id) => stationRefs.has(String(id))));
+      for (const station of stations) [station.id, station.stationId, station.stationCode].filter(Boolean).forEach((id) => stationRefs.add(String(id)));
+      const jurisdictions = new Set([user.jurisdiction, user.data?.jurisdiction, profile?.jurisdiction, ...stations.map((station) => station.jurisdiction)].filter(Boolean).map((value) => String(value).trim().toLowerCase()));
+      if (!stationRefs.size && !jurisdictions.size) return sendJson(res, 403, { error: "A registered police station or jurisdiction is required to access SLA monitoring." });
+      visibleIncidents = visibleIncidents.filter((incident) => {
+        const unit = (db.responseUnits || []).find((item) => item.id === incident.assignedUnitId);
+        const incidentStation = [incident.stationId, incident.policeStationId, incident.linkedStationId, unit?.linkedStationId].filter(Boolean).map(String);
+        if (incidentStation.some((id) => stationRefs.has(id))) return true;
+        const incidentJurisdiction = String(incident.jurisdiction || incident.zone || "").trim().toLowerCase();
+        return Boolean(incidentJurisdiction && jurisdictions.has(incidentJurisdiction));
+      });
+    }
+    const activeRecords = visibleIncidents.filter(isActiveIncident);
+    const deadlinePlan = buildSlaDeadlinePlan(activeRecords, db.slaConfig || [], asOfMs);
+    const active = activeRecords.map((incident) => {
+      const assignmentStatus = getAssignmentSlaStatus(incident, db.slaConfig || [], asOfMs);
+      const responseStatus = getResponseSlaStatus(incident, db.slaConfig || [], asOfMs);
+      const breached = assignmentStatus.status === "BREACHED" || responseStatus.status === "BREACHED";
+      const approaching = assignmentStatus.status === "WARNING" || responseStatus.status === "WARNING";
+      const noDeadline = assignmentStatus.status === "NO_DEADLINE" && responseStatus.status === "NO_DEADLINE";
+      const slaState = breached ? "BREACHED" : approaching ? "APPROACHING" : noDeadline ? "NO_DEADLINE" : "WITHIN_SLA";
+      const response = incidentForResponse(db, incident);
+      const station = (db.policeStations || []).find((item) => [item.id, item.stationId, item.stationCode].some((id) => String(id) === String(incident.stationId || incident.policeStationId || incident.linkedStationId || response.assignedUnit?.linkedStationId)));
+      return {
+        ...response,
+        stationName: incident.stationName || station?.stationName || response.assignedUnit?.stationName || null,
+        slaState,
+        assignmentSlaStatus: assignmentStatus,
+        responseSlaStatus: responseStatus,
+        escalationLevel: getEscalationLevelForIncident(incident, db.slaConfig || [], asOfMs),
+        slaDeadline: assignmentStatus.status === "WARNING" || assignmentStatus.status === "BREACHED" || !incident.assignedUnitId
+          ? incident.assignmentDeadline || null
+          : incident.responseDeadline || null
+      };
+    });
+    const completed = visibleIncidents.filter((incident) => ["resolved", "closed"].includes(normalizedIncidentValue(incident.status)) && (incident.resolvedAt || incident.closedAt));
+    const breachDays = Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(asOfMs - (6 - index) * 86400000);
+      const date = day.toISOString().slice(0, 10);
+      const count = visibleIncidents.reduce((total, incident) => total + [incident.assignmentBreachedAt, incident.responseBreachedAt]
+        .filter((timestamp) => timestamp && String(timestamp).slice(0, 10) === date).length, 0);
+      return { date, count };
+    });
+    return sendJson(res, 200, {
+      asOf,
+      incidents: active,
+      summary: {
+        activeCases: active.length,
+        operationalCases: activeRecords.length - deadlinePlan.summary.explicitDemoCases,
+        demoCases: deadlinePlan.summary.explicitDemoCases,
+        withinSla: active.filter((incident) => incident.slaState === "WITHIN_SLA").length,
+        approaching: active.filter((incident) => incident.slaState === "APPROACHING").length,
+        breached: active.filter((incident) => incident.slaState === "BREACHED").length,
+        noDeadline: active.filter((incident) => incident.slaState === "NO_DEADLINE").length,
+        escalated: active.filter((incident) => incident.escalationLevel !== "L0").length,
+        completedCases: completed.length,
+        onTimeResolutionRate: null,
+        resolutionSlaConfigured: false,
+        dataQuality: deadlinePlan.summary
+      },
+      breachTrend: breachDays
+    });
+  }
   const getIncidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)$/);
   if (req.method === "GET" && getIncidentMatch && getIncidentMatch[1] !== "history") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
@@ -5472,7 +5556,7 @@ async function apiInternal(req, res, url) {
       }
       db.policeStations.unshift(station);
       const audit = addAuditLog(db, "station_created", user, null, `${station.stationId}: ${station.stationName}`);
-      await writeDatabase(db);
+      await writeSelectedRecords(db, [[policeStationsRepository, [station]], [auditLogsRepository, [audit]]]);
       return sendJson(res, 201, { station: stationForResponse(station), audit: { id: audit.id, action: audit.action, timestamp: audit.timestamp } });
     } catch (error) {
       return sendJson(res, error.status || 400, { error: error.message });
@@ -5489,8 +5573,10 @@ async function apiInternal(req, res, url) {
         ? normalizePoliceStationRecord({ ...station, operational: false, lastUpdated: now() })
         : safePoliceStationBody(body, station);
       Object.assign(station, next);
-      const audit = addAuditLog(db, req.method === "DELETE" || before.operational !== station.operational ? "station_status_changed" : "station_updated", user, null, `${station.stationId}: ${station.stationName}`);
-      await writeDatabase(db);
+      const audit = addAuditLog(db, req.method === "DELETE" || before.operational !== station.operational ? "station_status_changed" : "station_updated", user, null,
+        JSON.stringify({ stationId: station.stationId, stationName: station.stationName, oldStation: before.stationName, newStation: station.stationName,
+          oldOperational: before.operational, newOperational: station.operational }));
+      await writeSelectedRecords(db, [[policeStationsRepository, [station]], [auditLogsRepository, [audit]]]);
       return sendJson(res, 200, { station: stationForResponse(station), audit: { id: audit.id, action: audit.action, timestamp: audit.timestamp } });
     } catch (error) {
       return sendJson(res, error.status || 400, { error: error.message });
@@ -5612,6 +5698,28 @@ async function apiInternal(req, res, url) {
       return sendJson(res, error.status || 400, { error: error.message });
     }
   }
+  const adminMemberCandidatesMatch = url.pathname.match(/^\/api\/admin\/response-units\/([^/]+)\/member-candidates$/);
+  if (req.method === "GET" && adminMemberCandidatesMatch) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const unitRef = adminMemberCandidatesMatch[1];
+    const unit = db.responseUnits.find((item) => item.id === unitRef || item.unitCode === unitRef || item.unitId === unitRef);
+    if (!unit) return sendJson(res, 404, { error: "Response unit not found" });
+    const roster = policeUsersForResponse(db, true).filter((officer) => !officer.isDemo).map((officer) => {
+      const eligibility = policeManagement.membershipEligibility(db, unit, officer.id);
+      return {
+        id: officer.id,
+        name: officer.name,
+        badgeId: officer.badgeId || null,
+        rank: eligibility.rank?.name || eligibility.rank?.code || null,
+        station: eligibility.station?.name || eligibility.station?.stationName || officer.station || null,
+        active: officer.active === true,
+        eligible: eligibility.eligible,
+        reasons: eligibility.reasons.map((reason) => reason.message)
+      };
+    });
+    return sendJson(res, 200, { officers: roster });
+  }
+
   const adminUnitMembersMatch = url.pathname.match(/^\/api\/admin\/response-units\/([^/]+)\/members$/);
   const adminUnitMemberMatch = url.pathname.match(/^\/api\/admin\/response-units\/([^/]+)\/members\/([^/]+)$/);
   if (adminUnitMembersMatch || adminUnitMemberMatch) {
@@ -5672,7 +5780,8 @@ async function apiInternal(req, res, url) {
         active: true
       };
       db.responseUnitMembers.push(membership);
-      const audit = addAuditLog(db, "unit_member_added", user, null, `${unit.unitCode || unit.id}: added ${officerUser.name} (${officerUserId}) as ${role}`, now());
+      const audit = addAuditLog(db, "unit_member_added", user, null, JSON.stringify({ unitId: unit.id, unit: unit.unitCode || unit.id,
+        officerId: officerUserId, officer: officerUser.name, role, reason: body.reason || null }), now());
       await writeSelectedRecords(db, [[responseUnitMembersRepository, [membership]], [auditLogsRepository, [audit]]]);
       return sendJson(res, 201, { member: membership });
     }
@@ -5686,17 +5795,20 @@ async function apiInternal(req, res, url) {
       const previousRole = member.role || "member";
       if (role) {
         if (!policeManagement.MEMBERSHIP_ROLES.includes(role)) return sendJson(res, 400, { error: "Invalid role" });
+        policeManagement.validateMember(db, unit, member.officerUserId || member.officer_user_id, role, { ignoreMemberId: member.id });
         member.role = role;
       }
       const active = body.active;
       if (active !== undefined && typeof active !== "boolean") return sendJson(res, 400, { error: "Active must be a boolean" });
-      if (active === true) policeManagement.validateMember(db, unit, member.officerUserId || member.officer_user_id, member.role);
+      if (active === true) policeManagement.validateMember(db, unit, member.officerUserId || member.officer_user_id, member.role, { ignoreMemberId: member.id });
       if (active !== undefined) member.active = Boolean(active);
       member.updatedAt = now();
       const audit = addAuditLog(db, "unit_member_updated", user, null, JSON.stringify({
         unitId: unit.id,
+        unit: unit.unitCode || unit.id,
         memberId: member.id,
         officerUserId: member.officerUserId || member.officer_user_id,
+        officerName: (db.users || []).find((item) => item.id === (member.officerUserId || member.officer_user_id))?.name || null,
         previousRole,
         role: member.role || "member",
         active: member.active !== false
@@ -5716,14 +5828,22 @@ async function apiInternal(req, res, url) {
       const officer = (db.users || []).find((item) => item.id === officerUserId);
       const audit = addAuditLog(db, "unit_member_removed", user, null, JSON.stringify({
         unitId: unit.id,
+        unit: unit.unitCode || unit.id,
         memberId: member.id,
         officerUserId,
         officerName: officer?.name || null,
         role: member.role || "member",
         active: member.active !== false
       }), now());
-      if (getDatabaseMode() === "postgres") await query("DELETE FROM response_unit_members WHERE id = $1 AND unit_id = $2", [member.id, unit.id]);
-      await writeSelectedRecords(db, [[responseUnitMembersRepository, db.responseUnitMembers, true], [auditLogsRepository, [audit]]]);
+      if (getDatabaseMode() === "postgres") {
+        await withTransaction(async (client) => {
+          await client.query("SELECT pg_advisory_xact_lock($1)", [724211]);
+          await client.query("DELETE FROM response_unit_members WHERE id = $1 AND unit_id = $2", [member.id, unit.id]);
+          await auditLogsRepository.upsert(audit, client);
+        });
+      } else {
+        await writeSelectedRecords(db, [[responseUnitMembersRepository, db.responseUnitMembers, true], [auditLogsRepository, [audit]]]);
+      }
       return sendJson(res, 200, { removed: true });
     }
     return sendJson(res, 405, { error: "Method not allowed" });
@@ -5772,7 +5892,8 @@ async function apiInternal(req, res, url) {
     if (!["Police Officer", "Admin"].includes(role)) return sendJson(res, 400, { error: "Staff role must be Police Officer or Admin" });
     if (name.length < 2) return sendJson(res, 400, { error: "Enter the staff member's full name" });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: "Enter a valid email" });
-    if (password.length < 8) return sendJson(res, 400, { error: "Temporary password must be at least 8 characters" });
+    const staffPasswordError = passwordPolicyError(password, "Temporary password");
+    if (staffPasswordError) return sendJson(res, 400, { error: staffPasswordError });
     if (db.users.some((item) => normalizeEmail(item.email) === email)) return sendJson(res, 409, { error: "Email is already registered" });
     const created = {
       id: uid("u"),
@@ -5830,7 +5951,8 @@ async function apiInternal(req, res, url) {
     const password = String(body.temporaryPassword || body.password || "");
     if (name.length < 2) return sendJson(res, 400, { error: "Enter the police officer's full name" });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: "Enter a valid email" });
-    if (password.length < 8) return sendJson(res, 400, { error: "Temporary password must be at least 8 characters" });
+    const policePasswordError = passwordPolicyError(password, "Temporary password");
+    if (policePasswordError) return sendJson(res, 400, { error: policePasswordError });
     if (db.users.some((item) => normalizeEmail(item.email) === email)) return sendJson(res, 409, { error: "Email is already registered" });
     const validatedPersonnel = policeManagement.validatePersonnel(db, body);
     db.policeOfficers ||= [];
@@ -5953,7 +6075,7 @@ async function apiInternal(req, res, url) {
       const unitStation = findLinkedStation(linkedUnit, db.policeStations || []);
       if (unitStation && unitStation.id !== linkedStation.id) return sendJson(res, 400, { error: "Response unit belongs to another police station" });
     }
-    if (linkedUnit) policeManagement.validateMember(db, linkedUnit, policeUser.id, "member");
+    if (linkedUnit && unitChanged) policeManagement.validateMember(db, linkedUnit, policeUser.id, "member");
     if (!officer && linkedStation) {
       const defaultRank = (db.officerRanks || []).find((rank) => rank.active !== false);
       if (defaultRank) {
@@ -6010,7 +6132,9 @@ async function apiInternal(req, res, url) {
     for (const [field, after] of Object.entries({ station: policeUser.station, beat: policeUser.beat, jurisdiction: policeUser.jurisdiction, dutyStatus: officer?.dutyStatus, availabilityStatus: officer?.availabilityStatus, operationalRole: policeUser.operationalRole })) {
       if (String(beforeFields[field] || "") !== String(after || "")) {
         const auditField = field === "operationalRole" ? "operational_role" : field;
-        changeAudits.push(addAuditLog(db, `police_${auditField}_changed`, user, null, `${policeUser.id}: ${beforeFields[field] || "Not recorded"} -> ${after || "Not recorded"}`, policeUser.updatedAt));
+        changeAudits.push(addAuditLog(db, `police_${auditField}_changed`, user, null,
+          JSON.stringify({ officerId: policeUser.id, officer: policeUser.name, field: auditField,
+            oldValue: beforeFields[field] || "Not recorded", newValue: after || "Not recorded" }), policeUser.updatedAt));
       }
     }
     if (unitChanged) changeAudits.push(addAuditLog(db, "police_unit_membership_changed", user, null, `${policeUser.id}: ${currentAssignment.unitId || "Unassigned"} -> ${policeUser.unitId || "Unassigned"}`, policeUser.updatedAt));
@@ -6052,7 +6176,8 @@ async function apiInternal(req, res, url) {
     const policeUser = db.users.find((item) => item.id === policeResetMatch[1] && item.role === "Police Officer");
     if (!policeUser) return sendJson(res, 404, { error: "Police account not found" });
     const temporaryPassword = String(body.temporaryPassword || body.password || "");
-    if (temporaryPassword.length < 8) return sendJson(res, 400, { error: "Temporary password must be at least 8 characters" });
+    const resetPasswordError = passwordPolicyError(temporaryPassword, "Temporary password");
+    if (resetPasswordError) return sendJson(res, 400, { error: resetPasswordError });
     policeUser.passwordHash = await bcrypt.hash(temporaryPassword, 12);
     policeUser.sessionVersion = crypto.randomUUID();
     policeUser.updatedAt = now();
@@ -6259,6 +6384,7 @@ async function apiInternal(req, res, url) {
       id: uid("inc"),
       ...scenario,
       sourceType: "command_center_demo",
+      isDemo: true,
       lat: point.lat,
       lng: point.lng,
       status: "New",
@@ -6309,7 +6435,8 @@ async function apiInternal(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/incidents") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     const createdAt = now();
-    const incident = createIncidentRecord(db, { ...body, source: "Manual", status: body.status || "Verified" }, user, createdAt);
+    const incident = createIncidentRecord(db, { ...body, source: "Manual", sourceType: "manual", isDemo: false,
+      status: body.status || "Verified" }, user, createdAt);
     await writeIncidentWorkflowRecords(db, incident);
     publishCriticalIncident(incident);
     return sendJson(res, 201, { incident: incidentForResponse(db, incident) });
@@ -6443,7 +6570,11 @@ async function apiInternal(req, res, url) {
       const assignments = await withAssignmentLock(async () => {
         const db = await readDatabase();
         const created = incidentOfficerAssignmentService.assignIncidentOfficers(db, officerAssignmentsMatch[1], body.assignments, user);
-        const audits = created.map((item) => addAuditLog(db, "incident_officer_assigned", user, item.incidentId, JSON.stringify({ unitId: item.unitId, officerId: item.officerId, responseRole: item.responseRole })));
+        const audits = created.map((item) => {
+          const officer = (db.users || []).find((candidate) => candidate.id === item.officerId);
+          return addAuditLog(db, "incident_officer_assigned", user, item.incidentId,
+            JSON.stringify({ unitId: item.unitId, officerId: item.officerId, officer: officer?.name || null, responseRole: item.responseRole }));
+        });
         const events = created.map((item) => {
           const officer = (db.users || []).find((candidate) => candidate.id === item.officerId);
           return addDispatchEvent(db, item.incidentId, "incident_officer_assigned", `${officer?.name || item.officerId} assigned as ${item.responseRole.replaceAll("_", " ")}`, user.name, item.assignedAt);
@@ -6473,7 +6604,10 @@ async function apiInternal(req, res, url) {
       const assignment = await withAssignmentLock(async () => {
         const db = await readDatabase();
         const released = incidentOfficerAssignmentService.releaseIncidentOfficer(db, officerReleaseMatch[1], officerReleaseMatch[2], body.reason, user);
-        const audit = addAuditLog(db, "incident_officer_released", user, released.incidentId, JSON.stringify({ unitId: released.unitId, officerId: released.officerId, responseRole: released.responseRole, reason: released.releaseReason }));
+        const assignedOfficer = (db.users || []).find((candidate) => candidate.id === released.officerId);
+        const audit = addAuditLog(db, "incident_officer_released", user, released.incidentId,
+          JSON.stringify({ unitId: released.unitId, officerId: released.officerId, officer: assignedOfficer?.name || null,
+            responseRole: released.responseRole, reason: released.releaseReason }));
         const officer = (db.users || []).find((candidate) => candidate.id === released.officerId);
         const event = addDispatchEvent(db, released.incidentId, "incident_officer_released", `${officer?.name || released.officerId} released from incident: ${released.releaseReason}`, user.name, released.releasedAt);
         await writeSelectedRecords(db, [[incidentOfficerAssignmentsRepository, [released]], [auditLogsRepository, [audit]], [dispatchEventsRepository, [event]]]);
@@ -6898,6 +7032,7 @@ async function apiInternal(req, res, url) {
     if (["Assigned", "En Route", "On Scene"].includes(nextStatus) && !hasConfirmedResources) {
       return sendJson(res, 409, { error: "Confirm response resources before this status" });
     }
+    const previousStatus = incident.status;
     const changedAt = now();
     const changedEvents = [];
     const changedAudits = [];
@@ -6944,7 +7079,8 @@ async function apiInternal(req, res, url) {
         });
     }
     changedEvents.push(addDispatchEvent(db, incident.id, "status_updated", `Incident status changed to ${nextStatus}`, user.name));
-    changedAudits.push(addAuditLog(db, "incident_status_changed", user, incident.id, nextStatus));
+    changedAudits.push(addAuditLog(db, "incident_status_changed", user, incident.id,
+      JSON.stringify({ oldStatus: previousStatus, newStatus: nextStatus, reason: body.reason || null }), changedAt));
     if (nextStatus === "Verified") changedAudits.push(addAuditLog(db, "incident_verified", user, incident.id, incident.title, changedAt));
     if (nextStatus === "Closed") changedAudits.push(addAuditLog(db, "incident_closed", user, incident.id, incident.title, changedAt));
     await writeIncidentWorkflowRecords(db, incident, {
@@ -6962,6 +7098,114 @@ async function apiInternal(req, res, url) {
   }
 
   // SLA Configuration endpoints
+  if (req.method === "GET" && url.pathname === "/api/sla/deadlines/preview") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    return sendJson(res, 200, buildSlaDeadlinePlan(db.incidents.filter(isActiveIncident), db.slaConfig || []));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/sla/deadlines/reconcile") {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const ids = body.ids;
+    const reason = String(body.reason || "").trim();
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some((id) => typeof id !== "string" || !id || id.length > 100) || new Set(ids).size !== ids.length) {
+      return sendJson(res, 400, { error: "Select 1 to 50 unique incident IDs" });
+    }
+    if (reason.length < 10 || reason.length > 500 || !/^[a-f0-9]{64}$/.test(String(body.digest || ""))) {
+      return sendJson(res, 400, { error: "A review reason and current preview digest are required" });
+    }
+    const reconcile = async (client, current) => {
+      const plan = buildSlaDeadlinePlan(current.incidents.filter(isActiveIncident), current.slaConfig || []);
+      if (plan.digest !== body.digest) {
+        const error = new Error("SLA deadline preview changed; review the current preview and retry");
+        error.status = 409;
+        throw error;
+      }
+      const chosen = ids.map((id) => plan.entries.find((entry) => entry.id === id));
+      if (chosen.some((entry) => !entry || entry.status !== "ready")) {
+        const error = new Error("Selected incidents are not eligible for deadline reconciliation");
+        error.status = 409;
+        throw error;
+      }
+      if (chosen.some((entry) => entry.historicalOverdue) && body.acknowledgeHistoricalBreaches !== true) {
+        const error = new Error("Acknowledge that historical deadlines may already be overdue");
+        error.status = 409;
+        throw error;
+      }
+      const changedAt = now();
+      const incidents = [];
+      const audits = [];
+      const timeline = [];
+      for (const entry of chosen) {
+        const incident = current.incidents.find((item) => item.id === entry.id);
+        if (entry.missingAssignment) incident.assignmentDeadline = entry.proposedAssignmentDeadline;
+        if (entry.missingResponse) incident.responseDeadline = entry.proposedResponseDeadline;
+        incident.updatedAt = changedAt;
+        incidents.push(incident);
+        audits.push(addAuditLog(current, "sla_deadline_reconciled", user, incident.id, `${reason} (preview ${plan.digest})`, changedAt));
+        timeline.push({ id: uid("timeline"), incidentId: incident.id, eventType: "SLA_DEADLINE_RECONCILED",
+          actorId: user.id, actorName: user.name, actorRole: user.role,
+          description: `Missing SLA deadlines recorded after review: ${reason}`,
+          metadata: { previousAssignmentDeadline: entry.currentAssignmentDeadline, previousResponseDeadline: entry.currentResponseDeadline,
+            assignmentDeadline: incident.assignmentDeadline, responseDeadline: incident.responseDeadline,
+            historicalOverdue: entry.historicalOverdue, previewDigest: plan.digest }, createdAt: changedAt });
+      }
+      if (client) {
+        for (const incident of incidents) await incidentsRepository.upsert(incident, client);
+        for (const audit of audits) await auditLogsRepository.upsert(audit, client);
+        for (const event of timeline) await incidentTimelineRepository.upsert(event, client);
+      } else {
+        await writeSelectedRecords(current, [[incidentsRepository, incidents], [auditLogsRepository, audits], [incidentTimelineRepository, timeline]]);
+      }
+      return { reconciled: incidents.length, ids, previewDigest: plan.digest };
+    };
+    const result = getDatabaseMode() === "postgres"
+      ? await withAdvisoryLock(async (client) => reconcile(client, await readDatabase()))
+      : await reconcile(null, db);
+    return sendJson(res, 200, result);
+  }
+
+  const classificationMatch = url.pathname.match(/^\/api\/sla\/incidents\/([^/]+)\/classification$/);
+  if (req.method === "POST" && classificationMatch) {
+    if (!hasRole(user, ["Admin"])) return forbidden(res);
+    const classification = body.classification;
+    const reason = String(body.reason || "").trim();
+    if (!["demo", "operational"].includes(classification) || reason.length < 10 || reason.length > 500) {
+      return sendJson(res, 400, { error: "Classification and a 10 to 500 character reason are required" });
+    }
+    const classify = async (client, current) => {
+      const incident = current.incidents.find((item) => item.id === classificationMatch[1]);
+      if (!incident) { const error = new Error("Incident not found"); error.status = 404; throw error; }
+      if (classification === "operational" && (["command_center_demo", "demo_seed"].includes(incident.sourceType)
+        || incident.source === "demo_seed" || incident.demo === true)) {
+        const error = new Error("A generated demo incident cannot be classified as operational"); error.status = 409; throw error;
+      }
+      if (incident.recordClassification === classification) {
+        const error = new Error("Incident classification is unchanged"); error.status = 409; throw error;
+      }
+      const changedAt = now();
+      const previous = incident.recordClassification || (isExplicitDemoIncident(incident) ? "demo" : "unclassified");
+      incident.recordClassification = classification;
+      incident.isDemo = classification === "demo";
+      incident.updatedAt = changedAt;
+      const audit = addAuditLog(current, "sla_incident_classified", user, incident.id, `${previous} -> ${classification}: ${reason}`, changedAt);
+      const event = { id: uid("timeline"), incidentId: incident.id, eventType: "SLA_RECORD_CLASSIFIED",
+        actorId: user.id, actorName: user.name, actorRole: user.role,
+        description: `${previous} -> ${classification}: ${reason}`, metadata: { previous, classification }, createdAt: changedAt };
+      if (client) {
+        await incidentsRepository.upsert(incident, client);
+        await auditLogsRepository.upsert(audit, client);
+        await incidentTimelineRepository.upsert(event, client);
+      } else {
+        await writeSelectedRecords(current, [[incidentsRepository, [incident]], [auditLogsRepository, [audit]], [incidentTimelineRepository, [event]]]);
+      }
+      return { id: incident.id, classification };
+    };
+    const result = getDatabaseMode() === "postgres"
+      ? await withAdvisoryLock(async (client) => classify(client, await readDatabase()))
+      : await classify(null, db);
+    return sendJson(res, 200, result);
+  }
+
   if (req.method === "GET" && url.pathname === "/api/sla/config") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     return sendJson(res, 200, { config: db.slaConfig || [] });
@@ -7010,6 +7254,9 @@ async function apiInternal(req, res, url) {
     const previousSeverity = incident.severity;
     if (previousSeverity === newSeverity) {
       return sendJson(res, 409, { error: "Severity unchanged" });
+    }
+    if (!isExplicitDemoIncident(incident) && !activePolicyFor({ severity: newSeverity }, db.slaConfig || [])) {
+      return sendJson(res, 409, { error: `An active ${newSeverity} SLA policy is required for this operational incident` });
     }
 
     incident.severity = newSeverity;
@@ -7291,13 +7538,20 @@ async function apiInternal(req, res, url) {
 }
 
 function calculateSlaDeadlinesForIncident(incident, slaConfig) {
-  const config = slaConfig?.find((c) => c.severity === incident.severity) || slaConfig?.find((c) => c.severity === "MEDIUM");
+  const config = activePolicyFor(incident, slaConfig);
   if (!config) return { assignmentDeadline: null, responseDeadline: null };
 
   const createdAt = new Date(incident.createdAt || incident.updatedAt || now()).getTime();
+  const assignmentAt = createdAt + Number(config.assignmentSlaMinutes) * 60_000;
+  const responseAt = createdAt + Number(config.responseSlaMinutes) * 60_000;
+  if (![createdAt, assignmentAt, responseAt].every((value) => Number.isFinite(value) && Math.abs(value) <= 8.64e15)) {
+    const error = new Error("SLA policy or incident creation time produces an invalid deadline");
+    error.status = 409;
+    throw error;
+  }
   return {
-    assignmentDeadline: new Date(createdAt + config.assignmentSlaMinutes * 60 * 1000).toISOString(),
-    responseDeadline: new Date(createdAt + config.responseSlaMinutes * 60 * 1000).toISOString()
+    assignmentDeadline: new Date(assignmentAt).toISOString(),
+    responseDeadline: new Date(responseAt).toISOString()
   };
 }
 
@@ -7449,6 +7703,7 @@ function isInvestigationOfficerMissing(incident) {
 
 async function runSlaEscalationSweep(options = {}) {
   const db = options.db || await readDatabase();
+  const previousTimelineIds = new Set((db.incidentTimeline || []).map((event) => event.id));
   const result = await runSlaSweep({
     db,
     currentTime: options.currentTime ?? Date.now(),
@@ -7463,10 +7718,32 @@ async function runSlaEscalationSweep(options = {}) {
   });
   if ((options.persist ?? !options.db) && result.changed) {
     const incidentIds = new Set(result.results.map((entry) => entry.incidentId));
+    const auditEvents = (db.incidentTimeline || []).filter((event) =>
+      !previousTimelineIds.has(event.id) && [
+        "ESCALATION_ALERT_CREATED", "ESCALATION_ALERT_RESOLVED", "ESCALATION_LEVEL_CHANGED"
+      ].includes(event.eventType)
+    );
+    const slaAudits = auditEvents.map((event) => ({
+      id: uid("aud"),
+      actorName: event.actorName || "SLA Scheduler",
+      actorId: null,
+      actorRole: "System",
+      action: event.eventType === "ESCALATION_ALERT_CREATED"
+        ? "sla_escalation_alert_created"
+        : event.eventType === "ESCALATION_ALERT_RESOLVED"
+          ? "sla_escalation_alert_resolved"
+          : "sla_escalation_level_changed",
+      incidentId: event.incidentId,
+      details: JSON.stringify({ description: event.description, ...(event.metadata || {}) }),
+      timestamp: event.createdAt
+    }));
+    db.auditLogs ||= [];
+    db.auditLogs.unshift(...slaAudits);
     await writeSelectedRecords(db, [
       [incidentsRepository, db.incidents.filter((incident) => incidentIds.has(incident.id))],
       [escalationAlertsRepository, [...result.createdAlerts, ...result.resolvedAlerts]],
-      [incidentTimelineRepository, db.incidentTimeline.filter((event) => incidentIds.has(event.incidentId))]
+      [incidentTimelineRepository, db.incidentTimeline.filter((event) => incidentIds.has(event.incidentId))],
+      [auditLogsRepository, slaAudits]
     ]);
   }
   return result;

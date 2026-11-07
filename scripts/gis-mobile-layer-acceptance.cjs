@@ -156,10 +156,8 @@ async function box(locator) {
         await page.locator("#clearRouteStart").click();
         await page.waitForFunction(() => document.querySelector("#clearRouteStart")?.disabled);
 
-        // Mobile search flow (compact viewports). The preview panel is dismissed only by
-        // its own Cancel/Confirm buttons (Escape does not close it), so exercise both:
-        // Cancel removes the preview and keeps the list open for another pick; Confirm
-        // selects the destination and closes the results.
+        // Mobile search flow: one place-result click selects the exact result and opens
+        // its location card. Directions is the explicit route action.
         if (compact) {
           const searchInput = page.locator("#gisMap .map-search input");
           await searchInput.fill("Warangal");
@@ -167,16 +165,14 @@ async function box(locator) {
           const firstResult = page.locator("#gisMap .map-search-results .map-search-result").first();
           await firstResult.waitFor({ state: "visible", timeout: 30000 });
           await firstResult.click();
-          await page.locator("#gisMap .map-search-confirm").waitFor({ state: "visible", timeout: 10000 });
-          await page.locator('#gisMap [data-action="cancel-search-preview"]').click();
-          await page.waitForFunction(() => !document.querySelector("#gisMap .map-search-confirm"));
-          await firstResult.click();
-          await page.locator("#gisMap .map-search-confirm").waitFor({ state: "visible", timeout: 10000 });
-          await page.locator('#gisMap [data-action="confirm-search-destination"]').click();
+          const selectedLocation = page.locator("#gisMap .selected-location-card");
+          await selectedLocation.waitFor({ state: "visible", timeout: 10000 });
+          assert.match(await selectedLocation.innerText(), /Warangal/i);
+          assert.equal(await page.locator("#routePointCards .route-point-card").nth(1).locator("strong").innerText(), "Not selected", "selecting a place must not silently set a route destination");
+          await selectedLocation.getByRole("button", { name: "Directions" }).click();
           await page.waitForFunction(() => document.querySelector("#gisMap .map-search-results")?.hidden === true, null, { timeout: 10000 });
-          pass("mobileSearchSelect", { place: "Warangal", previewCancel: true, previewConfirm: true });
-          // Clear the search-confirmed destination so the preservation flow below verifies
-          // fresh Start/Destination map clicks instead of reusing the search result.
+          assert.notEqual(await page.locator("#routePointCards .route-point-card").nth(1).locator("strong").innerText(), "Not selected");
+          pass("mobileSearchSelect", { place: "Warangal", card: true, explicitDirections: true });
           await page.locator("#clearRouteDestination").click();
           await page.waitForFunction(() => document.querySelector("#clearRouteDestination")?.disabled);
         }

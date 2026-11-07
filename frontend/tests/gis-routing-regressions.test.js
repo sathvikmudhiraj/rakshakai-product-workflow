@@ -55,6 +55,8 @@ function runRouteManagementSlice(state) {
   ].join("\n");
   const context = vm.createContext({
     state,
+    routeRequestGeneration: 0,
+    reverseGeocodeGeneration: 0,
     clearCalculatedRoutes,
     validMapPoint: (point) => (point && Number.isFinite(Number(point.lat)) && Number.isFinite(Number(point.lng)) ? { lat: Number(point.lat), lng: Number(point.lng) } : null),
     updateNavigationPanel: (message = "") => { state.lastMessage = message; },
@@ -94,7 +96,6 @@ test("destination change, start change, and reset clear the previous route", () 
     mapNavigation: emptyRouteNavigationState({
       start: { lat: 17.51, lng: 78.32 },
       destination: { lat: 17.53, lng: 78.38 },
-      searchPreview: null
     }),
     dispatchSupportRoutes: [{ stationName: "Old station", route: { id: "route_1" } }]
   };
@@ -111,7 +112,7 @@ test("destination change, start change, and reset clear the previous route", () 
   assert.equal(state.mapNavigation.route, null);
   assert.equal(state.mapNavigation.routes.length, 0);
   assert.equal(state.mapNavigation.selectedRouteId, null);
-  assert.equal(state.dispatchSupportRoutes.length, 0);
+  assert.equal(state.dispatchSupportRoutes.length, 1, "route changes preserve independent dispatch-support routes");
 
   state.mapNavigation = applyRouteResponse(state.mapNavigation, {
     provider: "osrm",
@@ -143,7 +144,7 @@ test("clear start, clear destination, clear route, and swap keep route state con
   assert.equal(state.mapNavigation.start, null);
   assert.equal(state.mapNavigation.destination?.lat, 17.53);
   assert.equal(state.mapNavigation.route, null);
-  assert.equal(state.dispatchSupportRoutes.length, 0);
+  assert.equal(state.dispatchSupportRoutes.length, 1, "route changes preserve independent dispatch-support routes");
 
   state.mapNavigation.destination = { lat: 17.53, lng: 78.38 };
   context.clearRouteDestination();
@@ -182,7 +183,7 @@ test("stale route line state is cleared with the route reset", () => {
   };
   const context = runRouteManagementSlice(state);
   context.clearRouteResult();
-  assert.equal(state.dispatchSupportRoutes.length, 0);
+  assert.equal(state.dispatchSupportRoutes.length, 1, "clearing GIS route state preserves dispatch-support routes");
   assert.equal(state.mapNavigation.route, null);
 });
 

@@ -2,7 +2,6 @@ export function emptyRouteNavigationState(overrides = {}) {
   return {
     start: null,
     destination: null,
-    searchPreview: null,
     route: null,
     routeOptions: [],
     routes: [],

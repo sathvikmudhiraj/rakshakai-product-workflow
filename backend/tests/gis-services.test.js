@@ -108,6 +108,26 @@ test("one provider route stays one route and approximate fallback has no ETA", (
   assert.match(fallback.routes[0].warnings.join(" "), /Road distance and travel time are unavailable/);
 });
 
+test("OSRM accepts bounded city-point road snaps and reports the snap distance", () => {
+  const selectedStart = { lat: 17.385, lng: 78.4867 };
+  const selectedDestination = { lat: 17.9375095, lng: 78.211745 };
+  const snappedStart = [78.486691, 17.384885];
+  const snappedDestination = [78.20381, 17.931709];
+  const response = {
+    waypoints: [
+      { distance: 12.76, location: snappedStart },
+      { distance: 1057.84, location: snappedDestination }
+    ],
+    routes: [osrmRoute({ distance: 76445.1, duration: 4252.1, coordinates: [snappedStart, [78.35, 17.65], snappedDestination] })]
+  };
+  const routes = normalizeOsrmRoutes(response, selectedStart, selectedDestination);
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].isApproximate, false);
+  assert.match(routes[0].warnings.join(" "), /destination is 1058 m from the nearest routable road/);
+  response.waypoints[1].distance = 2001;
+  assert.equal(normalizeOsrmRoutes(response, selectedStart, selectedDestination).length, 0);
+});
+
 test("degenerate zero-length routes from far outside the graph coverage are rejected, never faked as road routes", () => {
   // Observed against the Telangana MLD graph: requesting a route far outside coverage
   // (e.g. Kolkata) can snap both endpoints onto a stray trunk-fragment node and answer

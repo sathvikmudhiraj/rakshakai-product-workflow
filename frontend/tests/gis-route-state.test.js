@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { confirmPreviewDestination, previewPlace } from "../src/gisPlaceSelection.js";
 import {
   applyRouteResponse,
   clearCalculatedRoutes,
@@ -31,16 +30,6 @@ const realRoutes = [
     geometry: { type: "LineString", coordinates: [[78.26, 17.53], [78.30, 18.04]] }
   }
 ];
-
-test("search candidate remains preview P until explicit confirmation makes destination D", () => {
-  const initial = emptyRouteNavigationState();
-  const previewed = previewPlace(initial, { id: "medak", label: "Medak, Telangana, India", lat: 17.9375095, lng: 78.211745 });
-  assert.equal(previewed.destination, null);
-  assert.equal(previewed.searchPreview.label, "Medak, Telangana, India");
-  const confirmed = confirmPreviewDestination(previewed);
-  assert.equal(confirmed.searchPreview, null);
-  assert.equal(confirmed.destination.label, "Medak, Telangana, India");
-});
 
 test("selectedRouteId drives selected geometry, distance, ETA, and real-route gating", () => {
   let navigation = applyRouteResponse(

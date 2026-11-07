@@ -1,9 +1,25 @@
 # Use only with a unique `docker compose -p ...` project and fresh test credentials.
 # This override keeps the browser endpoint on loopback and regional routing data read-only.
 services:
+  ai-service:
+    environment:
+      YOLO_MODEL_SHA256: ${YOLO_MODEL_SHA256:?Set the approved model digest}
+    volumes:
+      - type: bind
+        source: ${YOLO_WEIGHTS_HOST_PATH:?Set an approved local weights path}
+        target: /models/yolov8n.pt
+        read_only: true
+
+  backend:
+    depends_on:
+      ai-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   frontend:
     ports: !override
-      - "127.0.0.1:${STAGING_VERIFY_PORT:-48123}:80"
+      - "127.0.0.1:${STAGING_VERIFY_PORT:-48123}:8080"
 
   osrm:
     volumes: !override

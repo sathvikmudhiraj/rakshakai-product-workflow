@@ -1,4 +1,6 @@
 const EARTH_RADIUS_KM = 6371.0088;
+const MAX_OSRM_WAYPOINT_SNAP_KM = 2;
+const WAYPOINT_SNAP_WARNING_METERS = 500;
 
 function haversineDistanceKm(start, destination) {
   const radians = (value) => Number(value) * Math.PI / 180;
@@ -55,14 +57,38 @@ function providerSteps(route) {
   }));
 }
 
+function osrmWaypointSnapKm(data, index) {
+  const distance = Number(data?.waypoints?.[index]?.distance);
+  return Number.isFinite(distance) && distance >= 0 ? distance / 1000 : null;
+}
+
+function osrmSnapWarnings(data) {
+  const waypoints = data?.waypoints || [];
+  return waypoints.flatMap((waypoint, index) => {
+    const distance = Number(waypoint?.distance);
+    if (!Number.isFinite(distance) || distance <= WAYPOINT_SNAP_WARNING_METERS) return [];
+    const point = index === 0 ? "start" : index === waypoints.length - 1 ? "destination" : `waypoint ${index + 1}`;
+    return [`Selected ${point} is ${Math.round(distance)} m from the nearest routable road.`];
+  });
+}
+
 function normalizeOsrmRoutes(data, start, destination) {
+  const startSnapKm = osrmWaypointSnapKm(data, 0);
+  const destinationSnapKm = osrmWaypointSnapKm(data, (data?.waypoints || []).length - 1);
   const validRoutes = (data?.routes || []).filter((route) => {
     const coordinates = route?.geometry?.coordinates;
     if (!Number.isFinite(Number(route.distance)) || Number(route.distance) <= 0) return false;
     if (!Number.isFinite(Number(route.duration)) || Number(route.duration) <= 0) return false;
     if (route?.geometry?.type !== "LineString" || !Array.isArray(coordinates) || coordinates.length < 2 || !coordinates.every(validCoordinate)) return false;
     const endpoint = coordinates.at(-1);
-    return haversineDistanceKm({ lat: Number(endpoint[1]), lng: Number(endpoint[0]) }, destination) <= 0.5;
+    const endpointMatchesDestination = destinationSnapKm === null
+      ? haversineDistanceKm({ lat: Number(endpoint[1]), lng: Number(endpoint[0]) }, destination) <= 0.5
+      : destinationSnapKm <= MAX_OSRM_WAYPOINT_SNAP_KM;
+    const routeStart = coordinates[0];
+    const startMatchesOrigin = startSnapKm === null
+      ? haversineDistanceKm({ lat: Number(routeStart[1]), lng: Number(routeStart[0]) }, start) <= 0.5
+      : startSnapKm <= MAX_OSRM_WAYPOINT_SNAP_KM;
+    return endpointMatchesDestination && startMatchesOrigin;
   }).sort((a, b) => Number(a.duration) - Number(b.duration) || Number(a.distance) - Number(b.distance));
 
   const distinct = [];
@@ -76,6 +102,7 @@ function normalizeOsrmRoutes(data, start, destination) {
     .slice(1)
     .filter((route) => Number(route.distance) <= Number(recommended.distance) * 0.95)
     .sort((a, b) => Number(a.distance) - Number(b.distance))[0];
+  const warnings = osrmSnapWarnings(data);
 
   return distinct.map((route, index) => ({
     id: `route_${index + 1}`,
@@ -89,7 +116,7 @@ function normalizeOsrmRoutes(data, start, destination) {
     steps: providerSteps(route),
     isRecommended: index === 0,
     isApproximate: false,
-    warnings: []
+    warnings
   }));
 }
 

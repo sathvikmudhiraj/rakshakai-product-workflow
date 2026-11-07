@@ -42,7 +42,9 @@ router.post("/query", limiter, async (req, res, next) => {
     if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
     if (!hasRole(user, ["Admin", "Police Officer"])) throw Object.assign(new Error("Copilot is available to authorized operational personnel only"), { status: 403 });
 
-    const message = String(req.body?.message || "").trim();
+    // Strip control characters (Postgres text rejects NUL and most C0 codes);
+    // keep tab, newline, carriage return.
+    const message = String(req.body?.message || "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
     if (!message || message.length > 2000) throw Object.assign(new Error("Message must contain 1 to 2000 characters"), { status: 400 });
 
     const pageContext = copilot.sanitizePageContext(req.body?.pageContext);

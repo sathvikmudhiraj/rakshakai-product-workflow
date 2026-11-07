@@ -44,14 +44,14 @@ test.after(closePool);
 test("production Nginx sends the exact restrictive CSP on HTML and SPA responses", async () => {
   const expected = buildRakshakaiCsp({ environment: "production", connectSrc: "", imgSrc: "" }).header;
   for (const route of ["/", "/index.html", "/rakshak/live-vision"]) {
-    const response = await fetch(`http://frontend${route}`);
+    const response = await fetch(`http://frontend:8080${route}`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-security-policy"), expected);
     assert.match(response.headers.get("content-type"), /text\/html/);
     const html = await response.text();
     const css = html.match(/href="([^\"]+\.css)"/);
     assert.ok(css, "built CSS reference exists");
-    const stylesheet = await fetch(new URL(css[1], "http://frontend"));
+    const stylesheet = await fetch(new URL(css[1], "http://frontend:8080"));
     assert.equal(stylesheet.status, 200);
     assert.match(stylesheet.headers.get("content-type"), /text\/css/);
   }

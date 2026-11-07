@@ -842,6 +842,53 @@ test("Admin can access admin-only routes while Police and Citizen cannot", async
   }
 });
 
+test("audit log endpoint paginates, filters, and preserves its legacy response shape", async () => {
+  const original = await readDatabase();
+  try {
+    const db = structuredClone(original);
+    const timestamp = new Date().toISOString();
+    const fixtures = Array.from({ length: 35 }, (_, index) => ({
+      id: `audit_page_fixture_${index}`,
+      actorName: "Audit Pagination Fixture Actor",
+      actorId: "audit_page_fixture_user",
+      actorRole: "Admin",
+      action: "audit_fixture_recorded",
+      incidentId: null,
+      details: JSON.stringify({ reason: `fixture ${index}` }),
+      timestamp
+    }));
+    db.auditLogs = [...fixtures, ...(db.auditLogs || [])];
+    await writeDatabase(db);
+
+    const legacy = await request("/api/audit-logs", { headers: authHeaders("Admin") });
+    assert.equal(legacy.status, 200);
+    const legacyBody = await legacy.json();
+    assert.ok(Array.isArray(legacyBody.auditLogs));
+    assert.equal("total" in legacyBody, false);
+
+    const first = await request("/api/audit-logs?limit=10&offset=0&actor=audit_page_fixture_user&category=other", { headers: authHeaders("Admin") });
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    assert.equal(firstBody.total, 35);
+    assert.equal(firstBody.auditLogs.length, 10);
+    assert.equal(firstBody.hasMore, true);
+    const second = await request("/api/audit-logs?limit=10&offset=10&actor=audit_page_fixture_user&category=other", { headers: authHeaders("Admin") });
+    const secondBody = await second.json();
+    assert.equal(secondBody.total, 35);
+    assert.equal(secondBody.auditLogs.length, 10);
+    assert.equal(new Set([...firstBody.auditLogs, ...secondBody.auditLogs].map((log) => log.id)).size, 20);
+
+    const searched = await request("/api/audit-logs?limit=10&search=fixture%2034&actor=audit_page_fixture_user", { headers: authHeaders("Admin") });
+    assert.equal((await searched.json()).total, 1);
+    for (const role of ["Police Officer", "Citizen"]) {
+      assert.equal((await request("/api/audit-logs?limit=10", { headers: authHeaders(role) })).status, 403, role);
+    }
+    assert.equal((await request("/api/audit-logs?limit=10&category=not-a-category", { headers: authHeaders("Admin") })).status, 400);
+  } finally {
+    await writeDatabase(original);
+  }
+});
+
 test("SLA updates are Admin-only, validated, persisted, and audited", async () => {
   const currentResponse = await request("/api/sla/config", { headers: authHeaders("Admin") });
   assert.equal(currentResponse.status, 200);
@@ -882,6 +929,53 @@ test("SLA updates are Admin-only, validated, persisted, and audited", async () =
   assert.ok(audit.changedFields.includes("responseSlaMinutes"));
   assert.equal(audit.oldValues.responseSlaMinutes, high.responseSlaMinutes);
   assert.equal(audit.newValues.responseSlaMinutes, nextResponseMinutes);
+});
+
+test("SLA monitoring is role-restricted and reports non-overlapping server-calculated active states", async () => {
+  const original = await readDatabase();
+  try {
+    const db = JSON.parse(JSON.stringify(original));
+    const timestamp = Date.now();
+    const createdAt = new Date(timestamp - 10 * 60_000).toISOString();
+    const policeUser = db.users.find((item) => item.role === "Police Officer");
+    policeUser.stationId = "sla_station_local";
+    policeUser.jurisdiction = "Patancheru";
+    policeUser.data = { ...policeUser.data, stationId: "sla_station_local", jurisdiction: "Patancheru" };
+    db.policeStations = [{ id: "sla_station_local", stationId: "SLA-LOCAL", stationCode: "SLA-LOCAL", stationName: "SLA Local Station", jurisdiction: "Patancheru", operational: true }];
+    db.incidents = [
+      { id: "sla_monitor_breached", incidentId: "SLA-QA-01", title: "Synthetic unassigned critical case", status: "New", severity: "CRITICAL", jurisdiction: "Patancheru", createdAt, assignmentDeadline: new Date(timestamp - 60_000).toISOString(), responseDeadline: new Date(timestamp + 10 * 60_000).toISOString(), assignedUnitId: null, escalationLevel: "L0" },
+      { id: "sla_monitor_ontime", incidentId: "SLA-QA-02", title: "Synthetic assigned case", status: "Assigned", severity: "LOW", jurisdiction: "Patancheru", createdAt, assignmentDeadline: new Date(timestamp + 30 * 60_000).toISOString(), responseDeadline: new Date(timestamp + 120 * 60_000).toISOString(), assignedUnitId: "unit1", escalationLevel: "L0" },
+      { id: "sla_monitor_no_deadline", incidentId: "SLA-QA-03", title: "Synthetic missing policy dates", status: "Verified", severity: "MEDIUM", jurisdiction: "Patancheru", createdAt, assignedUnitId: null, escalationLevel: "L0" },
+      { id: "sla_monitor_remote", incidentId: "SLA-REMOTE-01", title: "Out of jurisdiction case", status: "New", severity: "LOW", jurisdiction: "Remote District", createdAt, assignmentDeadline: new Date(timestamp + 30 * 60_000).toISOString(), responseDeadline: new Date(timestamp + 120 * 60_000).toISOString(), assignedUnitId: null, escalationLevel: "L0" }
+    ];
+    db.responseUnits = [...(db.responseUnits || []), { id: "unit1", unitCode: "SLA-QA-UNIT", name: "Synthetic unit", status: "busy", linkedStationId: "station1" }];
+    await writeDatabase(db);
+
+    const citizen = await request("/api/sla/monitoring", { headers: authHeaders("Citizen") });
+    assert.equal(citizen.status, 403);
+    const response = await request("/api/sla/monitoring", { headers: authHeaders("Admin") });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.ok(Number.isFinite(Date.parse(result.asOf)), "server snapshot timestamp is present");
+    assert.equal(result.summary.activeCases, 4);
+    assert.equal(result.summary.breached, 1);
+    assert.equal(result.summary.withinSla, 2);
+    assert.equal(result.summary.noDeadline, 1);
+    assert.equal(result.summary.approaching, 0);
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_breached").assignedUnitId, null, "unassigned active case remains in the queue");
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_breached").slaState, "BREACHED");
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_no_deadline").slaState, "NO_DEADLINE");
+    assert.equal(result.summary.onTimeResolutionRate, null, "the API does not infer resolution performance without a resolution target");
+    assert.equal(result.summary.resolutionSlaConfigured, false);
+    assert.equal(result.breachTrend.length, 7);
+    const scopedPoliceResponse = await request("/api/sla/monitoring", { headers: authHeaders("Police Officer") });
+    assert.equal(scopedPoliceResponse.status, 200);
+    const scopedPolice = await scopedPoliceResponse.json();
+    assert.equal(scopedPolice.summary.activeCases, 3);
+    assert.equal(scopedPolice.incidents.some((item) => item.id === "sla_monitor_remote"), false);
+  } finally {
+    await writeDatabase(original);
+  }
 });
 
 test("Admin can create, list, update, deactivate, activate, and reset Police accounts", async () => {
@@ -4412,7 +4506,7 @@ test("frontend Incident Command map simplifies markers with default layers and c
   assert.match(appSource, /function activeRouteWorkflow\(\)/);
   assert.match(appSource, /\[routeWorkflow \? start : null, "route-marker start-marker", "S"\]/);
   assert.match(appSource, /previousView === "gis" && view !== "gis" && activeRouteWorkflow\(\)/);
-  assert.match(appSource, /resetGisNavigationState\("GIS route markers cleared after leaving route workflow\."\)/);
+  assert.match(appSource, /resetGisNavigationState\("GIS route markers cleared after leaving route workflow\.", \{ preserveSupportRoutes: true \}\)/);
 
   assert.match(appSource, /function clusterMarkerDescriptors\(descriptors\)/);
   assert.match(appSource, /Math\.hypot\(item\.point\.lat - descriptor\.point\.lat, item\.point\.lng - descriptor\.point\.lng\) <= 0\.004/);
@@ -4463,7 +4557,9 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(gisSection, /id="clearMapRoute"[\s\S]*aria-label="Clear Route\. Choose a point or calculate a route before clearing\."/);
   assert.match(gisSection, /class="panel gis-map-card"/);
   assert.match(gisSection, /class="gis-toolbar" aria-label="GIS navigation controls"/);
-  assert.match(gisSection, /<span>Map<\/span>[\s\S]*id="streetMapLayer"[\s\S]*id="satelliteMapLayer"[\s\S]*id="useMyLocation"[\s\S]*id="fitGisMap"[\s\S]*id="resetGisMap"/);
+  assert.match(gisSection, /id="gisModeMap"[\s\S]*id="gisModeRoute"[\s\S]*id="gisModeNavigate"/);
+  assert.match(gisSection, /<span>Map<\/span>[\s\S]*id="streetMapLayer"[\s\S]*id="satelliteMapLayer"[\s\S]*id="fitGisMap"[\s\S]*id="resetGisMap"/);
+  assert.match(gisSection, /id="useMyLocation"[\s\S]*id="setMapStart"[\s\S]*id="setMapDestination"/);
   assert.match(gisSection, /<span>Points<\/span>[\s\S]*id="setMapStart"[\s\S]*id="setMapDestination"/);
   assert.match(gisSection, /<span>Route<\/span>[\s\S]*id="navigateMap"[\s\S]*id="clearMapRoute"/);
   assert.match(gisSection, /id="mapNavigationStatus" class="gis-status-bar" aria-live="polite"/);
@@ -4479,29 +4575,27 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /state\.mapNavigation\.selectionMode === "start"/);
   assert.match(appSource, /state\.mapNavigation\.selectionMode === "destination"/);
   assert.match(appSource, /async function selectNavigationPointFromMap\(event\)/);
-  assert.match(appSource, /return event\.target\.closest\("\.map-control, \.map-zoom-slider, \.map-search, \.map-layer-control, \.operational-marker"\)/);
-  assert.match(appSource, /instance\.map\.addEventListener\("click", \(event\) => \{[\s\S]*selectNavigationPointFromMap\(event\)/);
+  assert.match(appSource, /return Boolean\(event\.target\?\.closest\?\.\("\.map-control, \.map-zoom-slider, \.map-search, \.map-layer-control, \.operational-marker, \.selected-location-card, \.leaflet-marker-icon, \.leaflet-interactive"\)\)/);
+  assert.match(appSource, /instance\.map\.addEventListener\("click", \(event\) => \{[\s\S]*if \(!instance\.leafletMap\) selectNavigationPointFromMap\(event\)/);
   assert.match(appSource, /if \(instance\.map\.id === "gisMap" && state\.mapNavigation\.selectionMode && !blockedMapSelectionTarget\(event\)\) return/);
   assert.match(appSource, /setRouteStart\(chosen, "Selected map start", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
   assert.match(appSource, /setRouteDestination\(chosen, "Selected map destination", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
   assert.match(appSource, /Route start selected\. \$\{snapNote\}/);
-  assert.match(appSource, /Destination selected\. \$\{snapNote\}Click Calculate Route\./);
+  assert.match(appSource, /Destination selected\. \$\{snapNote\}/);
   assert.match(appSource, /snapRoutePointToRoad\(validPoint\)/);
   assert.match(appSource, /No routable road found near this location/);
   assert.match(appSource, /Snapped to the nearest routable road/);
   assert.match(appSource, /state\.mapNavigation\.selectionMode = null;[\s\S]*setMapStart"\)\?\.classList\.remove\("active"\)[\s\S]*setMapDestination"\)\?\.classList\.remove\("active"\)/);
   assert.match(appSource, /function canonicalRoutePoint\(point, fallbackLabel = "Route point"\)/);
   assert.match(appSource, /mapNavigation: emptyRouteNavigationState\(\)/);
-  assert.match(appSource, /function clearSearchPreview\(\)/);
-  assert.match(appSource, /function setSearchPreview\(point, label = "Search preview", metadata = \{\}\)/);
-  assert.match(appSource, /state\.mapNavigation = previewPlace\(state\.mapNavigation/);
-  assert.match(searchUiSource, /Confirm Destination/);
-  assert.match(searchUiSource, /Cancel Preview/);
-  assert.match(appSource, /Preview shown for \$\{fullLabel\}\. Confirm it to set destination D\./);
-  assert.match(appSource, /route-marker search-preview-marker/);
-  assert.match(appSource, /const \{ currentLocation, searchPreview, routes = \[\], selectedRouteId \} = state\.mapNavigation/);
+  assert.match(searchUiSource, /onSelect\(place\)/);
+  assert.doesNotMatch(searchUiSource, /Confirm Destination|Cancel Preview|confirm-search-destination/);
+  assert.match(appSource, /function showSelectedGisLocation\(instance, location, \{ reverseGeocode = false \} = \{\}\)/);
+  assert.match(appSource, /function applySelectedLocationAction\(action\)/);
+  assert.match(appSource, /selected-location-marker/);
+  assert.match(appSource, /const \{ currentLocation, routes = \[\], selectedRouteId \} = state\.mapNavigation/);
   assert.match(appSource, /const start = routeValidation\.start;[\s\S]*const destination = routeValidation\.destination/);
-  assert.match(appSource, /clearSearchPreview\(\);[\s\S]*clearRouteResult\(\);[\s\S]*return true;/);
+  assert.match(appSource, /state\.mapNavigation\.destination = canonicalPoint;[\s\S]*clearRouteResult\(\);[\s\S]*return true;/);
   assert.match(appSource, /function routePointValidation\(\)/);
   assert.match(appSource, /return routePointValidation\(\)\.valid/);
   assert.match(appSource, /const routeValidation = routePointValidation\(\);[\s\S]*start: routeValidation\.start,[\s\S]*destination: routeValidation\.destination,[\s\S]*routePointError: routeValidation\.valid \? "" : routeValidation\.message/);
@@ -4538,19 +4632,19 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /function renderRoutePointCards\(\)/);
   assert.match(appSource, /Not selected/);
   assert.match(appSource, /if \(!routeValidation\.valid\) return updateNavigationPanel\(routeValidation\.message\)/);
-  assert.match(appSource, /state\.mapNavigation\.routeLoading = true;[\s\S]*clearRouteResult\(\);[\s\S]*updateNavigationPanel\("Calculating route\.\.\."\)/);
+  assert.match(appSource, /clearRouteResult\(\);[\s\S]*const requestId = \+\+routeRequestGeneration;[\s\S]*state\.mapNavigation\.routeLoading = true;[\s\S]*updateNavigationPanel\("Calculating route\.\.\."\)/);
   assert.match(appSource, /api\("\/api\/maps\/route", \{[\s\S]*body: \{[\s\S]*start: \{ lat: start\.lat, lng: start\.lng \},[\s\S]*destination: \{ lat: destination\.lat, lng: destination\.lng \},[\s\S]*mode: "driving"[\s\S]*\}/);
   assert.match(appSource, /logRouteDevelopment\("request", \{ start, destination \}\)/);
   assert.match(appSource, /logRouteDevelopment\(route\?\.isApproximate \? "approximate_fallback" : "success", \{ start, destination \}\)/);
-  assert.match(appSource, /state\.mapNavigation\.routeLoading = false;[\s\S]*updateNavigationPanel\(\)/);
+  assert.match(appSource, /if \(requestId === routeRequestGeneration\) \{[\s\S]*state\.mapNavigation\.routeLoading = false;[\s\S]*updateGisButtonStates\(\);/);
   assert.match(appSource, /catch \(error\) \{[\s\S]*clearRouteResult\(\);[\s\S]*Road routing unavailable - route could not be calculated/);
   assert.match(appSource, /Calculate a route before opening full navigation\./);
   assert.match(appSource, /Choose a route start and destination before calculating\./);
   assert.match(appSource, /function clearRouteStart\(\)/);
   assert.match(appSource, /function clearRouteDestination\(\)/);
-  assert.match(appSource, /function clearRouteDestination\(\) \{[\s\S]*state\.mapNavigation\.destination = null;[\s\S]*clearSearchPreview\(\)/);
+  assert.match(appSource, /function clearRouteDestination\(\) \{[\s\S]*state\.mapNavigation\.destination = null;[\s\S]*clearRouteResult\(\)/);
   assert.match(appSource, /function emptyMapNavigationState\(\) \{[\s\S]*return emptyRouteNavigationState\(\)/);
-  assert.match(appSource, /function resetGisNavigationState\(message = "", \{ preserveRoute = false \} = \{\}\)/);
+  assert.match(appSource, /function resetGisNavigationState\(message = "", \{ preserveRoute = false, preserveSupportRoutes = false \} = \{\}\)/);
   assert.match(appSource, /state\.mapNavigation = emptyMapNavigationState\(\)/);
   assert.match(appSource, /satelliteMaps\.forEach\(removeNavigationLayerArtifacts\)/);
   assert.match(appSource, /if \(instance\.navigationLayer\) instance\.navigationLayer\.textContent = ""/);
@@ -4580,7 +4674,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /makeMapControl\("FIT", "zoom-fit", "Fit map to local operational markers", fitGisMapToOperationalMarkers\)/);
   assert.match(appSource, /function fitGisMapToPoints\(points, label = "Operational markers"\)/);
   assert.match(appSource, /\.filter\(\(point\) => point && isLocalOperationalPoint\(point\) && !isDefaultFallbackPoint\(point\)\)/);
-  assert.match(appSource, /clearSearchPreview\(\);[\s\S]*setRouteStart\(point, `\$\{unitLabel\(unit\)\} location`\);[\s\S]*fitGisMapToPoints\(\[point, \.\.\.validOperationalMapPoints\(\)\]/);
+  assert.match(appSource, /setRouteStart\(point, `\$\{unitLabel\(unit\)\} location`\);[\s\S]*fitGisMapToPoints\(\[point, \.\.\.validOperationalMapPoints\(\)\]/);
   assert.match(appSource, /function makeMapLayersControl\(instance\)/);
   assert.match(appSource, /\["incidents", "Incidents"\]/);
   assert.match(appSource, /\["responseUnits", "Response Units"\]/);
@@ -4598,7 +4692,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /Satellite tiles failed to load|tiles failed to load/);
   assert.match(styles, /\.event-map\.selection-active/);
   assert.match(styles, /\.current-location-marker/);
-  assert.match(styles, /\.search-preview-marker/);
+  assert.match(styles, /\.selected-location-marker/);
   assert.match(styles, /\.heatmap-hidden \.heat \{ display: none; \}/);
   assert.match(styles, /\.map-layer-control/);
   assert.match(styles, /\.satellite-tiles \{[\s\S]*pointer-events: none/);
@@ -4655,7 +4749,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /function resetGisMapToOperationalCenter/);
   assert.match(appSource, /setMapView\(instance, DEFAULT_MAP_CENTER, GIS_HOME_ZOOM, "Operational center"\)/);
   assert.match(appSource, /const DEFAULT_MAP_CENTER = \{ lat: 17\.5109, lng: 78\.3276 \}/);
-  assert.match(appSource, /function resetGisMapView\(\) \{[\s\S]*resetGisNavigationState\(""\);[\s\S]*resetGisMapToOperationalCenter\("Map reset to local operational center\. Route markers cleared\."\)/);
+  assert.match(appSource, /function resetGisMapView\(\) \{[\s\S]*resetGisNavigationState\("", \{ preserveSupportRoutes: true \}\);[\s\S]*resetGisMapToOperationalCenter\("Map reset to local operational center\. Route markers cleared\."\)/);
   assert.match(appSource, /\$\(\"\#resetGisMap\"\)\.addEventListener\(\"click\", resetGisMapView\)/);
   assert.match(appSource, /Route line cleared\. Start and destination are kept; distance and ETA were reset\./);
   const clearRouteBlock = appSource.match(/function clearMapRoute\(\) \{[\s\S]*?\n\}/)?.[0] || "";
@@ -4668,7 +4762,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /\[routeWorkflow \? destination : null, "route-marker destination-marker", "D"\]/);
   assert.match(appSource, /addLeafletMarker\(instance, point, className, label, kind/);
   assert.match(appSource, /L\.marker\(\[validPoint\.lat, validPoint\.lng\]/);
-  assert.match(appSource, /addLeafletMarker\(instance, preview, "route-marker search-preview-marker", "P", "Search preview"/);
+  assert.match(appSource, /addLeafletMarker\(instance, selectedGisLocation, "route-marker selected-location-marker", "●", "Selected location"/);
   assert.match(appSource, /markerLabel: "!",[\s\S]*kind: "Incident"/);
   assert.match(appSource, /Incident \$\{incident\.id\}: \$\{incidentTitle\(incident\)\} - severity \$\{displayValue\(incident\.severity\)\} - status \$\{displayValue\(incident\.status\)\} - source \$\{incidentSource\(incident\)\} - \$\{point\.lat\.toFixed\(5\)\}, \$\{point\.lng\.toFixed\(5\)\}/);
   assert.match(appSource, /Click to set as destination/);

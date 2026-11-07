@@ -582,7 +582,8 @@ async function runBrowserChecks({ baseUrl, password, beforeScenario }) {
               errors.length = 0;
             }
             await page.waitForFunction(() => document.body.dataset.view === "missing");
-            assert.match(await page.locator("#permissionMessage").innerText(), /permission/i);
+            assert.equal(await page.locator("#viewTitle").innerText(), "Missing & Found Report Center");
+            assert.equal(await page.locator('[data-panel="live-vision"]').getAttribute("class").then((value) => value.split(" ").includes("active")), false);
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
           } else {
             if (role === "Police Officer") assert.equal(await page.locator('.nav-item[data-view="settings"]').isVisible(), false);

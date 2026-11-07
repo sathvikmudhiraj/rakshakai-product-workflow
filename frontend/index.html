@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/src/styles.css" data-rakshakai-stylesheet="main" />
   </head>
   <body>
+    <a class="skip-link" href="#workspace">Skip to main content</a>
     <section class="portal-login" id="portalLogin">
       <div class="portal-card">
         <div class="portal-info">
@@ -38,7 +39,7 @@
           <p class="portal-security"><span></span> Protected command environment · Activity is monitored</p>
         </div>
         <div class="portal-panel">
-          <form id="loginForm" class="login-form auth-form" data-auth-panel="login" autocomplete="off">
+            <form id="loginForm" class="login-form auth-form" data-auth-panel="login">
             <div class="auth-heading">
               <span class="auth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2"/><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M12 14v2"/></svg>
@@ -49,12 +50,12 @@
             </div>
             <label>
               Email
-              <input type="email" name="email" placeholder="Enter registered email" autocomplete="off" required />
+              <input type="email" name="email" placeholder="Enter registered email" autocomplete="username" required />
             </label>
             <label>
               Password
               <span class="password-field">
-                <input type="password" name="password" placeholder="Enter password" autocomplete="off" required />
+                <input type="password" name="password" placeholder="Enter password" autocomplete="current-password" required />
                 <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
@@ -111,13 +112,15 @@
       <aside class="sidebar">
         <div class="brand"><span>R</span><div><strong>RakshakAI</strong><small>Public Safety Command</small></div></div>
         <div class="sidebar-status"><span class="status-beacon"></span><div><strong>Operations online</strong><small>Secure monitoring network</small></div></div>
-        <nav class="sidebar-groups" aria-label="Main navigation">
+        <nav id="mobileMorePanel" class="sidebar-groups" aria-label="All navigation destinations">
+          <div class="mobile-more-head"><strong>All tools</strong><button id="mobileMoreClose" class="ghost" type="button">Close</button></div>
           <details class="nav-group" open><summary>Operations</summary>
             <div class="navigation">
-              <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
+              <button class="nav-item active" data-view="dashboard" data-roles="Police Officer,Admin" aria-current="page">Dashboard</button>
               <button class="nav-item" data-view="incident-command" data-roles="Police Officer,Admin">Incident Command</button>
               <button class="nav-item" data-view="unit-assignment" data-roles="Police Officer,Admin">Unit Assignment</button>
               <button class="nav-item" data-view="gis" data-roles="Police Officer,Admin">GIS Monitoring</button>
+              <button class="nav-item" data-view="sla-monitoring" data-roles="Police Officer,Admin">SLA Monitoring</button>
             </div>
           </details>
           <details class="nav-group"><summary>Surveillance</summary>
@@ -139,6 +142,7 @@
           <details class="nav-group"><summary>Administration</summary>
             <div class="navigation">
               <button class="nav-item" data-view="police-management" data-roles="Admin">Police Management</button>
+              <button class="nav-item" data-view="audit-logs" data-roles="Admin">Audit Logs</button>
               <button class="nav-item" data-view="settings" data-roles="Admin">Settings</button>
             </div>
           </details>
@@ -152,14 +156,22 @@
             </div>
           </details>
         </nav>
-        <div class="role-box">Active role: <strong id="currentUser">Connecting...</strong></div>
+        <div class="role-box">Active role: <strong id="currentUser">Connecting…</strong></div>
       </aside>
-      <main class="workspace">
+      <nav id="mobileFieldNav" class="mobile-field-nav" aria-label="Field navigation">
+        <button class="nav-item mobile-field-link" data-view="dashboard" data-roles="Police Officer,Admin"><span aria-hidden="true">⌂</span><small>Home</small></button>
+        <button class="nav-item mobile-field-link" data-view="incident-command" data-roles="Police Officer,Admin"><span aria-hidden="true">!</span><small>Incidents</small></button>
+        <button class="nav-item mobile-field-link" data-view="gis" data-roles="Police Officer,Admin"><span aria-hidden="true">◎</span><small>Map</small></button>
+        <button id="mobileTasksButton" class="mobile-field-link" data-roles="Police Officer,Admin" type="button"><span aria-hidden="true">▤</span><small>Tasks</small></button>
+        <button id="mobileMoreButton" class="mobile-field-link mobile-more-button" type="button" aria-controls="mobileMorePanel" aria-expanded="false"><span aria-hidden="true">•••</span><small>More</small></button>
+        <button id="mobileReportNavButton" class="nav-item mobile-field-link" data-view="missing" data-roles="Citizen"><span aria-hidden="true">＋</span><small>Reports</small></button>
+      </nav>
+      <button id="mobileNavBackdrop" class="mobile-nav-backdrop" type="button" aria-label="Close all tools menu" hidden></button>
+      <main class="workspace" id="workspace" tabindex="-1">
         <header class="topbar">
           <div><span class="eyebrow page-eyebrow">RakshakAI Operations</span><h1 id="viewTitle">Sector 7 Safety Grid</h1></div>
           <div class="topbar-actions"><span class="live-pill"><span></span> Live system</span><button id="accountSessionsButton" class="ghost" type="button">Sessions</button><button id="logoutButton" class="ghost" type="button">Sign out</button></div>
         </header>
-        <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
 
         <section class="view active" data-panel="dashboard">
           <section class="command-hero">
@@ -173,18 +185,17 @@
               <div><strong id="systemHealthTitle">Checking AI connection</strong><small id="systemHealthDetail">Current service status is loading.</small></div>
             </div>
           </section>
-          <button type="button" class="critical-queue-summary" id="dashboardCriticalQueue" aria-label="Open critical incident queue"><span><span class="eyebrow">Requires attention</span><strong>Critical incidents</strong><small>Open live incident queue</small></span><span class="critical-queue-count" id="dashboardCriticalCount">--</span></button>
           <div class="dashboard-metrics">
-            <article class="summary-card metric-missing" data-kpi="missing" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Missing Persons</span><i>MP</i></div><strong id="missingMetric">--</strong><small>Registered cases</small></article>
-            <article class="summary-card metric-alert" data-kpi="alerts" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Active Alerts</span><i>AL</i></div><strong id="alertMetric">--</strong><small>Open alerts</small></article>
-            <article class="summary-card metric-camera" data-kpi="cameras" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Active Cameras</span><i>CM</i></div><strong id="cameraMetric">--</strong><small id="cameraStatus">Loading</small></article>
-            <article class="summary-card metric-zone" data-kpi="zones" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Monitored Zones</span><i>GZ</i></div><strong id="zoneMetric">--</strong><small>GIS sectors</small></article>
+            <article class="summary-card metric-missing" data-kpi="missing" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Missing Persons</span><i>MP</i></div><strong id="missingMetric">—</strong><small>Registered cases</small></article>
+            <article class="summary-card metric-alert" data-kpi="alerts" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Active Alerts</span><i>AL</i></div><strong id="alertMetric">—</strong><small>Open alerts</small></article>
+            <article class="summary-card metric-camera" data-kpi="cameras" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Active Cameras</span><i>CM</i></div><strong id="cameraMetric">—</strong><small id="cameraStatus">Loading</small></article>
+            <article class="summary-card metric-zone" data-kpi="zones" role="button" tabindex="0" aria-controls="dashboardKpiDetails" aria-expanded="false"><div class="metric-heading"><span>Monitored Zones</span><i>GZ</i></div><strong id="zoneMetric">—</strong><small>GIS sectors</small></article>
           </div>
           <section id="dashboardKpiDetails" class="kpi-detail-panel" aria-live="polite" hidden></section>
           <section class="panel quick-controls">
             <div class="panel-head"><div><span class="eyebrow">Command Shortcuts</span><h2>Quick Controls</h2></div></div>
             <div class="quick-control-grid">
-              <button type="button" class="quick-control" data-view-jump="incident-command" data-critical-queue="true"><span>IC</span><strong>View Critical Queue</strong></button>
+              <button type="button" class="quick-control" data-view-jump="incident-command"><span>IC</span><strong>Incident Command</strong></button>
               <button type="button" class="quick-control" data-view-jump="gis"><span>GIS</span><strong>Open GIS</strong></button>
               <button type="button" class="quick-control" data-view-jump="cctv" data-open-ai-review="true"><span>AI</span><strong>Review AI Observations</strong></button>
               <button type="button" class="quick-control" data-view-jump="unit-assignment"><span>UA</span><strong>Dispatch / Unit Queue</strong></button>
@@ -198,7 +209,7 @@
             <div class="dashboard-lower-left">
               <section class="panel dispatch-timeline-panel"><div class="panel-head"><div><span class="eyebrow">Emergency Response</span><h2>Dispatch Timeline</h2></div></div><ol id="timeline" class="timeline"></ol><div id="routeSummary" class="route-summary">Route engine ready for nearest unit navigation.</div><div class="actions"><button id="assignIncident" class="ghost">Assign Unit</button><button id="routeIncident" class="ghost">Suggest Route</button><button id="closeIncident" class="ghost">Close Incident</button><button id="runAiScan" class="primary">Run AI Scan</button></div></section>
             </div>
-            <section class="panel live-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Operations Queue</span><h2>Live Incidents</h2></div><div class="panel-actions"><span id="queueCount" class="chip">-- active</span><button id="createIncident" class="ghost">Open Incident</button></div></div><div id="incidentList" class="stack"></div></section>
+            <section class="panel live-incidents-panel"><div class="panel-head"><div><span class="eyebrow">Operations Queue</span><h2>Live Incidents</h2></div><div class="panel-actions"><span id="queueCount" class="chip">— active</span><button id="createIncident" class="ghost">Open Incident</button></div></div><div id="incidentList" class="stack"></div></section>
           </div>
         </section>
 
@@ -227,6 +238,7 @@
                   <label><span>Status</span><select id="commandStatusFilter"><option value="all">All statuses</option><option value="Verification Required">Verification Required</option><option value="New">New</option><option value="Verified">Verified</option><option value="Assigned">Assigned</option><option value="En Route">En Route</option><option value="On Scene">On Scene</option></select></label>
                   <label><span>Source</span><select id="commandSourceFilter"><option value="all">All sources</option><option value="ai">AI</option><option value="citizen">Citizen</option><option value="command">Command Center</option></select></label>
                   <label><span>Assignment</span><select id="commandAssignmentFilter"><option value="all">All units</option><option value="assigned">Assigned</option><option value="unassigned">Unassigned</option></select></label>
+                  <label class="checkbox-inline"><input type="checkbox" id="showDemoIncidents" /> Show demo/test incidents</label>
                 </div>
                 <div id="commandIncidentQueue" class="command-incident-table"></div>
               </section>
@@ -277,16 +289,65 @@
           <section class="panel"><div class="panel-head"><div><span class="eyebrow">Primary unit members</span><h2>Officer Deployment</h2></div><button id="assignSelectedOfficers" class="primary" type="button">Assign Selected Officers</button></div><p id="policeAssignmentStatus" class="form-status" role="status" aria-live="polite"></p><div id="policeAssignmentMembers" class="police-assignment-list"></div></section>
         </section>
 
+        <section class="view" data-panel="sla-monitoring">
+          <div class="sla-monitoring-page">
+            <div class="sla-monitoring-heading">
+              <div><span class="eyebrow">Operations · Live service levels</span><h2>Case SLA Monitoring</h2><p>Track assignment and response commitments across active incidents in your authorized jurisdiction.</p></div>
+              <div class="sla-monitoring-controls"><span id="slaMonitoringUpdated" class="sla-updated" aria-live="polite">Waiting for current data</span><button id="refreshSlaMonitoring" class="ghost" type="button">Refresh</button></div>
+            </div>
+            <div id="slaMonitoringError" class="sla-monitoring-error" role="alert" hidden></div>
+            <div id="slaMonitoringLoading" class="panel sla-monitoring-empty" role="status">Loading current SLA records…</div>
+            <div id="slaMonitoringContent" hidden>
+              <section id="slaDataQualityPanel" class="panel sla-data-quality" aria-live="polite" hidden>
+                <div><strong id="slaDataQualityTitle">Deadline review required</strong><p id="slaDataQualityText"></p></div>
+                <button id="slaReviewDeadlineGaps" class="ghost" type="button" hidden>Review deadline gaps</button>
+                <div id="slaDeadlinePreview" class="sla-deadline-preview" hidden></div>
+              </section>
+              <div class="sla-kpi-grid" aria-label="SLA summary">
+                <article class="sla-kpi"><span>Active cases</span><strong id="slaKpiActive">—</strong><small id="slaKpiActiveNote">Open incidents</small></article>
+                <article class="sla-kpi"><span>Within SLA</span><strong id="slaKpiWithin">—</strong><small>Assignment or response on track</small></article>
+                <article class="sla-kpi sla-kpi-warning"><span>Approaching</span><strong id="slaKpiApproaching">—</strong><small>Inside the configured warning window</small></article>
+                <article class="sla-kpi sla-kpi-critical"><span>Breached</span><strong id="slaKpiBreached">—</strong><small>Assignment or response deadline passed</small></article>
+                <article class="sla-kpi"><span>Escalated</span><strong id="slaKpiEscalated">—</strong><small>At L1 or above · may overlap other states</small></article>
+                <article class="sla-kpi sla-kpi-muted"><span>On-time resolution</span><strong id="slaKpiResolution">N/A</strong><small id="slaKpiResolutionNote">No resolution target is configured</small></article>
+              </div>
+              <div class="sla-analytics-grid">
+                <section class="panel sla-analytics-panel"><div class="panel-head"><div><span class="eyebrow">Active cases</span><h3>SLA distribution</h3></div></div><div class="sla-distribution"><div id="slaDistributionChart" class="sla-donut" role="img" aria-label="Active case SLA distribution"></div><div id="slaDistributionLegend" class="sla-legend"></div></div></section>
+                <section class="panel sla-analytics-panel"><div class="panel-head"><div><span class="eyebrow">Persisted breach events</span><h3>Seven-day breach trend</h3></div></div><div id="slaBreachTrend" class="sla-trend" aria-label="Historical breach events for the last seven days"></div><p id="slaTrendEmpty" class="sla-chart-note" hidden>No persisted breach events are recorded in this period.</p><p class="sla-chart-note">Historical counts use recorded assignment and response breach timestamps.</p></section>
+              </div>
+              <section class="panel sla-live-cases">
+                <div class="panel-head"><div><span class="eyebrow">Live case monitoring</span><h3>Active incidents</h3><small id="slaCasesCount">—</small></div></div>
+                <div class="sla-filters" aria-label="Filter live incidents">
+                  <label>Search<input id="slaSearch" type="search" placeholder="Incident ID, title, unit" autocomplete="off"></label>
+                  <label>Status<select id="slaStatusFilter"><option value="all">All statuses</option></select></label>
+                  <label>Severity<select id="slaSeverityFilter"><option value="all">All severities</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label>
+                  <label>Station<select id="slaStationFilter"><option value="all">All stations</option></select></label>
+                  <label>SLA state<select id="slaStateFilter"><option value="all">All states</option><option value="WITHIN_SLA">Within SLA</option><option value="APPROACHING">Approaching</option><option value="BREACHED">Breached</option><option value="NO_DEADLINE">No deadline</option></select></label>
+                  <label>Created<select id="slaPeriodFilter"><option value="all">Any time</option><option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select></label>
+                </div>
+                <div id="slaCaseTable" class="sla-case-table-wrap"></div>
+                <div id="slaCaseCards" class="sla-case-cards"></div>
+                <div id="slaCasesEmpty" class="sla-monitoring-empty" hidden>No active cases match these filters.</div>
+              </section>
+              <section class="panel sla-attention-panel"><div class="panel-head"><div><span class="eyebrow">Supervisor focus</span><h3>Priority cases</h3><small>Sorted by SLA risk, severity, and escalation level</small></div></div><div id="slaAttentionList" class="sla-attention-list"></div></section>
+            </div>
+          </div>
+        </section>
         <section class="view" data-panel="gis">
           <div class="gis-page-head">
             <div><span class="eyebrow">RakshakAI Operations</span><h2>Operational Map &amp; Routing</h2></div>
           </div>
           <div class="gis-layout">
             <section class="panel gis-map-card">
-              <div class="gis-toolbar" aria-label="GIS navigation controls">
-                <div class="gis-tool-group"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="true">Street Map</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="toggleFollowLocation" class="ghost" type="button" aria-pressed="false" disabled title="Start GPS tracking to follow your location.">Follow Location</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button></div>
-                <div class="gis-tool-group"><span>Points</span><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button></div>
-                <div class="gis-tool-group"><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="startNavigation" class="primary" type="button" disabled><span aria-hidden="true">➤</span> Start Navigation</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Clear the calculated route line, distance, and ETA. Start and destination points are kept." disabled>Clear Route</button></div>
+              <div class="gis-toolbar" aria-label="GIS navigation controls" data-gis-mode="map">
+                <div class="gis-mode-tabs" role="tablist" aria-label="GIS workspace mode">
+                  <button type="button" role="tab" id="gisModeMap" data-gis-mode="map" aria-selected="true">Map</button>
+                  <button type="button" role="tab" id="gisModeRoute" data-gis-mode="route" aria-selected="false">Route</button>
+                  <button type="button" role="tab" id="gisModeNavigate" data-gis-mode="navigate" aria-selected="false">Navigate</button>
+                </div>
+                <div class="gis-tool-group" data-gis-mode-panel="map"><span>Map</span><button id="streetMapLayer" class="ghost" type="button" aria-label="Show street map tiles." title="Show street map tiles." aria-pressed="true">Street Map</button><button id="satelliteMapLayer" class="ghost" type="button" aria-label="Show satellite map tiles." title="Show satellite map tiles." aria-pressed="false">Satellite View</button><button id="fitGisMap" class="ghost" type="button" aria-label="Fit the map to valid local operational markers." title="Fit the map to valid local operational markers.">Fit Map</button><button id="resetGisMap" class="ghost" type="button" aria-label="Reset Map View. Return to the local operational center and clear stale route markers." title="Return to the local operational center and clear stale route markers.">Reset Map</button><button id="toggleGisFullscreen" class="ghost gis-fullscreen-toggle" type="button" aria-label="Show Full Map" title="Expand the GIS workspace to fullscreen" aria-pressed="false">Show Full Map</button></div>
+                <div class="gis-tool-group" data-gis-mode-panel="route"><span>Points</span><button id="useMyLocation" class="ghost" type="button" aria-label="Use your current location as the route start." title="Use your current location as the route start.">Use My Location</button><button id="setMapStart" class="ghost" type="button" aria-label="Click, then choose the route start on the map." title="Click, then choose the route start on the map." aria-pressed="false">Set Start</button><button id="setMapDestination" class="ghost" type="button" aria-label="Click, then choose the destination on the map." title="Click, then choose the destination on the map." aria-pressed="false">Set Destination</button><span>Route</span><button id="navigateMap" class="primary" type="button" aria-label="Calculate Route. Choose a route start and destination before calculating." title="Choose a route start and destination before calculating." disabled>Calculate Route</button><button id="recalculateRoute" class="ghost" type="button" aria-label="Recalculate. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Recalculate</button><button id="clearMapRoute" class="ghost" type="button" aria-label="Clear Route. Choose a point or calculate a route before clearing." title="Clear the calculated route line, distance, and ETA. Start and destination points are kept." disabled>Clear Route</button></div>
+                <div class="gis-tool-group" data-gis-mode-panel="navigate"><span>Navigate</span><button id="startNavigation" class="primary" type="button" disabled><span aria-hidden="true">➤</span> Start Navigation</button><button id="toggleLocationTracking" class="ghost" type="button" aria-label="Start continuous GPS tracking." title="Continuously update the route start from this device." aria-pressed="false">Start GPS Tracking</button><button id="toggleFollowLocation" class="ghost" type="button" aria-pressed="false" disabled title="Start GPS tracking to follow your location.">Follow Location</button><button id="openExternalRoute" class="ghost" type="button" aria-label="Open Full Route. Calculate a route before using this action." title="Calculate a route before using this action." disabled>Open Full Route</button></div>
               </div>
               <p id="mapNavigationStatus" class="gis-status-bar" aria-live="polite">Select "Set Start," then click the map.</p>
               <p id="navigationAvailability" class="gis-navigation-availability" aria-live="polite"></p>
@@ -347,25 +408,37 @@
           <div class="cctv-tabs" role="tablist" aria-label="CCTV workspace">
             <button type="button" role="tab" id="cctvTabCameras" aria-controls="cctvCameraPanel" aria-selected="true" data-cctv-tab="cameras">Cameras</button>
             <button type="button" role="tab" id="cctvTabReview" aria-controls="cctvReviewPanel" aria-selected="false" tabindex="-1" data-cctv-tab="review">AI Review</button>
-            <button type="button" role="tab" id="cctvTabHealth" aria-controls="cctvCameraPanel" aria-selected="false" tabindex="-1" data-cctv-tab="health">Health Issues</button>
+            <button type="button" role="tab" id="cctvTabHealth" aria-controls="cctvHealthPanel" aria-selected="false" tabindex="-1" data-cctv-tab="health">Health Issues</button>
           </div>
-          <section class="panel" id="cctvCameraPanel" role="tabpanel" aria-labelledby="cctvTabCameras">
+          <section class="panel" id="cctvCameraPanel" role="tabpanel" aria-labelledby="cctvTabCameras" tabindex="0">
             <div class="panel-head cctv-registry-head">
               <div><span class="eyebrow">CCTV Monitoring</span><h2>Camera Registry</h2></div>
               <div id="cameraRegistryFilters" class="cctv-filters">
                 <select data-camera-filter="kind" aria-label="Demo or real filter"><option value="all">All cameras</option><option value="real">Real configured</option><option value="demo">Demo feeds</option></select>
                 <select data-camera-filter="sourceType" aria-label="Source type filter"><option value="all">All source types</option><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
-                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="streaming">Streaming</option><option value="reconnecting">Reconnecting</option><option value="no_frames">No frames</option><option value="auth_failed">Auth failed</option><option value="offline">Offline</option><option value="disabled">Disabled</option></select>
+                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="warning">Warning</option><option value="error">Error</option><option value="maintenance">Maintenance</option><option value="unknown">Unknown</option></select>
               </div>
             </div>
             <div id="cameraGridLarge" class="camera-registry"></div>
           </section>
-          <section class="panel ai-observation-panel" id="cctvReviewPanel" role="tabpanel" aria-labelledby="cctvTabReview" hidden>
+          <section class="panel ai-observation-panel" id="cctvReviewPanel" role="tabpanel" aria-labelledby="cctvTabReview" tabindex="0" hidden>
             <div class="panel-head">
               <div><span class="eyebrow">Mandatory Human Review</span><h2>AI Observation Queue</h2><p>AI detections are advisory. Confirmation creates an alert; it never creates an incident directly.</p></div>
               <button id="refreshAiObservations" class="ghost" type="button">Refresh Queue</button>
             </div>
             <div id="aiObservationQueue" class="ai-observation-queue" aria-live="polite"></div>
+          </section>
+          <section class="panel" id="cctvHealthPanel" role="tabpanel" aria-labelledby="cctvTabHealth" tabindex="0" hidden>
+            <div class="panel-head cctv-registry-head">
+              <div><span class="eyebrow">Camera Health</span><h2>Health Issues</h2><p>Cameras that are offline, degraded, disabled, or not delivering frames.</p></div>
+              <div id="cameraHealthFilters" class="cctv-filters" aria-label="Camera health filters">
+                <select data-camera-filter="kind" aria-label="Demo or real filter"><option value="all">All cameras</option><option value="real">Real configured</option><option value="demo">Demo feeds</option></select>
+                <select data-camera-filter="sourceType" aria-label="Source type filter"><option value="all">All source types</option><option value="rtsp">RTSP</option><option value="hls">HLS</option><option value="onvif">ONVIF</option><option value="nvr">NVR</option><option value="dvr">DVR</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
+                <select data-camera-filter="status" aria-label="Status filter"><option value="all">All statuses</option><option value="online">Online</option><option value="offline">Offline</option><option value="warning">Warning</option><option value="error">Error</option><option value="maintenance">Maintenance</option><option value="unknown">Unknown</option></select>
+              </div>
+            </div>
+            <p id="cameraHealthStatus" class="form-status" role="status" aria-live="polite">Loading camera health…</p>
+            <div id="cameraHealthGrid" class="camera-registry"></div>
           </section>
         </section>
         <section class="view" data-panel="live-vision">
@@ -491,7 +564,7 @@
                 <h2>Emergency Alerts</h2>
                 <p>Real-time incident notifications and response status</p>
               </div>
-              <button id="clearAlerts" class="ghost alert-clear" type="button">Clear All</button>
+              <button id="clearAlerts" class="ghost alert-clear" type="button">Close All</button>
             </div>
             <form id="manualAlertForm" class="manual-alert-form">
               <div class="manual-alert-row">
@@ -525,16 +598,20 @@
               </label>
               <button id="alertUseLocation" class="ghost" type="button">Use Current Location</button>
               <p id="alertLocationStatus" role="status" aria-live="polite">Location is optional.</p>
-              <details class="alert-coordinates"><summary>Advanced: manual coordinates</summary>
-              <div class="manual-alert-row">
-                <label>
-                  Latitude
-                  <input name="lat" type="number" min="-90" max="90" step="any" placeholder="Latitude" />
-                </label>
-                <label>
-                  Longitude
-                  <input name="lng" type="number" min="-180" max="180" step="any" placeholder="Longitude" />
-                </label>
+              <details class="alert-coordinates">
+                <summary>Advanced: manual coordinates</summary>
+                <div class="manual-alert-row">
+                  <label>
+                    Latitude
+                    <input name="lat" type="number" min="-90" max="90" step="any" placeholder="Latitude" />
+                  </label>
+                  <label>
+                    Longitude
+                    <input name="lng" type="number" min="-180" max="180" step="any" placeholder="Longitude" />
+                  </label>
+                </div>
+              </details>
+              <div class="form-actions">
                 <button id="sendAlert" class="primary alert-create" type="submit">Send Alert</button>
               </div>
               <p class="login-error" id="manualAlertError"></p>
@@ -615,7 +692,7 @@
                 </label>
                 <label>New password
                   <span class="password-field">
-                    <input type="password" name="newPassword" autocomplete="new-password" minlength="10" required />
+                    <input type="password" name="newPassword" autocomplete="new-password" minlength="12" maxlength="128" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}" title="Use 12 to 128 characters with uppercase, lowercase, and a number" required />
                     <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                     </button>
@@ -623,7 +700,7 @@
                 </label>
                 <label>Confirm new password
                   <span class="password-field">
-                    <input type="password" name="confirmPassword" autocomplete="new-password" minlength="10" required />
+                    <input type="password" name="confirmPassword" autocomplete="new-password" minlength="12" maxlength="128" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}" title="Use 12 to 128 characters with uppercase, lowercase, and a number" required />
                     <button type="button" class="password-toggle" data-password-toggle aria-label="Show password" aria-pressed="false">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
                     </button>
@@ -634,7 +711,7 @@
                   <span id="changePasswordStatus" class="form-status" role="status"></span>
                 </div>
               </form>
-              <aside class="security-policy-card" aria-label="Password policy"><span class="eyebrow">Security Policy</span><strong>Password requirements</strong><ul><li>At least 10 characters</li><li>Uppercase and lowercase letters</li><li>At least one number</li><li>Current password verification</li></ul><p>Changing the password securely ends the current session.</p></aside>
+              <aside class="security-policy-card" aria-label="Password policy"><span class="eyebrow">Security Policy</span><strong>Password requirements</strong><ul><li>12 to 128 characters</li><li>Uppercase and lowercase letters</li><li>At least one number</li><li>Current password verification</li></ul><p>Changing the password securely ends the current session.</p></aside>
               </div>
             </section>
             <section class="panel settings-device-panel" data-settings-panel="device-health" hidden><div class="panel-head"><div><span class="eyebrow">Infrastructure</span><h2>Device Health</h2><p>Live operational status for registered command-center devices.</p></div><span class="chip">Live telemetry</span></div><div id="deviceList" class="device-health-list"></div></section>
@@ -646,9 +723,9 @@
                 <label>Station<select id="unitRegistryStationFilter"><option value="all">All stations</option></select></label>
                 <label>Availability<select id="unitRegistryAvailabilityFilter"><option value="all">All availability</option><option value="available">Available</option><option value="busy">Busy</option><option value="unavailable">Unavailable</option></select></label>
               </div>
-              <div id="unitRegistryDialog" class="settings-form-dialog" hidden>
+              <dialog id="unitRegistryDialog" class="settings-form-dialog" aria-labelledby="unitRegistryDialogTitle">
                 <button class="settings-form-backdrop" type="button" data-close-unit-form aria-label="Close unit form"></button>
-                <section class="settings-form-modal" role="dialog" aria-modal="true" aria-labelledby="unitRegistryDialogTitle">
+                <section class="settings-form-modal">
                   <div class="settings-form-modal-head"><div><span class="eyebrow">Dispatch Registry</span><h3 id="unitRegistryDialogTitle">Add Police Unit</h3></div><button class="icon-button" type="button" data-close-unit-form aria-label="Close">&times;</button></div>
               <form id="unitRegistryForm" class="unit-registry-form">
                 <input type="hidden" name="id" />
@@ -675,7 +752,7 @@
                 </div>
               </form>
                 </section>
-              </div>
+              </dialog>
               <p id="unitRegistryPageStatus" class="form-status registry-page-status" role="status"></p>
               <div class="registry-list-head"><div><span class="eyebrow">Operational Directory</span><strong>Registered Units</strong></div><small>Demo resources remain clearly identified.</small></div>
               <div id="unitRegistryList" class="unit-registry-list"></div>
@@ -687,9 +764,9 @@
                 <label>Jurisdiction<select id="stationRegistryJurisdictionFilter"><option value="all">All jurisdictions</option></select></label>
                 <label>Operational<select id="stationRegistryOperationalFilter"><option value="all">All</option><option value="true">Operational</option><option value="false">Inactive</option></select></label>
               </div>
-              <div id="stationRegistryDialog" class="settings-form-dialog" hidden>
+              <dialog id="stationRegistryDialog" class="settings-form-dialog" aria-labelledby="stationRegistryDialogTitle">
                 <button class="settings-form-backdrop" type="button" data-close-station-form aria-label="Close station form"></button>
-                <section class="settings-form-modal" role="dialog" aria-modal="true" aria-labelledby="stationRegistryDialogTitle">
+                <section class="settings-form-modal">
                   <div class="settings-form-modal-head"><div><span class="eyebrow">Station Registry</span><h3 id="stationRegistryDialogTitle">Add Police Station</h3></div><button class="icon-button" type="button" data-close-station-form aria-label="Close">&times;</button></div>
               <form id="stationRegistryForm" class="unit-registry-form">
                 <input type="hidden" name="id" />
@@ -709,7 +786,7 @@
                 </div>
               </form>
                 </section>
-              </div>
+              </dialog>
               <p id="stationRegistryPageStatus" class="form-status registry-page-status" role="status"></p>
               <div class="registry-list-head"><div><span class="eyebrow">Coverage Directory</span><strong>Registered Stations</strong></div><small>Operational and demo sources are labelled separately.</small></div>
               <div id="stationRegistryList" class="unit-registry-list"></div>
@@ -769,6 +846,30 @@
             </div>
           </div>
         </section>
+        <section class="view" data-panel="audit-logs">
+          <div class="audit-page">
+            <div class="page-intro audit-page-intro">
+              <div><span class="eyebrow">Administration · Read only</span><h2>Audit Logs</h2><p>Search recorded administrative and operational history. Entries are preserved independently of current officer, unit, and incident state.</p></div>
+              <button id="auditPageRefresh" class="ghost" type="button">Refresh</button>
+            </div>
+            <section class="panel audit-search-panel" aria-label="Audit log filters">
+              <form id="auditPageFilterForm" class="audit-page-filters">
+                <label><span>Search records</span><input id="auditPageSearch" type="search" placeholder="Action, officer, unit, incident, or details" autocomplete="off" /></label>
+                <label><span>Category</span><select id="auditPageCategory"><option value="all">All categories</option><option value="personnel">Personnel</option><option value="units">Units &amp; assignments</option><option value="incidents">Incidents &amp; dispatch</option><option value="security">Security &amp; accounts</option><option value="other">Other</option></select></label>
+                <label><span>Actor</span><input id="auditPageActor" type="search" placeholder="Name or user ID" autocomplete="off" /></label>
+                <label><span>From</span><input id="auditPageFrom" type="date" /></label>
+                <label><span>To</span><input id="auditPageTo" type="date" /></label>
+                <div class="audit-filter-actions"><button class="primary" type="submit">Apply filters</button><button id="auditPageReset" class="ghost" type="button">Reset</button></div>
+              </form>
+            </section>
+            <div id="auditPageStatus" class="form-status" role="status" aria-live="polite"></div>
+            <section class="panel audit-results-panel">
+              <div class="audit-results-head"><div><span class="eyebrow">Immutable activity record</span><h3 id="auditPageResultCount">Audit activity</h3></div><span class="chip">Read only</span></div>
+              <div id="auditPageList" class="audit-page-list" aria-live="polite"></div>
+              <div class="audit-pagination"><span id="auditPageRange">0 records</span><div><button id="auditPagePrevious" class="ghost" type="button" disabled>Previous</button><button id="auditPageNext" class="ghost" type="button" disabled>Next</button></div></div>
+            </section>
+          </div>
+        </section>
         <section class="view" data-panel="police-management">
           <div class="police-management-page">
             <div class="page-intro">
@@ -784,7 +885,7 @@
               <form id="policeUserForm" class="police-user-form">
                 <label>Officer Name<input name="name" placeholder="Inspector Kavya Rao" required /></label>
                 <label>Email<input name="email" type="email" placeholder="officer@rakshakai.local" required /></label>
-                <label>Temporary Password<input name="temporaryPassword" type="password" minlength="8" placeholder="Minimum 8 characters" required /></label>
+                <label>Temporary Password<input name="temporaryPassword" type="password" minlength="12" maxlength="128" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}" title="Use 12 to 128 characters with uppercase, lowercase, and a number" placeholder="12+ characters with mixed case and a number" required /></label>
                 <label>Badge / Staff ID<input name="badgeId" placeholder="Badge / staff ID" required /></label>
                 <label>Response Unit<select name="unitId"><option value="">No primary unit</option></select></label>
                 <label>Registered Station<select name="stationId" required><option value="">Select a registered station</option></select></label>
@@ -807,7 +908,7 @@
             <section class="panel police-management-panel">
               <div class="panel-head">
                 <div><span class="eyebrow">Officer Directory</span><h2>Police Officers</h2></div>
-                <span id="policeUserCount" class="chip">-- officers</span>
+                <span id="policeUserCount" class="chip">— officers</span>
                 <label class="checkbox-inline"><input type="checkbox" id="showDemoOfficers" /> Show demo/test officers</label>
               </div>
               <div class="police-directory-filters">
@@ -833,9 +934,10 @@
               <form id="unitMembershipAddForm" class="unit-membership-form" hidden>
                 <h3>Add Member to Unit</h3>
                 <label>Officer<select name="officerUserId" required><option value="">Select officer</option></select></label>
+                <p id="unitMembershipEligibilityStatus" class="form-status" role="status">Only officers with an active profile, registered station and rank can be added. Ineligible officers show the reason.</p>
                 <label>Role<select name="role"><option value="member">Member</option><option value="commander">Commander</option><option value="driver">Driver</option><option value="deputy">Deputy</option></select></label>
                 <div class="unit-membership-actions">
-                  <button type="submit" class="primary">Add Member</button>
+                  <button type="submit" class="primary" disabled>Add Member</button>
                   <button type="button" class="ghost" id="cancelUnitMembershipAdd">Cancel</button>
                 </div>
               </form>

@@ -8,7 +8,6 @@ const RESTRICTED_PATHS = ["/api/camera-feeds", "/api/camera-sources", "/api/vide
 
 const HTML = `<!doctype html><html><body>
   <h1 id="viewTitle">RakshakAI</h1>
-  <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
   <nav>
     <button class="nav-item" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
     <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
@@ -49,7 +48,7 @@ test("Citizen pure helper behavior: landing fallback and non-operator role", () 
 
 test("restored sessions apply role restrictions before showing a deep link", () => {
   const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
-  const restore = appSource.match(/async function checkSession\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const restore = appSource.match(/async function checkSession[\s\S]*?(?=\r?\n}\r?\n)/)?.[0] || "";
   assert.match(restore, /state\.user = me\.user;\s*applyRoleAccess\(\);\s*showApp\(\);/);
 });
 
@@ -66,16 +65,12 @@ test("Citizen opening /rakshak/live-vision executes production access logic and 
   assert.equal(document.body.dataset.view, "missing");
 
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').classList.contains("active"), false);
-  assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').getAttribute("aria-current"), "false");
+  assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').hasAttribute("aria-current"), false);
   assert.equal(document.querySelector('.nav-item[data-view="missing"]').classList.contains("active"), true);
   assert.equal(document.querySelector('.nav-item[data-view="missing"]').getAttribute("aria-current"), "page");
 
   assert.equal(document.querySelector('[data-panel="live-vision"]').classList.contains("active"), false);
   assert.equal(document.querySelector('[data-panel="missing"]').classList.contains("active"), true);
-
-  const permission = document.querySelector("#permissionMessage");
-  assert.equal(permission.textContent, "You do not have permission to view this operational page.");
-  assert.equal(permission.classList.contains("restricted-hidden"), false, "permission message must be visible");
 
   assert.equal(document.querySelector("#viewTitle").textContent, "Missing & Found Report Center");
 });
@@ -108,9 +103,6 @@ test("Police Officer opening live-vision stays allowed and issues operational AI
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').classList.contains("active"), true);
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').getAttribute("aria-current"), "page");
   assert.equal(document.querySelector('[data-panel="live-vision"]').classList.contains("active"), true);
-  const permission = document.querySelector("#permissionMessage");
-  assert.equal(permission.classList.contains("restricted-hidden"), true, "no permission warning for operator");
-  assert.equal(permission.textContent, "");
   assert.equal(document.querySelector("#viewTitle").textContent, "Rakshak Live Vision");
 
   const responses = {

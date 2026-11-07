@@ -10,7 +10,7 @@ const {
 
 // Pure read adapter: no repository, SQL, persistence, or operational command is imported here.
 const SECRET_PATTERN = /password|secret|token|credential|api[_-]?key|jwt|rtsp|connection.?string|private.?key/i;
-const WRITE_REQUEST_PATTERN = /\b(?:create|add|update|edit|delete|remove|assign|reassign|release|resolve|close|acknowledge|mark|start\s+maintenance|confirm(?:\s+(?:the\s+)?match)?|reject(?:\s+(?:the\s+)?match)?|change|increase|decrease|set|disable|enable)\b/i;
+const WRITE_REQUEST_PATTERN = /\b(?:create|add|update|edit|delete|remove|assign|reassign|release|resolve|close|acknowledge|mark|start\s+maintenance|confirm(?:\s+(?:the\s+)?match)?|reject(?:\s+(?:the\s+)?match)?|change|increase|decrease|set|disable|enable|send\s+(?:an?\s+)?(?:emergency\s+)?alerts?|broadcast|trigger\s+(?:an?\s+)?alerts?)\b/i;
 const CLOSED = new Set(["closed", "resolved", "rejected", "cancelled", "completed"]);
 const HEALTHY = new Set(["online", "available", "ready"]);
 const PAGES = new Set(["dashboard", "cctns", "incident-command", "unit-assignment", "response-units", "cctv", "camera-health", "multi-camera-tracking", "investigations", "gis", "escalations", "reports", "history", "alerts", "video-evidence", "live-vision", "police-management", "settings"]);
@@ -29,7 +29,9 @@ const navigation = (view, entityId) => entityId ? { view, entityId } : { view };
 const CASUAL_PATTERNS = {
   greeting: /\b(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|namaste|vanakkam)\b/i,
   thanks: /\b(?:thanks|thank\s+you|thx|ty|shukriya|dhanyavaad|dhanyavaadam)\b/i,
-  acknowledgment: /\b(?:okay|ok|got\s+it|cool|understood|right|sure|fine|alright)\b/i,
+  // Anchored: standalone acknowledgments only, so operational questions that
+  // merely contain these words ("Any SLA breaches right now?") stay operational.
+  acknowledgment: /^\s*(?:okay|ok|got\s+it|cool|understood|right|sure|fine|alright)\s*(?:[,!.;:-]*\s*(?:thanks|thank\s+you|please)?)?\s*[.!?]*\s*$/i,
   repeat: /\b(?:repeat|say\s+again|what\s+was\s+that|can\s+you\s+repeat)\b/i,
   explain: /\b(?:explain|why|what\s+do\s+you\s+mean|tell\s+me\s+more|in\s+simple\s+terms|simply|break\s+it\s+down)\b/i,
   summary: /\b(?:summarize|summary|short\s+answer|brief|in\s+short)\b/i,
@@ -40,7 +42,7 @@ const FOLLOWUP_PATTERNS = {
   showDetails: /\b(?:show|open|view|details?|expand)\s+(?:those|them|that|it|these|this)\b/i,
   whichOne: /\b(?:which\s+(?:one|incident|camera|unit|officer|track)|(?:the\s+)?(?:first|second|third|last)\s+one|most\s+(?:critical|serious|urgent|important))\b/i,
   whatAbout: /\b(?:what\s+about|how\s+about)\s+(?:cameras?|units?|officers?|incidents?|tracks?|tracking|sla|cctns|cctv|evidence|reports?)\b/i,
-  filterCurrent: /\b(?:only\s+(?:critical|high|medium|low|unassigned|open|active|pending)|just\s+(?:the\s+)?(?:critical|high|medium|low|unassigned|open|active|pending))\b/i,
+  filterCurrent: /\b(?:only|just)\s+(?:the\s+)?(?:critical|high|medium|low|unassigned|open|active|pending)(?:\s+ones?)?\b/i,
   moreInfo: /\b(?:more\s+(?:info|details|about)|tell\s+me\s+more)\b/i
 };
 
@@ -688,7 +690,7 @@ function answer(db, message, options = {}) {
   if (options.actor && !["Admin", "Police Officer"].includes(options.actor.role)) db = { ...db, responseUnits: [] };
   const originalText = String(message || "").trim();
   const detected = detectLanguage(originalText, options.priorLanguage);
-  const language = responseLanguage(options.selectedLanguage, detected.language, options.priorLanguage);
+  const language = responseLanguage(options.selectedLanguage, detected.language, options.priorLanguage, detected.signal);
   const text = normalizeQuery(originalText);
   const now = Number(options.currentTime) || Date.now(), page = sanitizePageContext(options.pageContext);
   const collection = incidentCollectionQuery(text, page, options.priorEntities || []);

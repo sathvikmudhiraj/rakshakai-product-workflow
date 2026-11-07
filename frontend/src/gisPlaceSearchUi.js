@@ -25,54 +25,14 @@ function stopActionEvent(event) {
   event.stopImmediatePropagation();
 }
 
-function renderPreviewPanel({ container, option, place, onConfirm, onCancel }) {
-  const document = container.ownerDocument;
-  container.querySelector(".map-search-confirm")?.remove();
-
-  const panel = element(document, "section", "map-search-confirm");
-  panel.dataset.previewId = String(place.id || `${place.lat},${place.lng}`);
-  panel.setAttribute("aria-label", "Destination preview");
-  panel.append(
-    element(document, "strong", "", "Preview P"),
-    element(document, "span", "map-search-preview-label", placeLabel(place)),
-    element(document, "small", "", `Type: ${place.type || "other"}`),
-    element(document, "small", "", `Location: ${placeLocality(place)}`),
-    element(document, "small", "", `Coordinates: ${placeCoordinates(place)}`),
-    element(document, "small", "", `Provider: ${place.provider || "unknown"}`)
-  );
-
-  const actions = element(document, "div", "map-search-preview-actions");
-  const confirm = element(document, "button", "primary", "Confirm Destination");
-  confirm.type = "button";
-  confirm.dataset.action = "confirm-search-destination";
-  confirm.addEventListener("click", (event) => {
-    stopActionEvent(event);
-    onConfirm(place);
-  });
-
-  const cancel = element(document, "button", "ghost", "Cancel Preview");
-  cancel.type = "button";
-  cancel.dataset.action = "cancel-search-preview";
-  cancel.addEventListener("click", (event) => {
-    stopActionEvent(event);
-    onCancel(place);
-    option.classList.remove("active");
-    panel.remove();
-  });
-
-  actions.append(confirm, cancel);
-  panel.append(actions);
-  option.after(panel);
-}
-
-export function renderPlaceSearchCandidates({ container, places, onPreview, onConfirm, onCancel }) {
+export function renderPlaceSearchCandidates({ container, places, onSelect }) {
   container.textContent = "";
   const document = container.ownerDocument;
 
   places.forEach((place) => {
     const option = element(document, "button", "map-search-result");
     option.type = "button";
-    option.dataset.action = "preview-search-result";
+    option.dataset.action = "select-search-result";
     option.dataset.placeId = String(place.id || `${place.lat},${place.lng}`);
     option.append(
       element(document, "strong", "", placeLabel(place)),
@@ -82,11 +42,10 @@ export function renderPlaceSearchCandidates({ container, places, onPreview, onCo
 
     option.addEventListener("click", (event) => {
       stopActionEvent(event);
-      if (onPreview(place) === false) return;
+      if (onSelect(place) === false) return;
       container.querySelectorAll(".map-search-result").forEach((item) => item.classList.remove("active"));
       option.classList.add("active");
-      renderPreviewPanel({ container, option, place, onConfirm, onCancel });
-      return;
+      container.hidden = true;
     });
 
     container.append(option);

@@ -10,6 +10,7 @@ const VIEW_TITLES = {
   alerts: "Emergency Alert Center",
   history: "Incident History",
   "police-management": "Police Management",
+  "audit-logs": "Audit Logs",
   settings: "System Settings",
   "erss-call-taker": "ERSS-112 Call Taker",
   "erss-dispatcher": "ERSS-112 Dispatcher",
@@ -19,6 +20,12 @@ const VIEW_TITLES = {
 };
 
 const OPERATIONAL_ROLES = ["CALL_TAKER", "DISPATCHER", "SUPERVISOR", "FIELD_OFFICER"];
+
+export function setAriaCurrent(element, current) {
+  if (!element) return;
+  if (current) element.setAttribute("aria-current", "page");
+  else element.removeAttribute("aria-current");
+}
 
 export function landingForRole(role) {
   if (role === "Citizen") return "missing";
@@ -50,24 +57,11 @@ function querySelector(document, selector) {
 
 export function resolveViewAccess({ view, role, user, document, viewTitles = VIEW_TITLES }) {
   const nav = querySelectorAll(document, ".nav-item").find((button) => button.dataset.view === view);
-  let resolvedView = view;
-  if (nav?.hidden) {
-    const permission = querySelector(document, "#permissionMessage");
-    if (permission) {
-      permission.textContent = role === "Citizen"
-        ? "You do not have permission to view this operational page."
-        : "Admin permission is required to view this page.";
-      permission.classList.remove("restricted-hidden");
-    }
-    resolvedView = landingForRole(role);
-  } else {
-    const permission = querySelector(document, "#permissionMessage");
-    if (permission) permission.classList.add("restricted-hidden");
-  }
+  const resolvedView = nav?.hidden ? landingForRole(role) : view;
   querySelectorAll(document, ".nav-item").forEach((b) => {
     const isActive = b.dataset.view === resolvedView;
     b.classList.toggle("active", isActive);
-    b.setAttribute("aria-current", isActive ? "page" : "false");
+    setAriaCurrent(b, isActive);
   });
   querySelectorAll(document, "[data-panel]").forEach((p) => p.classList.toggle("active", p.dataset.panel === resolvedView));
   const viewTitle = querySelector(document, "#viewTitle");

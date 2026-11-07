@@ -820,12 +820,16 @@ async function getSupervisorQueue(db) {
   const jurisdictionDisputes = db.erssJurisdictionHistory?.filter(h =>
     h.changedAt > new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   ) || [];
+  const ownershipTransfers = db.erssOwnershipTransfers?.filter(transfer =>
+    ["TRANSFER_REQUESTED", "TARGET_ACKNOWLEDGED"].includes(transfer.status)
+  ) || [];
 
   return {
     criticalEvents,
     unitTimeouts,
     assistanceTimeouts,
-    jurisdictionDisputes
+    jurisdictionDisputes,
+    ownershipTransfers
   };
 }
 

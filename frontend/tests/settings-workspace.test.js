@@ -57,7 +57,8 @@ test("unit and station registries are registry-first with on-demand dialogs", ()
     ["#stationRegistryDialog", "#addStationRegistry", "#stationRegistryForm"]
   ]) {
     const element = document.querySelector(dialog);
-    assert.ok(element?.hidden, `${dialog} starts closed`);
+    assert.equal(element?.tagName, "DIALOG", `${dialog} uses the native dialog element`);
+    assert.equal(element.open, false, `${dialog} starts closed`);
     assert.ok(document.querySelector(addButton));
     assert.ok(element.querySelector(form));
   }
@@ -79,7 +80,7 @@ test("SLA workspace is editable, guarded, validated, and persisted through the A
 });
 
 test("section switching is in-app state navigation with URL support", () => {
-  const switcher = appSource.match(/function setSettingsSection[\s\S]*?\n}\n/);
+  const switcher = appSource.match(/function setSettingsSection[\s\S]*?(?=\r?\n}\r?\n)/);
   assert.ok(switcher);
   assert.match(switcher[0], /panel\.hidden = panel\.dataset\.settingsPanel !== nextSection/);
   assert.match(switcher[0], /history\.replaceState/);

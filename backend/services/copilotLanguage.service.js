@@ -28,9 +28,10 @@ function detectLanguage(query, previousLanguage = "en") {
 }
 
 const replacements = [
+  [/సంఘటనలను|సంఘటనలు|సంఘటనాలు|సంఘటన/gu, " incidents "],
   [/తీవ్ర|క్రిటికల్|गंभीर|क्रिटिकल/gu, " critical "],
   [/ఘటనలు|ఘటన|घटनाएं|घटना|घटनाओं/gu, " incidents "],
-  [/చూపించు|చూపించండి|చూపించు|దिखाओ|दिखाइए/gu, " show "],
+  [/చూపించు|చూపించండి|చూపించు|దिखाओ|दिखाइए/gu, " show all "],
   [/స్థితి|स्थिति/gu, " status "],
   [/చెప్పు|చెప్పండి|बताओ|बताइए/gu, " show "],
   [/కెమెరా\s*ఆరోగ్యం|कैमरा\s*स्थिति|कैमरा\s*हेल्थ/gu, " camera health "],
@@ -93,7 +94,7 @@ function normalizeQuery(query) {
     .replace(/\baccounts?(?:lu)?\b/gi, " accounts ");
   for (const [pattern, replacement] of replacements) canonical = canonical.replace(pattern, replacement);
   canonical = canonical
-    .replace(/\b(?:chupinchu|chupinchandi|choopinchu|choopinchandi|dikhao|dikhaiye)\b/gi, " show ")
+    .replace(/\b(?:chupinchu|chupinchandi|choopinchu|choopinchandi|dikhao|dikhaiye)\b/gi, " show all ")
     .replace(/\b(?:chepu|cheppu|cheppandi|batao|bataye)\b/gi, " show ")
     .replace(/\b(?:ekkada|kahan(?:\s+hai)?)\b/gi, " where ")
     .replace(/\b(?:enti|kya\s+hai)\b/gi, " status ")
@@ -206,11 +207,15 @@ function localizeAnswer(answer, language) {
   }).join("\n");
 }
 
-function responseLanguage(mode, detectedLanguage, priorLanguage = "en") {
+function responseLanguage(mode, detectedLanguage, priorLanguage = "en", detectedSignal = "") {
   const selected = selectedLanguage(mode);
   if (selected === "auto") {
-    // For new conversations (priorLanguage is default "en"), use detected language
-    // For existing conversations, preserve the conversation's language
+    // An unambiguous language switch (native script or language-specific
+    // romanized markers) reflects the user's latest deliberate choice and
+    // overrides conversation stickiness. Ambiguous or terse inputs keep the
+    // conversation language.
+    const deliberate = detectedSignal === "telugu-script" || detectedSignal === "devanagari-script" || detectedSignal === "roman-telugu" || detectedSignal === "roman-hindi";
+    if (deliberate) return detectedLanguage;
     if (priorLanguage === "en" && detectedLanguage !== "en") {
       return detectedLanguage;
     }

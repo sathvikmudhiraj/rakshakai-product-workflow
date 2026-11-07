@@ -36,10 +36,10 @@ async function check(name, fn) {
     await mapClick('#setMapDestination', .63, .64, '#clearRouteDestination');
     assert.equal(await point(0).locator('strong').innerText() !== 'Not selected', true, 'Start not selected');
     assert.equal(await point(1).locator('strong').innerText() !== 'Not selected', true, 'Destination not selected');
-    assert.equal(await page.locator('#navigateMap').isEnabled(), true, 'Calculate Route disabled');
+    await page.waitForFunction(() => document.querySelector('#routeDistance')?.textContent?.trim() !== '--' && !document.querySelector('#navigateMap')?.disabled, null, { timeout: 30000 });
   }
   async function calculate() {
-    await page.locator('#navigateMap').click();
+    if (await page.locator('#routeDistance').innerText() === '--') await page.locator('#navigateMap').click();
     await page.waitForFunction(() => document.querySelector('#routeDistance')?.textContent !== '--', null, { timeout: 30000 });
     await page.waitForFunction(() => document.querySelectorAll('#gisMap path.leaflet-route-line').length > 0, null, { timeout: 15000 });
   }

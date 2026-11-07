@@ -1,5 +1,6 @@
 import { api, trackingApi } from "../services/api.js";
 import { on as onRealtime } from "../services/realtime.js";
+import { confirmAction } from "../confirmAction.js";
 
 // Keep this screen independent from the application bootstrap.  Importing
 // app.js here creates a circular dependency and makes this component
@@ -533,7 +534,7 @@ function renderSessionDetail(session, observations = [], candidates = [], verifi
   if (session.status !== "CLOSED") {
     const close = node("button", "ghost", "Close Session"); close.type = "button";
     close.addEventListener("click", async () => {
-      if (!confirm("Close this tracking session?")) return;
+      if (!await confirmAction("Close this tracking session?", { danger: true })) return;
       try { await trackingApi.closeSession(session.id); trackingState.selectedSessionId = null; await loadSessions(); }
       catch (error) { alert(`Failed to close session: ${error.message}`); }
     });

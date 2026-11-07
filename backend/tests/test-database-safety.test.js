@@ -36,6 +36,10 @@ test("release integration accepts only its disposable Compose database alias", (
   assert.throws(() => assertSafeTestDatabase({ ...release, RELEASE_TEST_PASSWORD: 'wrong' }, { scoped: true }), /loopback/);
   assert.throws(() => assertSafeTestDatabase({ ...release, TEST_DATABASE_URL: releaseUrl.replace('rakshakai_test_release', 'production') }, { scoped: true }), /loopback/);
   assert.throws(() => assertSafeTestDatabase({ ...release, TEST_DATABASE_URL: releaseUrl.replace('postgres:5432', 'remote.example:5432') }, { scoped: true }), /loopback/);
+  const genericComposeUrl = base.replace("127.0.0.1", "postgres");
+  const genericComposeScoped = new URL(genericComposeUrl);
+  genericComposeScoped.searchParams.set("options", `-csearch_path=${schema}`);
+  assert.throws(() => assertSafeTestDatabase({ ...approved, TEST_DATABASE_URL: genericComposeUrl, DATABASE_URL: genericComposeScoped.toString() }, { scoped: true }), /loopback/);
 });
 
 test("runner rejects an inherited DATABASE_URL before connecting", () => {

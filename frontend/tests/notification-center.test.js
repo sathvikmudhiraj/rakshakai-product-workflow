@@ -258,10 +258,11 @@ test("drawer has no horizontal overflow at various viewport widths", async () =>
 
 test("filter chips wrap responsively without horizontal scrollbar", () => {
   const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-  // Filter bar should use flex-wrap: wrap
-  assert.match(css, /\.notification-filter-bar\s*\{[\s\S]*?flex-wrap\s*:\s*wrap/);
-  // Filter bar should not have overflow-x: auto
-  assert.doesNotMatch(css, /\.notification-filter-bar\s*\{[\s\S]*?overflow-x\s*:\s*auto/);
+  const filterBarRules = [...css.matchAll(/(?:^|\n)\s*\.notification-filter-bar\s*\{([^}]*)\}/g)]
+    .map((match) => match[1]);
+  assert.ok(filterBarRules.length, "notification filter bar has a base style rule");
+  assert.ok(filterBarRules.some((declarations) => /\bflex-wrap\s*:\s*wrap\b/.test(declarations)), "filter chips wrap onto additional rows");
+  assert.ok(filterBarRules.every((declarations) => !/\boverflow-x\s*:\s*auto\b/.test(declarations)), "filter bar does not create a horizontal scrollbar");
 });
 
 test("detail content vertically scrolls and long text wraps safely", async () => {

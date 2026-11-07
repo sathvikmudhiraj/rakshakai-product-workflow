@@ -50,3 +50,33 @@ The failed browser run is evidence against a blanket browser pass. Screenshots, 
 6. Only then update the PR with the complete browser evidence and request review. Merge/production deployment remain separately authorized actions.
 
 No operational PostgreSQL, Neon database, or pre-existing Docker volume was modified. No registration rate limiting was added.
+
+## CI remediation follow-up — 2026-11-04
+
+### Confirmed failure and code change
+
+GitHub Actions run `41872716776` failed in `ai-service-checks`, at `python scripts/audit-ai-dependencies.py`: the installed `setuptools==83.0.0` was flagged as `GHSA-xmj3-9gf7-h52w`; GitHub lists `84.1.0` as the first patched version. The workflow explicitly installed 83.0.0 after the AI requirements, and the AI Dockerfile repeated that pin after installing requirements. Both overrides are removed. `ai-service/requirements.txt` now pins `setuptools==84.1.0`, which is shared by CI and Docker; the dependency audit remains enabled. A Python regression test checks the shared pin and rejects the old explicit pins.
+
+The version was checked against the [GitHub Advisory](https://github.com/advisories/GHSA-xmj3-9gf7-h52w) and [setuptools on PyPI](https://pypi.org/project/setuptools/84.1.0/). No unrelated dependency upgrades were made.
+
+### Verification on the current working tree
+
+Current local and remote branch heads remain `21183cb73d498cbada59bdcde4cdcec53bafec09`. The security fix and this report update are uncommitted local changes. The working tree also contains pre-existing local modifications, staged diagnostic-file removals, scratch files, `artifacts/`, and `login.json`; these were preserved and not staged.
+
+| Command / check | Result | Evidence |
+|---|---|---|
+| `npm.cmd run check` | PASS, exit 0 | Syntax checked 293 JavaScript files. |
+| `npm.cmd test` | PASS, exit 0 | Backend 464 passed, 0 failed, 10 PostgreSQL-only skipped; frontend 134/134 passed. The ten skips reflect the unavailable PostgreSQL service. |
+| `npm.cmd run frontend:build` | PASS, exit 0 | Vite production build completed; existing warning reports a 568.33 kB minified JS chunk above 500 kB. |
+| `npm.cmd run test:security` | PASS, exit 0 | 121 passed, 0 failed, 0 skipped. |
+| `npm.cmd run test:critical-ux` | PASS, exit 0 | Layout checks passed at 1920×1080, 1440×900, 1024×768, 768×1024, and 390×844. |
+| `git diff --check` | PASS, exit 0 | No whitespace errors. Git emitted line-ending warnings only. |
+| Python AI unit tests, `pip-audit`, model initialization | NOT TESTED | No `python`, `python3`, or `py` launcher is available in this environment. The new Python regression test and patched environment audit therefore have not run locally. |
+| Isolated PostgreSQL suite | NOT TESTED | Docker Engine is unreachable (`docker version` exit 1: permission denied connecting to `npipe:////./pipe/docker_engine`); local `127.0.0.1:5432` is not accepting connections. No operational database was used. |
+| Docker service acceptance and Chromium E2E | NOT TESTED | No reachable Docker Engine; no browser workflow was run. The session-bootstrap fix is covered by frontend unit tests, but is not confirmed end-to-end. |
+
+### CI and PR state
+
+No new Actions run has tested this remediation: GitHub still points to the unchanged branch head above, and run `41872716776` remains the last observed failure. The PR remains draft and has not been updated with this local diff. Local Git metadata is not writable in this session, so no commit or push was created. Do not merge or recommend merge until the focused changes are committed/pushed, Actions passes including the live audit and AI tests, and the isolated Docker/browser gate is rerun successfully.
+
+Staging deployment remains **NOT DEPLOYED** and production readiness remains **NOT VERIFIED**.

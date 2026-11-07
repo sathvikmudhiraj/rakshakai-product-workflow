@@ -30,18 +30,51 @@ function unitCommitted(db, unit) {
 function assertMembershipChange(db, unit, id) {
   if (unitCommitted(db, unit) || officerCommitted(db, id)) fail(409, "ACTIVE_DEPLOYMENT", "Unit membership cannot be changed while the unit or officer has an active deployment.");
 }
-function validateMember(db, unit, id, role) {
-  if (!MEMBERSHIP_ROLES.includes(role)) fail(400, "INVALID_MEMBERSHIP_ROLE", "Select a valid membership role.");
+function membershipEligibility(db, unit, id, { ignoreMemberId = null } = {}) {
+  const reasons = [];
   const user = (db.users || []).find((item) => item.id === id && item.role === "Police Officer");
   const profile = profileFor(db, id);
-  if (!user || !profile) fail(404, "OFFICER_NOT_FOUND", "A registered police officer and profile are required.");
-  if (user.active === false || profile.active === false || ["inactive", "disabled", "deactivated"].includes(normalize(user.status)) || normalize(profile.dutyStatus || profile.duty_status) === "suspended") {
-    fail(409, "OFFICER_INACTIVE", "Inactive or suspended officers cannot be added to a unit.");
+  if (!user) reasons.push({ code: "OFFICER_NOT_FOUND", status: 404, message: "This account is not registered as a police officer." });
+  if (user && !profile) reasons.push({ code: "OFFICER_PROFILE_MISSING", status: 409, message: "Police officer profile is missing; registered station and rank cannot be verified." });
+  if (user && (user.active === false || ["inactive", "disabled", "deactivated"].includes(normalize(user.status)))) {
+    reasons.push({ code: "OFFICER_INACTIVE", status: 409, message: "Police account is inactive." });
   }
-  const station = stationFor(db, stationId(unit));
-  if (!station || station.id !== stationFor(db, stationId(profile))?.id) fail(409, "STATION_MISMATCH", "Officer and response unit must belong to the same registered station.");
-  assertMembershipChange(db, unit, id);
-  return { user, profile };
+  if (profile?.active === false || normalize(profile?.dutyStatus || profile?.duty_status) === "suspended") {
+    reasons.push({ code: "OFFICER_INACTIVE", status: 409, message: "Police profile is inactive or suspended." });
+  }
+  if (unit && (unit.operational === false || ["inactive", "decommissioned", "out_of_service", "retired"].includes(normalize(unit.status)))) {
+    reasons.push({ code: "UNIT_NOT_OPERATIONAL", status: 409, message: "Response unit is not operational for membership changes." });
+  }
+  const unitStation = unit && stationFor(db, stationId(unit));
+  if (!unitStation) reasons.push({ code: "UNIT_STATION_UNREGISTERED", status: 409, message: "Response unit is not linked to a registered police station." });
+  const officerStation = profile && stationFor(db, stationId(profile));
+  if (profile && !officerStation) reasons.push({ code: "OFFICER_STATION_UNREGISTERED", status: 409, message: "Officer profile is not linked to a registered police station." });
+  if (unitStation && officerStation && unitStation.id !== officerStation.id) {
+    reasons.push({ code: "STATION_MISMATCH", status: 409, message: "Officer and response unit belong to different registered stations." });
+  }
+  if (profile) {
+    const rankId = rankIdOf(profile);
+    const rank = rankId && (db.officerRanks || []).find((item) => item.id === rankId);
+    if (!rankId || !rank) reasons.push({ code: "OFFICER_RANK_MISSING", status: 409, message: "Officer profile has no registered rank." });
+    else if (rank.active === false) reasons.push({ code: "OFFICER_RANK_INACTIVE", status: 409, message: "Officer rank is inactive." });
+  }
+  if (unit && (db.responseUnitMembers || []).some((item) => item.id !== ignoreMemberId && (item.unitId || item.unit_id) === unit.id && (item.officerUserId || item.officer_user_id) === id)) {
+    reasons.push({ code: "ALREADY_A_MEMBER", status: 409, message: "Officer already has a membership record for this response unit." });
+  }
+  if (unitCommitted(db, unit) || officerCommitted(db, id)) {
+    reasons.push({ code: "ACTIVE_DEPLOYMENT", status: 409, message: "Release the unit or officer's active deployment before changing unit membership." });
+  }
+  return { eligible: reasons.length === 0, reasons: reasons.map(({ code, message }) => ({ code, message })), firstFailure: reasons[0] || null, user, profile,
+    station: officerStation || null, rank: profile && (db.officerRanks || []).find((item) => item.id === rankIdOf(profile)) || null };
+}
+function validateMember(db, unit, id, role, options) {
+  if (!MEMBERSHIP_ROLES.includes(role)) fail(400, "INVALID_MEMBERSHIP_ROLE", "Select a valid membership role.");
+  const eligibility = membershipEligibility(db, unit, id, options);
+  if (eligibility.firstFailure) {
+    const { code, status, message } = eligibility.firstFailure;
+    fail(status, code, message);
+  }
+  return { user: eligibility.user, profile: eligibility.profile };
 }
 function validatePersonnel(db, body, user = null, profile = null) {
   const creating = !user;
@@ -101,4 +134,4 @@ function crewReadiness(db, unit) {
         : ready ? "Crew requirements satisfied" : `Missing eligible crew roles: ${missing.join(", ")}` };
 }
 
-module.exports = { MEMBERSHIP_ROLES, OPERATIONAL_ROLES, profileFor, stationFor, assertVersion, officerCommitted, unitCommitted, assertMembershipChange, validateMember, validatePersonnel, crewReadiness };
+module.exports = { MEMBERSHIP_ROLES, OPERATIONAL_ROLES, profileFor, stationFor, assertVersion, officerCommitted, unitCommitted, assertMembershipChange, membershipEligibility, validateMember, validatePersonnel, crewReadiness };

@@ -122,7 +122,9 @@ test("officer edits preserve unrelated memberships and only replace the explicit
   function reset() {
     const fixture = structuredClone(saved);
     fixture.users.push({ id: "edit-officer", name: "Assignment Officer", email: "assignments@copilot.test", role: "Police Officer" });
-    fixture.policeOfficers.push({ id: "edit-profile", userId: "edit-officer", stationId: "station_patancheru", dutyStatus: "on_duty", availabilityStatus: "available" });
+    fixture.officerRanks ||= [];
+    fixture.officerRanks.push({ id: "edit-rank", name: "Inspector", active: true });
+    fixture.policeOfficers.push({ id: "edit-profile", userId: "edit-officer", stationId: "station_patancheru", rankId: "edit-rank", dutyStatus: "on_duty", availabilityStatus: "available" });
     fixture.responseUnits.push(...["a", "b", "c"].map(letter => ({ id: `edit-unit-${letter}`, unitCode: `EDIT-${letter.toUpperCase()}`, stationId: "station_patancheru", status: "available" })));
     fixture.responseUnits.push({ id: "edit-remote-unit", unitCode: "EDIT-REMOTE", stationId: "station_bhel_ramachandrapuram", status: "available" });
     fixture.responseUnitMembers = structuredClone(initialMembers);

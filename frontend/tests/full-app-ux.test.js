@@ -43,6 +43,18 @@ test("alert queue provides operational source, status, type, and time filters", 
   assert.match(app, /alertQueueFilters/);
   assert.match(css, /\.alert-advanced-filters/);
   assert.equal(document.querySelector('#manualAlertForm [name="message"]').value, "");
+  const sendAlert = document.querySelector("#sendAlert");
+  assert.ok(sendAlert);
+  assert.equal(sendAlert.closest("details"), null);
+});
+
+test("operator queues hide demo incidents by default and keep Send Alert visible", () => {
+  assert.ok(document.querySelector("#showDemoIncidents"));
+  assert.match(app, /visibleOperatorIncidents/);
+  assert.match(app, /includeDemo: state\.showDemoIncidents/);
+  assert.equal(document.querySelector("#changePasswordForm [name='newPassword']").getAttribute("minlength"), "12");
+  assert.equal(document.querySelector("#policeUserForm [name='temporaryPassword']").getAttribute("minlength"), "12");
+  assert.doesNotMatch(css, /content:\s*"Exit"/);
 });
 
 test("notification assistant docks on compact layouts and traps keyboard focus in its dialog", () => {
@@ -61,6 +73,19 @@ test("evidence intake controls use a full-width responsive form layout", () => {
 
 test("GIS action labels wrap safely across platform font metrics", () => {
   assert.match(css, /\.gis-button-label \{[^}]*max-width: 100%[^}]*overflow-wrap: anywhere/);
+});
+
+test("operator GIS toolbar is grouped into Map, Route, and Navigate modes", () => {
+  const toolbar = document.querySelector(".gis-toolbar");
+  assert.equal(toolbar?.dataset.gisMode, "map");
+  assert.equal(document.querySelectorAll(".gis-mode-tabs [role='tab']").length, 3);
+  assert.ok(document.querySelector('[data-gis-mode-panel="map"] #streetMapLayer'));
+  assert.ok(document.querySelector('[data-gis-mode-panel="route"] #navigateMap'));
+  assert.ok(document.querySelector('[data-gis-mode-panel="navigate"] #startNavigation'));
+  assert.equal(document.getElementById("dashboardCriticalQueue"), null);
+  assert.match(app, /function setGisMode\(mode\)/);
+  assert.match(app, /confirmAction/);
+  assert.doesNotMatch(app, /window\.confirm/);
 });
 
 test.after(() => dom.window.close());

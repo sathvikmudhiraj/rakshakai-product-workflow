@@ -9,14 +9,33 @@ const browserNames = String(process.env.RELEASE_TEST_BROWSERS || "chromium,firef
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const selectedViewports = String(process.env.RELEASE_TEST_VIEWPORTS || "1920,1440,1024,768,390")
+  .split(",")
+  .map(Number)
+  .filter(Number.isFinite);
+const selectedRoles = String(process.env.RELEASE_TEST_ROLES || "Admin,Police Officer,Citizen")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 async function openNavigation(page, view) {
-  const item = page.locator(`.nav-item[data-view="${view}"]`);
+  // Several destinations, including GIS, also have a compact field-bar
+  // control. Exercise the full navigation menu explicitly so this locator
+  // remains unique across desktop and mobile layouts.
+  const item = page.locator(`#mobileMorePanel .nav-item[data-view="${view}"]`);
+  const mobileMore = page.locator("#mobileMoreButton");
+  if (!await item.isVisible() && await mobileMore.isVisible()) await mobileMore.click();
   const group = item.locator("xpath=ancestor::details[1]");
   if (await group.count() && !await group.evaluate((element) => element.open)) {
     await group.locator("summary").click();
   }
-  await item.click();
+  // The SPA changes the URL with history.pushState and initializes the target
+  // view on the next animation frame. Let Playwright finish the real click
+  // action without treating that same-document transition as a page load;
+  // verify the application's resulting view explicitly below.
+  const viewActivated = page.waitForFunction((target) => document.body.dataset.view === target, view);
+  await item.click({ noWaitAfter: true });
+  await viewActivated;
 }
 
 for (const name of browserNames) {
@@ -51,6 +70,8 @@ async function waitForUsableMapLayer(page, key, host) {
         && style.visibility !== "hidden"
         && Number.parseFloat(style.opacity || "1") > 0.01;
     });
+    // Fresh browser contexts share no HTTP cache, so each scenario refetches
+    // public tiles; allow throttled tile bursts to finish before failing.
     const status = map.querySelector(".map-status")?.textContent || "";
     return map.dataset.baseLayer === key
       && map.classList.contains("tiles-ready")
@@ -59,7 +80,7 @@ async function waitForUsableMapLayer(page, key, host) {
       && usable.length > 0
       && new RegExp(key === "satellite" ? "Satellite tiles" : "OpenStreetMap tiles", "i").test(status)
       && { key, activeLayers: layers.length, usableTiles: usable.length, status };
-  }, { key, host }, { timeout: 30000 });
+  }, { key, host }, { timeout: 60000 });
   const report = await ready.jsonValue();
   assert.equal(report.activeLayers, 1, `${key} must have exactly one visible base layer`);
   assert.ok(report.usableTiles > 0, `${key} must have a usable viewport tile`);
@@ -89,58 +110,18 @@ async function checkGisLayout(page, viewport) {
   }
 }
 
-let syntheticEvidenceMedia;
+// Deterministic synthetic evidence clip: a Playwright screen recording of an
+// animated color-block canvas, stored as a fixture. It is never a recording of
+// an operator or device. Runtime MediaRecorder cannot be used to generate it:
+// this Chromium build emits header-only WebM that no browser can demux.
+const SYNTHETIC_EVIDENCE_FIXTURE = path.resolve(__dirname, "fixtures", "synthetic-evidence.webm");
 
-async function recordSyntheticEvidence(page) {
-  // Generate a playable synthetic clip, never a recording of an operator or device.
-  return page.evaluate(async () => {
-    if (typeof HTMLCanvasElement.prototype.captureStream !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 120;
-    const stream = canvas.captureStream(10);
-    const mimeType = ["video/webm;codecs=vp8", "video/webm", "video/mp4"]
-      .find((type) => MediaRecorder.isTypeSupported(type));
-    if (!mimeType) throw new Error("No supported evidence recording format in this browser");
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks = [];
-    const stopped = new Promise((resolve, reject) => {
-      recorder.ondataavailable = (event) => chunks.push(event.data);
-      recorder.onstop = resolve;
-      recorder.onerror = reject;
-    });
-    try {
-      recorder.start();
-      const context = canvas.getContext("2d");
-      for (let i = 0; i < 5; i++) {
-        context.fillStyle = i % 2 ? "#008577" : "#ffffff";
-        context.fillRect(0, 0, 160, 120);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      recorder.stop();
-      await stopped;
-      return { bytes: Array.from(new Uint8Array(await new Blob(chunks).arrayBuffer())), mimeType };
-    } finally { stream.getTracks().forEach((track) => track.stop()); }
-  });
-}
-
-async function syntheticEvidenceFor(page) {
-  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
-  syntheticEvidenceMedia = await recordSyntheticEvidence(page);
-  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
-  const generator = await chromium.launch(launchOptions("chromium"));
-  try {
-    const generatorPage = await generator.newPage();
-    syntheticEvidenceMedia = await recordSyntheticEvidence(generatorPage);
-    if (!syntheticEvidenceMedia) throw new Error("Chromium could not generate synthetic evidence media");
-    return syntheticEvidenceMedia;
-  } finally {
-    await generator.close();
-  }
+function syntheticEvidenceMedia() {
+  return { bytes: fs.readFileSync(SYNTHETIC_EVIDENCE_FIXTURE), mimeType: "video/webm" };
 }
 
 async function checkEvidenceUpload(page, role, width, browserName) {
-  const media = await syntheticEvidenceFor(page);
+  const media = syntheticEvidenceMedia();
   await openNavigation(page, "video-evidence");
   await page.waitForFunction(() => document.querySelector("#videoLinkedIncident").options.length > 1);
   await page.locator("#videoLinkedIncident").selectOption({ index: 1 });
@@ -361,8 +342,8 @@ async function runBrowserChecks({ baseUrl, password }) {
   for (const browserName of browserNames) {
     const browser = await browserTypes[browserName].launch(launchOptions(browserName));
     try {
-    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
-      for (const role of ["Admin", "Police Officer", "Citizen"]) {
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }].filter(({ width }) => selectedViewports.includes(width))) {
+      for (const role of ["Admin", "Police Officer", "Citizen"].filter((value) => selectedRoles.includes(value))) {
         const scenarioBaseUrl = browserName === "webkit"
           ? baseUrl.replace(/^http:/, "https:")
           : baseUrl;
@@ -455,12 +436,16 @@ async function runBrowserChecks({ baseUrl, password }) {
               errors.length = 0;
             }
             await page.waitForFunction(() => document.body.dataset.view === "missing");
-            assert.match(await page.locator("#permissionMessage").innerText(), /permission/i);
+            assert.equal(await page.locator("#viewTitle").innerText(), "Missing & Found Report Center");
+            assert.equal(await page.locator('[data-panel="live-vision"]').getAttribute("class").then((value) => value.split(" ").includes("active")), false);
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
           } else {
             if (role === "Police Officer") assert.equal(await page.locator('.nav-item[data-view="settings"]').isVisible(), false);
             await openNavigation(page, "gis");
             await page.locator("#gisMap .leaflet-tile-pane").waitFor({ state: "attached" });
+            // The app defaults #gisMap to street tiles (index.html data-map-layer="streets");
+            // Let that real initial layer finish loading before switching. Otherwise
+            // Firefox may abort its still-pending OSM tile requests during the switch.
             await waitForUsableMapLayer(page, "streets", "tile.openstreetmap.org");
             await page.locator("#satelliteMapLayer").click();
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
@@ -553,9 +538,27 @@ async function runBrowserChecks({ baseUrl, password }) {
         } catch (error) {
           // Do not capture the login form or entered credentials on failure.
           console.error(`Browser scenario failed: ${browserName}, ${role}, ${viewport.width}x${viewport.height}`);
-          console.error(String(error.stack || "").split("\n").filter((line) => line.includes("browser-release.cjs")).join("\n"));
+          console.error("Full failure stack and Playwright call log:");
+          console.error(String(error.stack || error));
           console.error(JSON.stringify(await page.evaluate(({ browserErrors, failedRequests, requests, routeResponses }) => ({
             view: document.body.dataset.view,
+            activePanel: document.querySelector(".view.active")?.dataset.panel,
+            gisNavigation: (() => {
+              const item = document.querySelector('.nav-item[data-view="gis"]');
+              const map = document.querySelector("#gisMap");
+              const tiles = [...(map?.querySelectorAll(".leaflet-tile-pane img.leaflet-tile") || [])];
+              return item ? {
+                visible: Boolean(item.getClientRects().length),
+                ariaCurrent: item.getAttribute("aria-current"),
+                groupOpen: item.closest("details")?.open ?? null,
+                gisPanelActive: document.querySelector('[data-panel="gis"]')?.classList.contains("active") ?? false,
+                mapAttached: Boolean(map?.querySelector(".leaflet-tile-pane")),
+                baseLayer: map?.dataset.baseLayer || null,
+                mapClasses: map?.className || "",
+                mapStatus: map?.querySelector(".map-status")?.textContent || "",
+                tiles: tiles.map((tile) => ({ host: new URL(tile.currentSrc || tile.src).host, complete: tile.complete, width: tile.naturalWidth, height: tile.naturalHeight, connected: tile.isConnected }))
+              } : null;
+            })(),
             calculateDisabled: document.querySelector("#navigateMap")?.disabled,
             clearDisabled: document.querySelector("#clearMapRoute")?.disabled,
             clearTitle: document.querySelector("#clearMapRoute")?.title,

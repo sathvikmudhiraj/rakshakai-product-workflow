@@ -12,11 +12,15 @@ function buildContext({ snap, setRouteStart, setRouteDestination, updateNavigati
   const element = { classList: { remove() {} }, setAttribute() {} };
   const context = vm.createContext({
     state, instance: { map: { id: "gisMap", ...element } },
+    reverseGeocodeGeneration: 0,
     blockedMapSelectionTarget: () => false,
     pointFromMapEvent: (event) => event.latlng || { lat: 17.5109, lng: 78.3276 },
     snapRoutePointToRoad: snap || (async () => ({ unavailable: true })),
     setRouteStart: setRouteStart || ((point) => { state.mapNavigation.start = point; }),
     setRouteDestination: setRouteDestination || ((point) => { state.mapNavigation.destination = point; }),
+    routePointValidation: () => ({ valid: false }),
+    calculateMapRoute() {},
+    showSelectedGisLocation() {},
     updateNavigationPanel: updateNavigationPanel || (() => {}),
     renderSatelliteMap() {},
     reverseGeocodePoint: async () => null, $: () => element
@@ -28,6 +32,23 @@ function buildContext({ snap, setRouteStart, setRouteDestination, updateNavigati
   }
   return context;
 }
+
+test("normal GIS map click opens a location card and leaves route points unchanged", async () => {
+  const context = buildContext();
+  const state = context.state;
+  state.mapNavigation = { selectionMode: null, start: { lat: 17.5, lng: 78.3 }, destination: null };
+  let shown = null;
+  let routeMutations = 0;
+  context.showSelectedGisLocation = (_instance, location, options) => { shown = { location, options }; };
+  context.setRouteStart = () => { routeMutations += 1; };
+  context.setRouteDestination = () => { routeMutations += 1; };
+  assert.equal(await context.selectNavigationPointFromMap(mapClickEvent()), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.mapNavigation.start)), { lat: 17.5, lng: 78.3 });
+  assert.equal(state.mapNavigation.destination, null);
+  assert.equal(routeMutations, 0);
+  assert.equal(shown.location.source, "Map click");
+  assert.equal(shown.options.reverseGeocode, true);
+});
 
 function mapClickEvent() {
   return { latlng: { lat: 17.5109, lng: 78.3276 }, originalEvent: { preventDefault() {}, stopPropagation() {} } };
@@ -53,7 +74,7 @@ for (const kind of ["Leaflet", "native"]) {
       assert.equal(state.mapNavigation.selectionMode, null);
       assert.equal(state.mapNavigation[mode].lat, 17.5109);
       assert.equal(state.mapNavigation[mode].lng, 78.3276);
-      assert.equal(await context.selectNavigationPointFromMap(event), false);
+      assert.equal(await context.selectNavigationPointFromMap(event), true, "a normal click opens the location card");
     }
     assert.equal(selected, 2);
     assert.equal(prevented, 2);

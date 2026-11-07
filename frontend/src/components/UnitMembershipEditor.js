@@ -1,3 +1,5 @@
+import { confirmAction } from "../confirmAction.js";
+
 // The editor changes configured crew only. Incident deployments remain separate.
 export function createUnitMembershipEditor({ root, api, onChanged = () => {} }) {
   if (!root) return { load: async () => {} };
@@ -43,7 +45,11 @@ export function createUnitMembershipEditor({ root, api, onChanged = () => {} }) 
         roles.forEach((value) => role.add(new Option(value, value, false, value === member.role)));
         role.addEventListener("change", () => mutate(unitId, member, "PATCH", { role: role.value }));
         const remove = element("button", "Remove"); remove.type = "button";
-        remove.addEventListener("click", () => { if (window.confirm("Remove this configured membership? Deployment history will be preserved.")) mutate(unitId, member, "DELETE", {}); });
+        remove.addEventListener("click", async () => {
+          if (await confirmAction("Remove this configured membership? Deployment history will be preserved.", { danger: true })) {
+            mutate(unitId, member, "DELETE", {});
+          }
+        });
         const toggle = element("button", member.active === false ? "Activate membership" : "Deactivate membership"); toggle.type = "button";
         toggle.addEventListener("click", () => mutate(unitId, member, "PATCH", { active: member.active === false }));
         if (member.locked) row.append(element("p", "Locked: release active deployments before changing membership."));

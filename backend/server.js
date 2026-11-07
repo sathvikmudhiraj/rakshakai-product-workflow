@@ -2,6 +2,7 @@ const express = require("express");
 const http = require("http");
 const helmet = require("helmet");
 const { rateLimit } = require("express-rate-limit");
+const { recordHttpResponse, rateLimitSnapshot, routeGroup } = require("./services/httpObservability");
 const net = require("node:net");
 const crypto = require("node:crypto");
 const { Server } = require("socket.io");
@@ -302,21 +303,21 @@ app.use(helmet({
     directives: helmetDirectives()
   }
 }));
-app.use(generalLimiter);
 app.use((req, res, next) => {
   req.requestId = crypto.randomUUID();
   res.setHeader("X-Request-Id", req.requestId);
   if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   const started = performance.now();
-  if (process.env.NODE_ENV === "production") {
-    res.once("finish", () => {
-      if (["/api/health", "/api/live"].includes(req.path) && res.statusCode < 400) return;
+  res.once("finish", () => {
+    recordHttpResponse(res.statusCode, req.path);
+    if (process.env.NODE_ENV === "production" && !(["/api/health", "/api/live"].includes(req.path) && res.statusCode < 400)) {
       console.log(JSON.stringify({ event: "http_request", requestId: req.requestId, method: req.method,
-        route: req.route?.path || "unmatched", status: res.statusCode, durationMs: Math.round(performance.now() - started) }));
-    });
-  }
+        route: req.route?.path || routeGroup(req.path), status: res.statusCode, durationMs: Math.round(performance.now() - started) }));
+    }
+  });
   next();
 });
+app.use(generalLimiter);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (isAllowedOrigin(origin)) {
@@ -365,6 +366,7 @@ app.get("/api/health", async (req, res) => {
         reachable: gisHealth.geocoder.reachable,
         status: gisHealth.geocoder.status
       },
+      rateLimits: rateLimitSnapshot(),
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -743,6 +745,7 @@ for (const resource of ["officer-ranks", "police-beats"]) {
   app.patch(`/api/admin/${resource}/:id`, legacyHandler((req) => `/api/admin/${resource}/${req.params.id}`));
 }
 app.get("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
+app.get("/api/admin/response-units/:id/member-candidates", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/member-candidates`));
 app.post("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
 app.patch("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
 app.delete("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
@@ -824,6 +827,10 @@ app.patch("/api/police-stations/:id", legacyHandler((req) => `/api/police-statio
 app.delete("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.get("/api/response-units/nearest", legacyHandler("/api/response-units/nearest"));
 app.get("/api/sla/config", legacyHandler("/api/sla/config"));
+app.get("/api/sla/monitoring", legacyHandler("/api/sla/monitoring"));
+app.get("/api/sla/deadlines/preview", legacyHandler("/api/sla/deadlines/preview"));
+app.post("/api/sla/deadlines/reconcile", legacyHandler("/api/sla/deadlines/reconcile"));
+app.post("/api/sla/incidents/:id/classification", legacyHandler((req) => `/api/sla/incidents/${req.params.id}/classification`));
 app.patch("/api/sla/config", legacyHandler("/api/sla/config"));
 app.post("/api/sla/escalation-sweep", legacyHandler("/api/sla/escalation-sweep"));
 app.get("/api/escalation/alerts", legacyHandler("/api/escalation/alerts"));

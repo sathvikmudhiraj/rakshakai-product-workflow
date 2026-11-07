@@ -10,6 +10,7 @@ const {
   updateErssEvent,
   determineJurisdiction,
   calculateUnitRecommendations,
+  getSupervisorQueue,
   TRIAGE_STATUS_BY_ACTION
 } = require("../services/erss.service");
 const { ERSS_REALTIME_EVENT_NAMES } = require("../services/erssRealtimeEvents.service");
@@ -39,6 +40,31 @@ function erssFixture() {
   db.erssTriage = [];
   return { db, actor, unit, event: db.erssEvents[0] };
 }
+
+test("supervisor queue returns open critical events, timeouts, recent jurisdiction changes, and pending ownership transfers", async () => {
+  const { db, event } = erssFixture();
+  event.priority = "CRITICAL";
+  event.externalEventId = "EXT-CRITICAL-1";
+  db.erssEvents.push({ ...event, id: "closed_critical", triageStatus: "CLOSED" });
+  db.erssUnitRequests = [{ id: "unit-timeout", erssEventId: event.id, status: "TIMEOUT" }];
+  db.erssAssistanceRequests = [{ id: "assistance-timeout", erssEventId: event.id, status: "TIMEOUT" }];
+  db.erssJurisdictionHistory = [{
+    id: "jur-recent", erssEventId: event.id, oldJurisdictionId: "station_old", newJurisdictionId: "station_new",
+    reason: "Boundary review", changedAt: new Date().toISOString()
+  }];
+  db.erssOwnershipTransfers = [
+    { id: "transfer-pending", erssEventId: event.id, status: "TRANSFER_REQUESTED" },
+    { id: "transfer-acked", erssEventId: event.id, status: "TARGET_ACKNOWLEDGED" },
+    { id: "transfer-complete", erssEventId: event.id, status: "OWNERSHIP_TRANSFERRED" }
+  ];
+
+  const queue = await getSupervisorQueue(db);
+  assert.deepEqual(queue.criticalEvents.map((item) => item.id), [event.id]);
+  assert.equal(queue.unitTimeouts.length, 1);
+  assert.equal(queue.assistanceTimeouts.length, 1);
+  assert.deepEqual(queue.jurisdictionDisputes.map((item) => item.id), ["jur-recent"]);
+  assert.deepEqual(queue.ownershipTransfers.map((item) => item.id), ["transfer-pending", "transfer-acked"]);
+});
 
 test("ERSS location confidence only accepts high, medium, low and stores lowercase", async () => {
   const { db, actor } = erssFixture();
