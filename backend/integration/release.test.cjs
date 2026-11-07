@@ -170,7 +170,11 @@ async function assignmentFixture(suffix) {
 test("real PostgreSQL concurrent assignment produces one winner and one audit/event", async () => {
   const { incident, unit } = await assignmentFixture("same-incident");
   const police = await login("Police Officer");
-  const responses = await Promise.all([admin, police].map((cookie) => request(`/api/incidents/${incident.id}/assign-unit`, { cookie, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })));
+  const forbidden = await request(`/api/incidents/${incident.id}/assign-unit`, { cookie: police, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } });
+  assert.equal(forbidden.status, 403, "Police Officer cannot dispatch a unit");
+  const secondAdmin = await login("Admin");
+  assert.notEqual(secondAdmin, admin, "concurrent dispatch uses independent sessions");
+  const responses = await Promise.all([admin, secondAdmin].map((cookie) => request(`/api/incidents/${incident.id}/assign-unit`, { cookie, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })));
   assert.deepEqual(responses.map((r) => r.status).sort(), [200, 409]);
   const db = await readDatabase();
   assert.equal(db.incidents.find((item) => item.id === incident.id).assignedUnitId, unit.id);
