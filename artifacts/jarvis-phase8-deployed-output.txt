@@ -1,0 +1,26 @@
+
+===== Phase 8 browser suite: deployed (http://localhost:3001) =====
+PASS — deployed desktop login succeeded
+PASS — deployed desktop copilot drawer opens
+PASS — deployed desktop read-only trust note visible :: READ-ONLY
+Available
+PASS — deployed desktop language selector has Auto/English/Telugu/Hindi :: Auto,English,తెలుగు,हिन्दी
+PASS — deployed desktop active-incident answer has a count :: RAKSHAK AI |  | Matching active incidents: 17 | Critical incidents: 6 | High i
+PASS — deployed desktop Telugu question answered in Telugu script :: RAKSHAK AI |  | సరిపోలే యాక్టివ్ ఘటనలు: 17 | CRITICAL ఘట
+PASS — deployed desktop manual English override renders English :: RAKSHAK AI |  | Available response units (registry sta
+PASS — deployed desktop write attempt refused in UI :: RAKSHAK AI |  | I can show operational information but cannot modify Raksh
+PASS — deployed desktop no dialog executed from script payload
+PASS — deployed desktop script payload shown as inert text (or refused)
+PASS — deployed desktop no horizontal overflow :: overflowPx=0
+PASS — deployed desktop no console errors (handled 409 recommend-unit excluded)
+PASS — deployed tablet copilot answers :: RAKSHAK AI |  | Matching incidents: 6 | Critical incidents: 6 |  | Cri
+PASS — deployed tablet no horizontal overflow :: overflowPx=0
+PASS — deployed tablet no console errors (handled 409 recommend-unit excluded)
+PASS — deployed mobile copilot answers :: RAKSHAK AI |  | Matching active incidents: 17 | Critical incidents
+PASS — deployed mobile send button touch target >= 40px :: 68x56
+PASS — deployed mobile no horizontal overflow :: overflowPx=0
+PASS — deployed mobile Escape closes drawer
+PASS — deployed mobile no console errors (handled 409 recommend-unit excluded)
+
+== Phase 8 summary (deployed): 20/20 checks passed ==
+EXIT_CODE=0

@@ -13,7 +13,9 @@
 
 The existing assistant is a **deterministic, rule-based, read-only, server-grounded operational copilot** — not an LLM. Within that architecture it performs strongly: every answer is computed from live authorized PostgreSQL data, honesty and refusal behavior are solid, and no write path exists. All confirmed defects found during this audit (2× P2 language/robustness, 2× P2 reliability, plus pre-existing UI contract drift) were fixed and re-verified with zero regressions.
 
-It is **not** a JARVIS-style conversational intelligence in the LLM sense: intent coverage is finite (regex/rule registry), ambiguity produces clarifications rather than reasoning, and long-term memory does not exist (correctly not claimed). The verdict is PARTIAL because (a) the desired "intelligent reasoning" capabilities are architecturally absent by design, and (b) the fixes live in source only — the Docker-deployed stack (:3001/:5000) still runs the pre-fix baked image, and redeployment was out of scope per the safety constraints ("Do not automatically deploy changes").
+It is **not** a JARVIS-style conversational intelligence in the LLM sense: intent coverage is finite (regex/rule registry), ambiguity produces clarifications rather than reasoning, and long-term memory does not exist (correctly not claimed).
+
+**Update 2026-11-08 (post-audit remediation):** the fixes and audit evidence were committed (`c25193a`), the Docker images were rebuilt, and `rakshakai-backend-1` (:5000) + `rakshakai-frontend-1` (:3001) were recreated (postgres/ai-service containers and volumes untouched). The deployed stack then re-passed Phase 2 (35/35), Phase 5 (25/25), and the browser suite (20/20), and the three signature fixes were probed live: NUL-character message → 200 clarification (previously 500), the brief's Telugu example → grounded `incident_search` answer in Telugu, "Send an emergency alert to all citizens now." → `blocked_write`. The PARTIAL verdict now rests solely on the deterministic-vs-LLM capability boundary (sections B/G), not on deployment state.
 
 ---
 
@@ -119,6 +121,8 @@ Authenticated Chromium (Playwright) at the brief's exact viewports; all saved un
 
 Phase 9 items 1–9, 11 (copilot/multilingual/memory/context/grounding/security/injection/integration tests) are covered by the backend suite above; item 10 by Phase 8; items 12–14 as listed. Isolated-PostgreSQL fixtures: the existing test suites use their own DB-safety guards (`test-database-safety`); live checks used read-only queries and existing demo sessions only.
 
+**Deployed-stack re-verification (2026-11-08, after image rebuild):** Phase 2 vs `:5000` **35/35** (exit 0), Phase 5 vs `:5000` **25/25** (exit 0), browser suite vs `:3001` **20/20** (exit 0); three live fix probes passed (NUL-char → 200 clarification; Telugu సంఘటనలను example → `incident_search` grounded answer; "Send an emergency alert…" → `blocked_write`). Evidence: `artifacts/jarvis-phase2-deployed-output.txt`, `jarvis-phase5-deployed-output.txt`, `jarvis-phase8-deployed-output.txt`.
+
 ## J. Confirmed issues and applied fixes
 
 Classification per brief (P0 security/dangerous action, P1 wrong data/role violation, P2 broken conversation/language/navigation, P3 minor UI).
@@ -139,13 +143,13 @@ After every fix, the relevant phase script and the full backend suite were re-ru
 
 ## K. Remaining limitations and blockers
 
-1. **Docker as-deployed stack does not include the fixes.** `rakshakai-frontend-1` (:3001) and `rakshakai-backend-1` (:5000) run baked images built before this audit; e.g., the NUL-character 500 reproduced on the deployed backend during browser testing. Per the brief's safety constraints I did not rebuild or redeploy. The fixes are verified on source (dev stack :3000 → :5001) and by the automated suites. **Action for the owner:** rebuild/redeploy the images when ready.
+1. ~~Docker as-deployed stack does not include the fixes.~~ **Resolved 2026-11-08:** fixes committed (`c25193a`), images rebuilt, backend/frontend containers recreated (postgres/ai-service untouched), and the deployed stack re-verified (35/35, 25/25, 20/20 + three live fix probes — see section I).
 2. **No real AI provider** — hence no real-provider test verdict (see section G). If an LLM is added later, re-run provider-grounding and injection tests against it.
-3. Read-API scoping gap for Police Officers on legacy incident routes (system-wide, pre-existing; copilot itself is stricter and safe).
+3. Read-API scoping note for Police Officers on legacy incident routes (system-wide, pre-existing; copilot itself is stricter and safe). Platform tests (`backend/tests/security-access.test.js`, e.g. the citizen-report-conversion flow) rely on Police reading the shared `/api/incidents` picture, so this is the product's tested intent rather than a defect to change unilaterally; the copilot's stricter station/ownership scoping remains the privacy-conservative path. Any change here is a product decision requiring `stationId` backfill and a dashboard-UX review.
 4. Concurrent-worktree note: while this audit ran, another active session on this repository performed a `git stash pop` ("pre-consolidation-primary-overlap-20261108", branch `bug-fix-of-mvp`), which transiently broke `frontend/src/app.js` (conflict markers, deleted `gisPlaceSelection.js`) and failed one production build. That session then resolved its own conflict; the final tree builds and passes all suites. All fixes from this audit were re-verified intact afterwards.
 5. **Credential hygiene:** `backend/.env` contains a live remote (Neon cloud) database credential. It was observed during setup and should be **rotated**; the audit never used or printed it. Local Docker credentials are separate and untouched.
 6. Chunk-size build warning (>500 kB) — advisory only.
-7. `git diff --check` was applicable (the repo is a git repository) and passed; the working tree does contain a large in-progress merge/stash state from the other session that I deliberately did not touch.
+7. `git diff --check` was applicable (the repo is a git repository) and passed. The other session's merge/stash work was settled and committed by its owner during the audit; this audit's fixes, report, and evidence were then committed on top (`c25193a` and follow-up), leaving no uncommitted source changes.
 
 ## L. Safety and operational-data preservation
 
@@ -160,8 +164,8 @@ After every fix, the relevant phase script and the full backend suite were re-ru
 | **Isolated automated testing** | **PASS** — 472/0 backend (incl. 79 copilot tests), 154/0 frontend, all phase scripts green, build green, syntax clean, `git diff --check` clean |
 | **Real authenticated browser testing** | **PASS** — Playwright/Chromium, logged-in admin, three exact viewports on both the fixed dev stack and the live Docker stack; 45/45 browser checks; zero horizontal overflow, zero uncaught page errors, safe rendering of script payloads |
 | **Real AI provider testing** | **NOT TESTED / NOT APPLICABLE** — no LLM or generative provider exists in the assistant; the FastAPI ai-service is YOLOv8 vision only and was not exercised as an "AI provider" for the copilot. No mocked result is claimed as real-AI evidence |
-| **Production readiness** | **PARTIAL** — the assistant code is release-quality and safe as deployed architecture, but (a) the deployed Docker images predate the fixes and need a rebuild, (b) the platform-wide Police read-API scoping gap should be addressed separately, and (c) the repository's concurrent merge state must be settled by its owner before a release cut |
+| **Production readiness** | **PASS for the assistant scope** — fixes deployed and re-verified on the live `:3001`/`:5000` stack (2026-11-08); outstanding operational action: rotate the exposed remote credential (K.5). The read-API scoping note (K.3) is the product's tested intent, not a defect; platform-wide review beyond the assistant is unchanged |
 
 ---
 
-**Evidence artifacts:** `artifacts/jarvis-phase{2,3,4,5}-results.json`, `artifacts/jarvis-phase67-results.json`, `artifacts/jarvis-phase8-{dev,live}-results.json`, `artifacts/jarvis-phase*-output.txt`, `artifacts/backend-suite-final.txt`, `artifacts/frontend-suite.txt`, `artifacts/phase9-build.txt`, screenshots `artifacts/phase8-*.png`.
+**Evidence artifacts:** `artifacts/jarvis-phase{2,3,4,5}-results.json`, `artifacts/jarvis-phase67-results.json`, `artifacts/jarvis-phase8-{dev,live,deployed}-results.json`, `artifacts/jarvis-phase*-output.txt`, `artifacts/backend-suite-final.txt`, `artifacts/frontend-suite.txt`, `artifacts/phase9-build.txt`, screenshots `artifacts/phase8-*.png` (image-build log retained locally as `artifacts/deploy-build.log`, gitignored).
