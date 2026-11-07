@@ -22,6 +22,22 @@ test("destructive integration configuration rejects application and remote datab
   assert.doesNotThrow(() => assertSafeTestDatabase(approved, { scoped: true }));
 });
 
+test("release integration accepts only its disposable Compose database alias", () => {
+  const releaseUrl = 'postgresql://release_test:random-test-secret@postgres:5432/rakshakai_test_release';
+  const releaseScoped = new URL(releaseUrl);
+  releaseScoped.searchParams.set('options', '-csearch_path=rakshakai_test_release');
+  const release = {
+    NODE_ENV: 'test', TEST_DATABASE_URL: releaseUrl,
+    DATABASE_URL: releaseScoped.toString(), RELEASE_TEST_PASSWORD: 'random-test-secret',
+    RAKSHAKAI_TEST_DATABASE_NAME: 'rakshakai_test_release',
+    RAKSHAKAI_TEST_SCHEMA: 'rakshakai_test_release'
+  };
+  assert.doesNotThrow(() => assertSafeTestDatabase(release, { scoped: true }));
+  assert.throws(() => assertSafeTestDatabase({ ...release, RELEASE_TEST_PASSWORD: 'wrong' }, { scoped: true }), /loopback/);
+  assert.throws(() => assertSafeTestDatabase({ ...release, TEST_DATABASE_URL: releaseUrl.replace('rakshakai_test_release', 'production') }, { scoped: true }), /loopback/);
+  assert.throws(() => assertSafeTestDatabase({ ...release, TEST_DATABASE_URL: releaseUrl.replace('postgres:5432', 'remote.example:5432') }, { scoped: true }), /loopback/);
+});
+
 test("runner rejects an inherited DATABASE_URL before connecting", () => {
   const child = spawnSync(process.execPath, [path.join(__dirname, "../scripts/run-tests-isolated.js")], {
     env: { ...process.env, NODE_ENV: "test", DATABASE_URL: "postgresql://remote.example/production", TEST_DATABASE_URL: "" }, encoding: "utf8"

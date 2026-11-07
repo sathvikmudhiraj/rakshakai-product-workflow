@@ -5,7 +5,13 @@ function assertSafeTestDatabase(env = process.env, { scoped = false } = {}) {
   let url;
   try { url = new URL(env.TEST_DATABASE_URL); } catch { throw new Error("Invalid TEST_DATABASE_URL"); }
   const name = decodeURIComponent(url.pathname.slice(1));
-  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !/^rakshakai_test_[a-z0-9_]+$/.test(name) || env.RAKSHAKAI_TEST_DATABASE_NAME !== name) {
+  const isolatedComposeAlias = url.hostname === 'postgres'
+    && name === 'rakshakai_test_release'
+    && url.username === 'release_test'
+    && !!env.RELEASE_TEST_PASSWORD
+    && url.password === env.RELEASE_TEST_PASSWORD
+    && env.RAKSHAKAI_TEST_SCHEMA === 'rakshakai_test_release';
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !(['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || isolatedComposeAlias) || !/^rakshakai_test_[a-z0-9_]+$/.test(name) || env.RAKSHAKAI_TEST_DATABASE_NAME !== name) {
     throw new Error("Test database must be explicitly named, disposable, and on loopback");
   }
   if ([...url.searchParams.keys()].some((key) => !['sslmode'].includes(key))) throw new Error("Unsupported TEST_DATABASE_URL option");
