@@ -483,6 +483,14 @@ async function runBrowserChecks({ baseUrl, password }) {
             await page.locator("#navigateMap").click();
             assert.equal((await routeResponse).status(), 200);
             await page.waitForFunction(() => !document.querySelector("#recalculateRoute").disabled);
+            await page.locator("#clearMapRoute").evaluate((button) => {
+              window.releaseClearRouteEvents = [];
+              for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                button.addEventListener(type, (event) => {
+                  window.releaseClearRouteEvents.push({ type, disabled: button.disabled, trusted: event.isTrusted });
+                }, { capture: true });
+              }
+            });
             await page.locator("#clearMapRoute").click();
             await page.waitForFunction(() => !document.querySelector("#navigateMap").disabled && document.querySelector("#clearMapRoute").disabled);
             assert.equal(await page.locator("#navigateMap").isDisabled(), false);
@@ -559,7 +567,8 @@ async function runBrowserChecks({ baseUrl, password }) {
             failedRequests,
             recentRequests: requests.slice(-20),
             routeResponses,
-            navigationStatus: document.querySelector("#navigationStatus")?.textContent,
+            clearRouteEvents: window.releaseClearRouteEvents || [],
+            navigationStatus: document.querySelector("#mapNavigationStatus")?.textContent,
             map: (() => {
               const map = document.querySelector("#gisMap");
               if (!map) return null;
