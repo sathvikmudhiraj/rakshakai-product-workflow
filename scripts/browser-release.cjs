@@ -30,9 +30,12 @@ function launchOptions(name) {
 }
 
 async function waitForUsableMapLayer(page, key, host) {
-  await page.waitForFunction(({ key, host }) => {
+  const ready = await page.waitForFunction(({ key, host }) => {
     const map = document.querySelector("#gisMap");
     const button = document.querySelector(key === "satellite" ? "#satelliteMapLayer" : "#streetMapLayer");
+    if (!map || !button) return false;
+    const layers = [...map.querySelectorAll(".leaflet-tile-pane > .leaflet-layer")]
+      .filter((layer) => getComputedStyle(layer).display !== "none" && Number.parseFloat(getComputedStyle(layer).opacity || "1") > 0.01);
     const tiles = [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")];
     const usable = tiles.filter((tile) => {
       const rect = tile.getBoundingClientRect();
@@ -48,18 +51,16 @@ async function waitForUsableMapLayer(page, key, host) {
         && style.visibility !== "hidden"
         && Number.parseFloat(style.opacity || "1") > 0.01;
     });
+    const status = map.querySelector(".map-status")?.textContent || "";
     return map.dataset.baseLayer === key
       && map.classList.contains("tiles-ready")
       && button?.getAttribute("aria-pressed") === "true"
-      && usable.length > 0;
+      && layers.length === 1
+      && usable.length > 0
+      && new RegExp(key === "satellite" ? "Satellite tiles" : "OpenStreetMap tiles", "i").test(status)
+      && { key, activeLayers: layers.length, usableTiles: usable.length, status };
   }, { key, host }, { timeout: 30000 });
-  const report = await page.locator("#gisMap").evaluate((map, { key, host }) => {
-    const layers = [...map.querySelectorAll(".leaflet-tile-pane > .leaflet-layer")]
-      .filter((layer) => getComputedStyle(layer).display !== "none" && Number.parseFloat(getComputedStyle(layer).opacity || "1") > 0.01);
-    const tiles = [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")]
-      .filter((tile) => tile.src.includes(host) && tile.complete && tile.naturalWidth > 0 && tile.naturalHeight > 0);
-    return { key, activeLayers: layers.length, usableTiles: tiles.length, status: map.querySelector(".map-status")?.textContent || "" };
-  }, { key, host });
+  const report = await ready.jsonValue();
   assert.equal(report.activeLayers, 1, `${key} must have exactly one visible base layer`);
   assert.ok(report.usableTiles > 0, `${key} must have a usable viewport tile`);
   assert.match(report.status, new RegExp(key === "satellite" ? "Satellite tiles" : "OpenStreetMap tiles", "i"));
@@ -409,9 +410,13 @@ async function runBrowserChecks({ baseUrl, password }) {
         const page = await context.newPage();
         const errors = [];
         const requests = [];
+        const routeResponses = [];
         const failedRequests = [];
         page.on("pageerror", (error) => errors.push(error.message));
         page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+        page.on("response", (response) => {
+          if (new URL(response.url()).pathname === "/api/maps/route") routeResponses.push({ status: response.status(), url: response.url() });
+        });
         page.on("requestfailed", (request) => failedRequests.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText || "failed" }));
         await page.addInitScript(() => {
           window.releaseCspViolations = [];
@@ -541,13 +546,20 @@ async function runBrowserChecks({ baseUrl, password }) {
           // Do not capture the login form or entered credentials on failure.
           console.error(`Browser scenario failed: ${browserName}, ${role}, ${viewport.width}x${viewport.height}`);
           console.error(String(error.stack || "").split("\n").filter((line) => line.includes("browser-release.cjs")).join("\n"));
-          console.error(JSON.stringify(await page.evaluate(({ browserErrors, failedRequests }) => ({
+          console.error(JSON.stringify(await page.evaluate(({ browserErrors, failedRequests, requests, routeResponses }) => ({
             view: document.body.dataset.view,
             calculateDisabled: document.querySelector("#navigateMap")?.disabled,
+            clearDisabled: document.querySelector("#clearMapRoute")?.disabled,
+            clearTitle: document.querySelector("#clearMapRoute")?.title,
+            routeSummary: document.querySelector("#routeSummary")?.textContent,
+            routePointCards: document.querySelector("#routePointCards")?.textContent,
             locationDisabled: document.querySelector("#useMyLocation")?.disabled,
             cspDirectives: window.releaseCspViolations,
             browserErrors,
             failedRequests,
+            recentRequests: requests.slice(-20),
+            routeResponses,
+            navigationStatus: document.querySelector("#navigationStatus")?.textContent,
             map: (() => {
               const map = document.querySelector("#gisMap");
               if (!map) return null;
@@ -578,7 +590,7 @@ async function runBrowserChecks({ baseUrl, password }) {
               hasStream: Boolean(document.querySelector("#liveVisionVideo")?.srcObject),
               hidden: document.hidden
             }
-          }), { browserErrors: errors, failedRequests }).catch(() => ({ pageUnavailable: true })), null, 2));
+          }), { browserErrors: errors, failedRequests, requests, routeResponses }).catch(() => ({ pageUnavailable: true })), null, 2));
           throw error;
         } finally { await context.close(); }
       }
