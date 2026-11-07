@@ -1,0 +1,613 @@
+
+> rakshakai-backend@1.0.0 test
+> node scripts/run-tests-isolated.js
+
+✔ PostgreSQL AI persistence keeps concurrent records outside the stale AI snapshot (9.8423ms)
+✔ PostgreSQL AI persistence updates only the AI request's intended records (52.2853ms)
+✔ missing-object matcher rejects unrelated high-confidence detections (13.2091ms)
+✔ missing-object matcher rejects same broad category with conflicting attributes (1.2849ms)
+✔ missing-object matcher requires token or category overlap before returning a candidate (13.9705ms)
+✔ missing-object matcher returns possible observations for genuine multi-signal overlap (4.7049ms)
+RakshakAI Backend running at http://localhost:56887/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ backend sends AI_SERVICE_API_KEY to the AI service (3055.8013ms)
+✔ missing required AI key configuration is detected at startup (6.4436ms)
+✔ production refuses the AI authentication development bypass (4.1834ms)
+✔ AI-service timeout is handled safely (720.0578ms)
+✔ multiple detections preserve labels, confidence, and boxes (42.3684ms)
+✔ citizen cannot use AI inference (1224.5478ms)
+✔ police and admin are permitted to use AI inference (2142.2175ms)
+✔ dedicated AI-frame limiter allows the intended Live Vision sampling rate (1415.7304ms)
+✔ dedicated AI-frame limiter still limits abusive request rates (3367.4211ms)
+RakshakAI Backend running at http://localhost:61460/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ encryptSecret stores versioned AES-256-GCM envelope, not plaintext (46.4588ms)
+✔ decryptSecret round-trips with the correct key (15.9054ms)
+✔ decryptSecret fails safely with a wrong key (4.1892ms)
+✔ decryptSecret fails safely on tampered ciphertext (1.5555ms)
+✔ two encryptions of the same password produce different ciphertext (random IV) (2.391ms)
+✔ encryptCameraSecrets is idempotent and never double-encrypts (5.5462ms)
+✔ encryptCameraSecrets rejects unknown enc: envelope versions safely (0.7339ms)
+✔ camera secret field list covers URLs and credential fields (0.6586ms)
+✔ production startup without CAMERA_CREDENTIAL_ENCRYPTION_KEY fails fast (1.4999ms)
+✔ malformed CAMERA_CREDENTIAL_ENCRYPTION_KEY is rejected in every environment (1.3306ms)
+✔ hex and base64 32-byte keys are accepted (1.2171ms)
+✔ development without a key permits demo config but refuses credential storage (0.848ms)
+✔ cameraSources repository upsert serializes only encrypted credentials (2.6177ms)
+✔ PostgreSQL repository refuses plaintext credentials without a key (1.7133ms)
+✔ legacy plaintext camera credentials are migrated to encrypted storage (96.7972ms)
+✔ legacy migration is idempotent across repeated reads (45.7537ms)
+✔ GET camera sources never exposes plaintext or encrypted credential material (401.0896ms)
+✔ Police Officer camera listing receives safe metadata only (83.6017ms)
+✔ Admin create stores encrypted credentials and returns safe metadata (150.5148ms)
+✔ PATCH without password preserves the stored secret; PATCH with a new password replaces it securely (185.3172ms)
+✔ Explicit clearCredentials removes stored credentials only when requested (87.7713ms)
+✔ Citizen remains blocked from camera source APIs (152.2819ms)
+✔ Police Officer cannot create or configure camera sources (53.363ms)
+✔ Demo cameras keep working without credentials (120.8648ms)
+✔ Audit logs never contain camera secrets or encrypted material (23.3952ms)
+✔ migration utility encrypts legacy plaintext, is idempotent and reports counts only (1533.018ms)
+✔ healthy camera remains ONLINE (8.9891ms)
+✔ missing heartbeat is OFFLINE (0.5347ms)
+✔ reachable camera without stream is NO_SIGNAL (0.5816ms)
+✔ connected stream without frames is NO_VIDEO_FRAMES (0.6359ms)
+✔ low FPS needs configured confirmation samples (42.2526ms)
+✔ high latency, blur, dark and storage failures remain distinct (0.7209ms)
+✔ black or obstructed video alone does not claim tampering (0.547ms)
+✔ recent activity followed by obstruction is tamper suspected (0.5258ms)
+✔ large camera angle displacement is tamper suspected (0.5031ms)
+✔ critical camera offline is escalated to CRITICAL (3.3318ms)
+✔ a health episode creates one alert and recovery resolves it without deleting history (1.6993ms)
+✔ acknowledgement keeps an active health alert unresolved (0.7757ms)
+✔ maintenance suppresses failure alert escalation while preserving telemetry (1.2444ms)
+✔ failure preservation keeps metadata only and never invents camera bytes (2.5081ms)
+﹣ CCTNS PostgreSQL persistence keeps unrelated operational data and rejected-link audits (3.5231ms) # SKIP
+✔ CCTNS simulator classifies global vehicle and crime searches within station scope (13.904ms)
+✔ CCTNS resource access is server-side and does not grant Citizen access (11.0356ms)
+✔ CCTNS structured person and property filters and grouped counts remain scoped (3.2151ms)
+✔ CCTNS incident links require human confirmation and persist safe audited metadata (7.112ms)
+✔ CCTNS linking enforces the authorized incident station scope (2.843ms)
+✔ CCTNS details and unlinking do not expose or modify links outside incident scope (5.343ms)
+✔ CCTNS adapter failure is isolated from operational records (1.3848ms)
+✔ CCTNS linking requires a boolean confirmation and a bounded text reason (2.3005ms)
+✔ CCTNS rejects malformed pagination and does not broaden unsupported queries (2.77ms)
+✔ unit query API uses registry counts, stale GPS and selected-incident timeout without mutations (909.1772ms)
+✔ CCTNS simulator counts and tracking review follow-ups use authenticated read-only API (799.2334ms)
+▶ officer edits preserve unrelated memberships and only replace the explicit primary assignment
+  ✔ preserves all memberships for {"name":"Updated Officer"} (316.96ms)
+  ✔ preserves all memberships for {"email":"updated@copilot.test"} (373.7285ms)
+  ✔ preserves all memberships for {"unitId":"EDIT-A"} (216.418ms)
+  ✔ preserves all memberships for {"unitId":"edit-unit-a"} (62.8889ms)
+  ✔ reassignment preserves secondary and other officers' memberships (91.2607ms)
+  ✔ explicit clear removes only the displayed primary membership (77.2498ms)
+  ✔ active unit deployment blocks membership changes without mutating the crew (58.5173ms)
+  ✔ directory reports current unit deployment and explicit investigation separately (41.3272ms)
+  ✔ rejects invalid assignment atomically: {"unitId":"NOT-A-UNIT"} (41.2094ms)
+  ✔ rejects invalid assignment atomically: {"unitId":"EDIT-REMOTE"} (59.5136ms)
+  ✔ rejects invalid assignment atomically: {"station":"BHEL / Ramachandrapuram Demo Station"} (30.2447ms)
+  ✔ rejects invalid assignment atomically: {"unitId":"EDIT-C","dutyStatus":"invalid"} (54.6175ms)
+✔ officer edits preserve unrelated memberships and only replace the explicit primary assignment (1509.2139ms)
+✔ Admin and Police Officer can query while Citizen and unauthenticated clients cannot (341.4562ms)
+✔ fake frontend role is ignored and write prompts do not mutate operational data (124.4954ms)
+✔ API collection queries ignore selected context but never trust client scope or role (398.1794ms)
+✔ officer station API uses server actor scope despite spoofed role/station and persists no assignment changes (689.6465ms)
+✔ Police Management joins canonical assignments and reports distinct assigned units (67.1275ms)
+✔ API localizes output, preserves Auto conversation language, and audits language metadata without prompts (151.0779ms)
+✔ conversation history persists across requests and is user-scoped (639.9027ms)
+✔ conversation history survives simulated restart (JSON mode) (230.8171ms)
+✔ history endpoint reloads a saved conversation after its in-memory cache is cleared (141.0778ms)
+✔ 50-exchange limit is enforced (100 messages max) (5242.8455ms)
+✔ Citizen cannot access Copilot history endpoint (408.3361ms)
+✔ Unauthenticated requests to history endpoint are rejected (107.4561ms)
+✔ New conversation starts fresh when no conversationId provided (262.0772ms)
+✔ Language preference persists in conversation (182.1918ms)
+✔ Duplicate messages from retries are not created (300.3839ms)
+✔ Different users have isolated conversation histories (275.0588ms)
+✔ Conversation metadata includes page context and language (69.8173ms)
+✔ English, Telugu, Roman Telugu, Hindi, Roman Hindi, and mixed incident queries resolve one canonical intent (40.9057ms)
+✔ required native-script and Romanized active-incident count prompts detect language and return the factual count (3.3163ms)
+✔ mixed Telugu-English unit roster question only returns officers in the referenced unit (7.183ms)
+✔ technical identifiers remain extractable in every supported language (3.4902ms)
+✔ incident lookup, camera health, and available units understand localized and Roman forms (20.8642ms)
+✔ manual language controls output independently from input language (2.1788ms)
+✔ Auto preserves recent conversation language for ambiguous follow-ups (1.1771ms)
+✔ ambiguous requests use localized clarification instead of an unrelated dashboard summary (4.4257ms)
+✔ multilingual normalization is deterministic and does not alter identifiers (4.9424ms)
+✔ mutation attempts are refused without data changes in every supported form (2.4803ms)
+✔ sensitive-field requests are refused in English, Telugu, Hindi, and Roman mixed input (1.4393ms)
+✔ factual operational answers expose only authoritative source IDs and real freshness (0.99ms)
+﹣ SQL officer/user assignments retain distinct row and user IDs for scoped Copilot counts (2.2869ms) # SKIP
+✔ police profiles separate active unit, hybrid support and investigation, without duplicate deployments (15.4809ms)
+✔ police account aggregate queries use the authorized roster and never response-unit counts (31.7156ms)
+✔ police account and officer queries remain read-only and citizen-scoped (2.5623ms)
+✔ officer intent variants distinguish active, inactive, available, unit and jurisdiction queries (18.9134ms)
+✔ confirmed Roman Telugu phrase resolves the canonical officer intent and Patancheru station (3.0082ms)
+✔ English, Roman Telugu, Telugu script and mixed Patancheru station variants use the same roster (35.0222ms)
+✔ BHEL and Ramachandrapuram aliases resolve only the actual BHEL/RCP station (8.0429ms)
+✔ generic station questions infer a sole authorized station or ask for clarification (11.3027ms)
+✔ station/RBAC scope applies before counts, details and specific officer lookups (7.7232ms)
+✔ unknown/ambiguous stations never silently fall back to all officers (2.0126ms)
+✔ missing duty status stays unknown while account activity defaults to active (3.6019ms)
+✔ officer routing is distinct from response units, remains read-only and supports Auto Telugu (7.1561ms)
+✔ incident responder questions distinguish explicit deployments, support and investigation (55.6092ms)
+✔ record-backed officer, incident, unit and camera lookups include freshness (16.7098ms)
+✔ comparison, investigation, tracking confidence, SLA and dashboard intents use current records (15.9791ms)
+✔ recommendations remain informational and provide navigation only (1.6615ms)
+✔ conversational wording does not intercept explicit operational requests (2.783ms)
+✔ conversational evidence follow-up excludes incidents outside the officer's scope (9.2119ms)
+✔ all operational mutation requests are blocked without changing data (2.2034ms)
+✔ read-only registry contains approved queries and no mutation or generic data access (4.091ms)
+✔ stored prompt injection is treated as data and sensitive fields are removed (2.9994ms)
+✔ conversation and validated page context resolve follow-up references (3.2705ms)
+✔ missing entities and absent fields are explicit rather than invented (3.2868ms)
+✔ incident counts and lists override selection and conversation context without mutation (18.7266ms)
+✔ aggregate and selected incident answers share server actor scope; totals are not truncated (5.5028ms)
+✔ natural pending queries and camera follow-up preserve page and conversation context (17.5942ms)
+✔ plural incident follow-ups retain the authorized result set and free-unit counts are explicit (6.9436ms)
+✔ CCTNS pending case counts use simulator status and operator station scope (2.92ms)
+✔ tracking pending reviews count explicit candidate statuses and preserve session follow-up (5.2371ms)
+✔ unit totals ignore incident context and distinguish overlapping categories (66.6069ms)
+✔ all, available, busy, offline and stale lists represent distinct recorded states (22.7481ms)
+✔ Copilot eligibility is the canonical live dispatch snapshot and excludes committed units (8.4206ms)
+✔ selected recommendations distinguish missing, timeout, and no eligible units (5.9703ms)
+✔ unit questions remain read-only and Citizen receives no unit details (4.9633ms)
+✔ Telugu totals retain the real unit count (9.97ms)
+review status 200 alert id alt_021fd5160ed8
+alerts in db after review: ["alt_021fd5160ed8"]
+ack status 200 body {"alert":{"id":"alt_021fd5160ed8","incidentId":null,"linkedIncidentId":null,"sourceObservationId":"OBS_cd245eecfe22","sourceCameraId":"cam_dbg","title":"Confirmed camera observation: person","threatTy
+✔ debug rtsp acknowledge (614.85ms)
+✔ OSRM is profile-gated and backend has no hard OSRM dependency (4.6729ms)
+✔ normal services do not require OSRM data and PostgreSQL remains persistent (0.6939ms)
+✔ Compose base is shared and environment-specific settings live in overrides (3.4512ms)
+✔ Docker PostgreSQL import uses sanitized example data instead of runtime db.json (0.7281ms)
+✔ Docker evidence storage keeps objects outside PostgreSQL and build contexts (1.0842ms)
+✔ AI URL and API key remain wired between backend and AI service (0.9521ms)
+✔ OSRM validates prepared MLD files and never downloads map data (0.9351ms)
+✔ JSON import reports additive ID-based counters without logging records or seed secrets (1.076ms)
+✔ backend Docker image preserves the repository-relative canonical CSP import (2.1739ms)
+✔ supervisor queue returns open critical events, timeouts, recent jurisdiction changes, and pending ownership transfers (15.6216ms)
+✔ ERSS location confidence only accepts high, medium, low and stores lowercase (16.4322ms)
+✔ ERSS dispatch creates one canonical incident and never writes an ERSS id into a response unit FK (7.4507ms)
+✔ ERSS triage actions map to valid workflow statuses and forwarding requires human confirmation (4.6614ms)
+✔ ERSS cannot reassign a unit committed to another incident (2.9329ms)
+✔ ERSS jurisdiction and unit recommendations use real routing helpers without fabricated fallback ETA (122.6405ms)
+✔ ERSS deferred realtime events publish after success and disappear on save failure (2.1985ms)
+✔ ERSS realtime server and browser contracts include every emitted workflow event (8.7632ms)
+✔ ERSS migration is versioned after prior releases and creates all workflow tables (5.5946ms)
+✔ ERSS triage schema and forward migration accept the application workflow vocabulary (15.4408ms)
+✔ ERSS controller resolves the established authenticated session helper (1.1591ms)
+Skipping ERSS dispatcher workflow verification: DATABASE_URL not set
+✔ tests\erss-dispatcher-workflow-verify.test.js (389.8692ms)
+﹣ jurisdiction timestamp forward migration preserves old rows and is repeatable (1.9726ms) # SKIP
+﹣ ERSS PostgreSQL saves preserve concurrent data and reject stale edits (3.8717ms) # SKIP
+✔ evidence analysis accepts a complete inference and rejects ambiguous or malformed responses (314.1835ms)
+✔ evidence AI transport failures remain errors (171.2986ms)
+﹣ evidence writes are atomic, preserve unrelated data, and never create a camera (2.074ms) # SKIP
+✔ legacy demo unit normalization preserves the PostgreSQL station identity (3.2976ms)
+✔ evidence authorization follows investigator and assigned unit at request time (1.3979ms)
+✔ custody persistence retains every event beyond the previous 50-entry cap (11.9681ms)
+✔ custody event IDs are stable while explicit IDs are preserved (3.5195ms)
+✔ PostgreSQL schema enforces append-only custody records (8.815ms)
+✔ evidence parser rejects declared MIME and magic-byte mismatches (9.57ms)
+✔ new evidence metadata excludes inline binary and stores bytes by safe key (90.1283ms)
+✔ storage key validation prevents traversal and absolute paths (1.1635ms)
+✔ checksum verification rejects tampered stored evidence (33.7701ms)
+✔ database failure after storage write cleans up the evidence object (61.1576ms)
+✔ production filesystem storage requires an explicit durable path (1.4918ms)
+✔ late outer COMMIT failure removes stored evidence after metadata saving returned (81.7416ms)
+✔ unknown commit outcomes preserve bytes and record a durable reconciliation notice (43.3843ms)
+✔ failed object cleanup is recorded without exposing the underlying filesystem error (33.0578ms)
+✔ storage health performs a real write and removes its probe (23.218ms)
+✔ writeFile failure cleans up partial evidence and preserves the original error (10.0869ms)
+✔ sync failure cleans up partial evidence and preserves the original error (15.9725ms)
+✔ close failure cleans up partial evidence and preserves the original error (37.2488ms)
+✔ cleanup failure writes and flushes a recovery record for the retained object (60.5708ms)
+✔ journal failure emits a safe recovery alert without masking the database failure (24.3239ms)
+✔ Medak and cathedral provider results normalize without relabelling or swapping coordinates (3.7263ms)
+✔ valid provider zero results stay distinct from provider exceptions (2.9642ms)
+✔ OSRM normalization keeps up to three distinct real routes and recommends lowest duration (3.8605ms)
+✔ one provider route stays one route and approximate fallback has no ETA (4.966ms)
+✔ OSRM accepts bounded city-point road snaps and reports the snap distance (1.2524ms)
+✔ degenerate zero-length routes from far outside the graph coverage are rejected, never faked as road routes (0.801ms)
+✔ three distinct mock OSRM routes retain provider distance, duration, geometry and steps (52.883ms)
+✔ Google SSO is optional but fails closed on incomplete, unsafe or wildcard configuration (7.3618ms)
+✔ Google authorization uses PKCE, nonce and a short-lived protected flow cookie (49.9903ms)
+✔ Google callback binds state, PKCE and verified token audience before accepting Workspace identity (19.0079ms)
+✔ Workspace access checks signed hosted-domain and nonce claims rather than an email suffix (2.3953ms)
+✔ incident response requirements are explicit and severity-sensitive (7.8824ms)
+✔ primary ranking prefers route ETA over shorter physical distance (0.7486ms)
+✔ station capacity excludes busy officers and units from canonical records (4.5532ms)
+✔ nearest partial station is combined with minimum overflow support without duplicate resources (3.4772ms)
+✔ station with no deployable capacity is skipped for the next capable station (1.3294ms)
+✔ approximate station distances can allocate support without inventing an ETA (1.3306ms)
+✔ maintenance and decommissioned units are never deployable (0.7588ms)
+✔ hybrid dispatch schema and migration persist typed recommendation and workload fields (14.7205ms)
+﹣ actual hybrid confirmation and releases preserve membership and separate support roles (3.0333ms) # SKIP
+✔ hybrid support creation rejects an incident without a primary unit (19.2506ms)
+✔ hybrid support is allowed only after a primary unit exists (0.8252ms)
+✔ the hybrid confirmation endpoint applies the primary-unit guard before support mutation (4.7494ms)
+✔ station support remains calculable after primary assignment and excludes primary resources (7.5786ms)
+﹣ support release persists while primary unit and investigation remain assigned (2.193ms) # SKIP
+﹣ support release route enforces roles, records audit and preserves the primary unit (0.5232ms) # SKIP
+✔ support-only release preserves primary crew and investigation, deduplicates and is idempotent (11.7649ms)
+✔ support release fails closed on shared resources, then respects off-duty status (1.1096ms)
+✔ legacy primary direct assignment without a support allocation is not guessed away (0.8265ms)
+﹣ same eligible officer cannot be deployed concurrently to different incidents; release and retry stay atomic (2.2893ms) # SKIP
+✔ canonical members come only from response_unit_members (9.2607ms)
+✔ multiple available members deploy with controlled roles and primary unit ID (4.2096ms)
+✔ non-member and invalid role are rejected atomically (2.2151ms)
+✔ duplicate and cross-incident primary deployments are rejected (1.8733ms)
+✔ hybrid support commitment blocks primary deployment without mutation (1.5681ms)
+✔ role change and release preserve membership and primary unit (2.1343ms)
+✔ released history does not block a later deployment (1.2126ms)
+✔ legacy orphan deployment can be released without recreating its primary assignment (1.126ms)
+✔ leave, suspended and missing officer profiles cannot be deployed (1.7627ms)
+✔ member metadata uses real badge and fixture provenance; current deployment is authoritative (6.9537ms)
+✔ RBAC allows Admin/Dispatcher and denies call taker, field officer, Citizen (1.5438ms)
+✔ API wiring records assignment, role-change, and release audits and emits realtime (4.7667ms)
+✔ Socket bridge broadcasts officer assignment changes to incident and dashboard rooms (1.6781ms)
+RakshakAI Backend running at http://localhost:61619/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ observation queue enforces RBAC and never exposes camera credentials (511.4976ms)
+✔ confirm creates an alert only; the existing verified alert flow creates the linked incident (304.093ms)
+✔ simulated RTSP pipeline creates a review observation, then a reviewed alert and linked incident (328.6316ms)
+✔ reject and uncertain decisions never create alerts or incidents (92.1992ms)
+✔ stale capture timestamps never update stream health or create observations (31.2441ms)
+✔ frames aging out during inference cannot create observations (4.7844ms)
+✔ valid configured stream connects, reports real frames, and disabled stream does not connect (31.9016ms)
+✔ authentication failure is explicit and sanitized without credential exposure (28.1531ms)
+✔ connection loss reconnects with bounded backoff, recovers, then sustained failure becomes offline (185.9237ms)
+✔ late callbacks from a replaced connector cannot tear down the current stream (154.4625ms)
+✔ connected socket without frames becomes NO_FRAMES instead of healthy (2.2857ms)
+✔ sampling interval is respected and latest-frame backpressure stays bounded (65.0992ms)
+✔ AI timeout and outage remain independent from streaming camera health (135.1077ms)
+✔ invalid AI responses create no observation and AI errors do not stop stream health (32.92ms)
+✔ AI normalization permits supported object labels and ignores unsupported claims (7.6126ms)
+✔ observation deduplication rejects frames outside either side of the time window (5.9226ms)
+✔ camera endpoint policy rejects browser protocols and unauthorized public hosts (25.9952ms)
+✔ gateway error sanitization never returns embedded RTSP credentials (1.4705ms)
+✔ review workflow keeps observation, alert, and incident stages separate (11.782ms)
+Base schema applied successfully.
+Applying migration 001: 001_initial
+Migration 001 applied successfully.
+Base schema applied successfully.
+Migration 001 already applied, skipping.
+Applying migration 002: 002_add_table
+Migration 002 applied successfully.
+Base schema applied successfully.
+Migration 001 already applied, skipping.
+Applying migration 002: 002_failure
+Applying migration 003: 003_tracking_failure
+Base schema applied successfully.
+Applying migration 001: 001_initial
+Migration 001 applied successfully.
+Base schema applied successfully.
+Migration 001 already applied, skipping.
+✔ migration files are discovered and ordered by filename (31.1435ms)
+✔ fresh migration path applies base schema and pending migrations (34.6516ms)
+✔ upgrade path applies only missing migrations (43.4777ms)
+✔ repeated migration run has zero pending migration mutations (39.7877ms)
+✔ migration SQL failure rolls back and does not mark migration applied (7.7666ms)
+✔ tracking-row failure rolls back schema change and leaves migration unapplied (1.8822ms)
+✔ migration lock uses one client and releases the advisory lock (4.5202ms)
+✔ concurrent migration runners do not apply the same migration twice (34.8462ms)
+✔ readiness retries are limited to startup connection errors (0.7076ms)
+✔ readiness failure alerts once, then reports recovery and a fresh outage (12.8038ms)
+✔ HTTP 5xx burst is deduplicated and does not forward sensitive log fields (2.593ms)
+✔ recovery and shutdown errors produce immediate sanitized webhook alerts (4.7718ms)
+✔ delivery errors are reported safely and retried on the next matching event (1.8648ms)
+✔ monitor rejects remote plaintext and credential-bearing URLs (1.7011ms)
+✔ invalid, null and unrelated log lines cannot trigger alerts (0.9731ms)
+✔ object candidates use object-specific factors and retain evidence provenance (10.708ms)
+✔ supported animal candidates use species scoring and stay advisory (5.1516ms)
+✔ unsupported object and animal labels fail honestly (2.7856ms)
+✔ all four tracking types have independent score configurations (0.8763ms)
+✔ response recommendations are blocked until a human-confirmed sighting (1155.077ms)
+
+=== Running Multi-Camera Tracking Backend Tests ===
+
+Test: Person tracking session can be created
+  PASS
+Test: Vehicle tracking session can be created
+  PASS
+Test: Citizen cannot access tracking (RBAC)
+  PASS (service tracks creator for audit)
+Test: Appearance-similar person produces candidate
+  PASS - Found 1 candidates, top confidence: 0.91
+Test: Clothing alone does not guarantee match
+  PASS - Clothing match alone produces low confidence: 0.67
+Test: Impossible travel time strongly penalizes candidate
+  PASS - Impossible travel penalized, confidence: 0.60
+Test: Nearby camera/time-consistent detection increases score
+  PASS - Nearby/time-consistent candidate confidence: 0.97
+Test: Person direction consistency contributes correctly
+  PASS - Direction consistency: 0.97
+  PASS - Opposite direction consistency: 0.00
+Test: Activity continuity contributes but cannot dominate identity
+  PASS - Activity consistency: 0.70 Overall: 0.90
+Test: Walking-to-running transition can still match
+  PASS - Movement change candidate confidence: 0.91
+Test: Vehicle exact plate strongly improves match
+  PASS - Exact plate similarity: 1.00 Overall: 0.89
+Test: Partial plate can still produce candidate
+  PASS - Partial plate similarity: 0.94 Overall: 0.87
+Test: Wrong vehicle type reduces confidence
+  PASS - Wrong type similarity: 0.00
+Test: Wrong color reduces confidence
+  PASS - Wrong color similarity: 0.00
+Test: Brand/model is not invented when unavailable
+  PASS - Unknown brand/model similarity: 0.00
+Test: Speed/location/timing inconsistency penalizes vehicle candidate
+  PASS - Speed/timing inconsistency confidence: 0.53
+Test: Candidate requires human verification
+  PASS - Default candidate status: PENDING_REVIEW
+Test: Confirmed match joins track (simulated via session update)
+  PASS - Session updated on confirmation
+Test: Rejected match does not join track
+  PASS - Session tracks rejection
+Test: Rejected candidate history is preserved
+  PASS - Rejected candidate history preserved
+Test: Duplicate candidate is not repeatedly created (simulated)
+  PASS - Existing candidate found, would skip re-creation
+Test: Last-seen camera updates correctly
+  PASS - Last seen updated to: cam_2
+Test: Camera health degradation influences operational confidence
+  PASS - Camera health adjusted appearance: 0.00
+Test: Evidence references are preserved
+  PASS - Evidence references stored
+
+=== Results ===
+Passed: 24/24
+Failed: 0/24
+✔ tests\multiCameraTracking.test.js (1069.2675ms)
+RakshakAI Backend running at http://localhost:54805/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ notification metadata is derived from real state and deduplicated (342.663ms)
+✔ read state and mark-all persist across fresh list requests (172.3929ms)
+✔ View Details reloads current authoritative incident data (87.029ms)
+✔ camera and tracking details are safe and human-verification explicit (118.848ms)
+✔ Citizen sees only own report notification and cannot fetch operator records (118.4108ms)
+✔ evidence observation notification details require current incident assignment (8.6939ms)
+Skipping Phase 1 integration tests: DATABASE_URL not set
+✔ tests\phase1_foundation.test.js (698.64ms)
+Skipping Phase 2 integration tests: DATABASE_URL not set
+✔ tests\phase2_escalation_capabilities.test.js (870.0843ms)
+Skipping Phase 3 integration tests: DATABASE_URL not set
+✔ tests\phase3_dispatch_integration.test.js (541.3319ms)
+✔ Phase 4 repositories bind PostgreSQL text arrays as arrays (8.9622ms)
+✔ CRITICAL incident receives configured assignment and response deadlines (6.5982ms)
+✔ HIGH incident receives configured assignment and response deadlines (0.8582ms)
+✔ MEDIUM incident receives configured assignment and response deadlines (0.6971ms)
+✔ LOW incident receives configured assignment and response deadlines (0.791ms)
+✔ assignment warning occurs before its deadline (1.8438ms)
+✔ assignment SLA breaches at the deadline (0.7375ms)
+✔ 100 scheduler sweeps create one alert for each unique condition and level (19.1465ms)
+✔ assigning a team resolves an active assignment breach and preserves it (5.8363ms)
+✔ assigned team that is not En Route produces a response warning (2.0361ms)
+✔ response deadline breach produces response SLA breach (1.2595ms)
+✔ On Scene satisfies response SLA and resolves its warning (1.5857ms)
+✔ incident progresses from L2 to L3 from the original breach timestamp (0.4463ms)
+✔ incident progresses from stored L3 to L4 without resetting the clock (0.3838ms)
+✔ escalation never downgrades while the violation exists (0.298ms)
+✔ acknowledgement does not resolve or deactivate an alert (0.2805ms)
+✔ operational correction adds an alert resolution timeline record (1.246ms)
+✔ serious incident enters investigation monitoring (0.5956ms)
+✔ missing investigating officer creates a persistent alert (0.5849ms)
+✔ assigning an investigating officer clears missing IO condition (1.4773ms)
+✔ investigation inactivity creates an alert after threshold (1.2324ms)
+✔ investigation within inactivity threshold has no inactivity alert (1.2266ms)
+✔ closed incidents produce no new SLA alerts and resolve active ones (1.2958ms)
+✔ L2, L3 and L4 events are each created exactly once (1.9136ms)
+✔ critical Possible Murder flow reaches L1 then L2 then L3 then L4 with timeline history (2.8297ms)
+✔ investigation helpers identify serious category, missing IO and inactivity (0.5176ms)
+Skipping Phase 4 SLA/Escalation/Investigation tests: DATABASE_URL not set
+✔ tests\phase4_sla_escalation_investigation.test.js (351.8748ms)
+﹣ authenticated Socket.IO carries critical and SLA events and REST restores persisted state (2.694ms) # PostgreSQL test schema is required
+✔ membership eligibility accepts an active registered officer with a registered rank at the unit station (6.0062ms)
+✔ membership eligibility reports missing account profile, registered station and active rank (2.4516ms)
+✔ membership eligibility prevents inactive, wrong-station, duplicate and deployed assignments with reasons (1.3788ms)
+✔ sanitized runtime JSON fixture parses with all required collections (4.011ms)
+✔ sanitized fixture contains only expected roles and reserved email domains (3.7995ms)
+✔ sanitized fixture does not contain runtime audit history or plaintext passwords (1.8167ms)
+✔ security access tests use a temporary runtime copy instead of the committed fixture (4.5067ms)
+✔ committed fixture is not mutated when tests use a temporary runtime file (9.0608ms)
+✔ import script accepts explicit fixture source (1.6019ms)
+✔ import script serializes concurrent startup imports (1.011ms)
+✔ import script accepts the committed sanitized example source (0.9969ms)
+✔ import script fails clearly for a missing explicit source (2.6078ms)
+✔ import source validation command succeeds for explicit fixture (608.0285ms)
+RakshakAI Backend running at http://localhost:54818/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ security headers are present and Express signature is hidden (255.7375ms)
+✔ malformed JSON returns 400 rather than 500 (89.3486ms)
+✔ JSON mutations require the correct content type (11.0953ms)
+✔ oversized JSON payloads are rejected (64.6468ms)
+✔ unsafe origins are blocked and trusted local development origins work (77.2277ms)
+✔ login sets an HttpOnly cookie and never exposes a token in JSON (52.7138ms)
+✔ session check works using only cookie credentials (43.418ms)
+✔ logout clears both current and legacy session cookies (45.151ms)
+✔ logout revokes only the current server-side session (128.2945ms)
+✔ unauthenticated logout remains safe and idempotent (14.854ms)
+✔ more than 100 logouts cannot resurrect an unexpired revoked session (16.9856ms)
+✔ session inventory is private, supports remote revocation and rotates the current session (240.691ms)
+✔ Google sign-in preserves approved roles, pins subjects, and can enforce Workspace-only operator access (72.5691ms)
+Socket.IO client connected: _772XyhjYna0zTFuAAAA
+Socket.IO client disconnected: _772XyhjYna0zTFuAAAA
+✔ live dashboard sockets disconnect after their session is revoked (465.132ms)
+✔ malformed cookie encoding is treated as an invalid session instead of an exception (28.3067ms)
+✔ Public registration always creates Citizen accounts only (1114.8796ms)
+✔ Admin can securely change password while other roles cannot (6327.7498ms)
+✔ Admin can access admin-only routes while Police and Citizen cannot (157.0303ms)
+✔ audit log endpoint paginates, filters, and preserves its legacy response shape (106.5535ms)
+✔ SLA updates are Admin-only, validated, persisted, and audited (58.6756ms)
+✔ SLA monitoring is role-restricted and reports non-overlapping server-calculated active states (131.2889ms)
+✔ Admin can create, list, update, deactivate, activate, and reset Police accounts (5115.0412ms)
+✔ password reset rejects old police sessions (5647.9307ms)
+✔ account deactivation rejects old police sessions (3684.3296ms)
+✔ Admin and Police can access operational routes (291.8384ms)
+✔ CCTNS search APIs enforce authenticated operational access and expose only simulator data (140.9266ms)
+✔ CCTNS audit persistence does not overwrite unrelated JSON operational records (49.3966ms)
+✔ ERSS saves preserve concurrent unrelated changes and reject stale record edits (86.3936ms)
+✔ response unit registry exposes source-safe unit metadata and marks demo units (15.3267ms)
+✔ response-unit live GPS accepts only an officer's own unit and drives fresh dispatch location (796.137ms)
+✔ dispatch readiness RBAC denies unauthorized operational roles on primary, support and officer endpoints (604.8849ms)
+Socket.IO client connected: XxwSz0LU9Mp2LdWJAAAB
+✔ dispatch readiness HTTP lifecycle protects primary deployments and persists audit plus realtime (422.8199ms)
+Socket.IO client disconnected: XxwSz0LU9Mp2LdWJAAAB
+✔ primary assignment precedes hybrid support, which reserves capacity once and releases on resolution (507.16ms)
+✔ police station registry uses Hyderabad Patancheru BHEL demo area and blocks Citizen (36.824ms)
+✔ Admin can manage response unit registry while Police and Citizen cannot (165.0204ms)
+✔ Admin can manage station registry and station fallback is labelled (81.323ms)
+✔ CCTV camera registry exposes safe metadata only and marks demo feeds (33.5407ms)
+✔ Admin can create and update real camera config without leaking credentials (158.5084ms)
+✔ Citizen cannot access CCTV APIs and camera analysis endpoints (136.901ms)
+✔ Police can test cameras but cannot edit secure camera config (96.2602ms)
+✔ alert access is role-filtered and exposes source traceability to operators (49.6757ms)
+✔ manual alerts without coordinates do not fall back to Delhi (28.1893ms)
+✔ Police cannot clear all alerts while Admin can acknowledge with audit trail (102.4491ms)
+✔ Admin and Police can verify, reject, and convert reviewed alerts with audit logs (501.179ms)
+✔ Dashboard Missing Persons KPI excludes objects and inactive reports (32.3461ms)
+✔ Citizen and unauthenticated users cannot access operational routes (234.737ms)
+✔ missing or invalid session cookies fail safely (30.9124ms)
+✔ Citizen can use report routes but receives only the public-safe contract (134.7678ms)
+✔ Admin evidence upload sends image bytes to mocked AI analysis (409.3408ms)
+✔ Evidence upload rejects MIME and file-signature mismatches (33.8408ms)
+✔ Admin can upload an image while analysis remains fail-closed (102.7711ms)
+✔ Evidence storage failure does not create successful metadata (21.421ms)
+{"event":"request_failed","requestId":"2a2f413a-f4c6-4406-b890-78f6ac32410c","method":"POST","route":"/api/report-missing","status":500}
+✔ Citizen report storage failure returns an error without saving report or evidence (26.6706ms)
+✔ Police image evidence requires an assigned case (63.3138ms)
+✔ Citizen can upload evidence only for own report and cannot access operational video evidence (152.7677ms)
+✔ a second Citizen cannot view the first Citizen's report (6.7347ms)
+✔ Police and Admin can review all citizen reports (19.044ms)
+✔ new citizen reports appear first and can be rejected without creating incidents (50.8415ms)
+✔ Citizen report remains review-only until Police converts it with location verification required (25.7538ms)
+✔ Admin verifies citizen report, creates incident, removes queue item, and citizen status advances after assignment (193.6635ms)
+✔ AI alerts remain pending review and do not auto-create incidents (14.5926ms)
+✔ Admin and Police can explicitly create verified incidents from reviewed AI alerts (144.7749ms)
+SLA Escalation sweep: 1 alerts created for 1 incidents
+✔ Admin and Police can reject AI incidents as false alarms with audit/history cleanup (150.2014ms)
+✔ Citizen cannot assign units while Police can assign the nearest available unit (207.3397ms)
+✔ incident lifecycle supports En Route, On Scene, Resolved, and Closed (171.0111ms)
+✔ workflow actions create audit logs (32.1739ms)
+✔ GIS command endpoints allow Admin/Police and reject Citizen (163.0644ms)
+✔ self-hosted OSRM URL is used by map and backend route calculations (80.9207ms)
+✔ public OSRM is not used when public fallback is disabled (50.3552ms)
+✔ production routing config refuses public OSRM (2.8338ms)
+[GIS df6f1a27-4ddb-466a-8fbd-9d2a27741e33] Routing error: fetch failed
+✔ unavailable self-hosted OSRM returns approximate fallback instead of 500 (58.7861ms)
+[GIS 2ff396bb-4916-4837-8139-1995162856c6] Routing error: Route unavailable
+✔ routes outside the local OSRM extract fall back to approximate routing (54.9166ms)
+✔ map snap endpoint snaps clicked points to the nearest routable road (135.7558ms)
+✔ map snap reports no nearby road when the snapped point is too far away (46.9587ms)
+[GIS 422b4c80-14e3-417b-bc50-eb38741270bc] Snap error: fetch failed
+✔ map snap degrades gracefully when OSRM is offline (31.4053ms)
+✔ map defaults and demo registries do not fall back to Delhi coordinates (344.9747ms)
+✔ legacy Delhi fallback data is quarantined or normalized before dispatch (460.027ms)
+✔ GIS validation rejects invalid route and search payloads safely (128.601ms)
+✔ incident locations require operator verification and route recalculation uses the edited coordinates (166.8158ms)
+✔ incidents with invalid coordinates cannot be assigned or routed (125.8455ms)
+✔ default-like coordinates with unknown source are not dispatchable (59.459ms)
+✔ valid verified incident remains assignable (62.9722ms)
+✔ dispatch prefers real operational registry units over demo seed units (2887.1255ms)
+✔ nearest dispatch ranks available police units by ETA and distance with exclusion reasons (379.1719ms)
+✔ stale and offline units are excluded from automatic nearest-unit dispatch (319.4246ms)
+✔ nearest assignment falls back to approximate ETA when route service is unavailable (669.638ms)
+[GIS a1550586-d6df-4a63-98af-6791b63b12c0] Routing error: fetch failed
+✔ OSRM failure returns a clearly labelled degraded response without a fabricated ETA (50.4704ms)
+✔ AI health is safe and requires an authenticated session (134.8959ms)
+✔ AI Vision role policy distinguishes unauthenticated sessions from forbidden Citizens (981.709ms)
+✔ AI frame validation rejects invalid input and protected analysis rejects Citizen (195.3363ms)
+✔ normal AI response never fabricates a threat when service is not configured (71.8685ms)
+✔ Admin and Police can access Live Vision and upload analysis as observation-only sources (124.6432ms)
+✔ Browser AI Vision creates pending observations and object matches without incidents (259.8131ms)
+✔ Browser AI Vision offline state creates no fake observation (43.3578ms)
+✔ normal person, phone, and vehicle detections remain observation-only (0.9203ms)
+✔ normal AI observations enter human review without creating an incident or critical alert (114.1533ms)
+✔ vehicle and person assist fields are normalized without fabricated identity or model (1.7596ms)
+✔ Live Vision beep policy, cooldown, and duplicate suppression are safe (70.6606ms)
+✔ login rate limiting returns 429 after repeated failures (34.5852ms)
+✔ frontend session client does not persist JWTs (2.6449ms)
+✔ frontend login errors are specific and keep submit state recoverable (10.7431ms)
+✔ frontend HTML-serving layers enforce a restrictive CSP (27.4813ms)
+✔ frontend CSS assets load statically and render paths preserve document head (16.1262ms)
+✔ frontend production build emits a stylesheet bundle (16363.4947ms)
+✔ CSP builder supports same-origin and explicit HTTPS production API origins only (2.1524ms)
+✔ frontend CSP allowlist covers maps, Browser AI Vision, previews, and API calls (7.3571ms)
+✔ frontend Incident Command uses a fluid enterprise workspace without weakening role gates (22.7628ms)
+✔ frontend Incident Command map simplifies markers with default layers and clustering (82.9042ms)
+✔ frontend GIS navigation controls are gated and mode-driven (292.3883ms)
+✔ frontend GIS route button state table keeps controls visible and synchronized (15.8859ms)
+✔ frontend login and GIS restore paths do not recursively render or navigate (24.2974ms)
+✔ frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safely (125.118ms)
+✔ frontend GIS markers use Leaflet lat-lng projection for local incident coordinates (58.2756ms)
+✔ Docker OSRM service is internal only and backend public fallback is disabled (1.9528ms)
+✔ frontend role landing and menu restrictions remain configured (38.4607ms)
+✔ concurrent assignment: two operators assign same incident (368.7144ms)
+✔ concurrent assignment: two incidents claim same unit (140.6285ms)
+✔ concurrent assignment: state consistency and no duplicate audit records (142.6014ms)
+✔ concurrent assignment: same incident different units rejects stale competing intent (158.399ms)
+✔ manual reassignment succeeds only when expected assignment matches (156.3188ms)
+✔ manual reassignment requires a reason and release returns the unit to available (201.6571ms)
+✔ manual reassignment rejects stale expected assignment without side effects (95.771ms)
+✔ citizen cannot assign a selected unit (71.4061ms)
+✔ shutdown drains an active HTTP request before closing the database exactly once (3161.4987ms)
+✔ SLA policy accepts valid thresholds and a zero warning (3.6909ms)
+✔ SLA warning thresholds must remain below their deadlines (0.7866ms)
+✔ SLA escalation levels must be positive and strictly increasing (0.655ms)
+✔ SLA deadlines and investigation inactivity must be positive (0.863ms)
+✔ live sessions fail closed on revoked roles, authentication outage and incoming packets (5.1676ms)
+✔ safe local reload skips the data-repair function entirely (9.2981ms)
+✔ normal startup retains legacy repair unless explicitly opted out (6.3549ms)
+✔ local reload override replaces migration/import command without changing database service (3.9367ms)
+✔ destructive integration configuration rejects application and remote databases (7.2954ms)
+✔ disposable Compose service alias is accepted while remote hosts stay rejected (1.6548ms)
+✔ runner rejects an inherited DATABASE_URL before connecting (271.9147ms)
+✔ PostgreSQL pool rejects a remote default before creating a connection (478.188ms)
+✔ no test URL disables dotenv database inheritance (0.6371ms)
+RakshakAI Backend running at http://localhost:55962/api (json)
+RakshakAI escalation sweep every 15000ms
+RakshakAI SLA escalation sweep every 30000ms
+RakshakAI camera health sweep every 15000ms
+✔ tracking routes enforce API RBAC for unauthenticated and Citizen callers (435.8742ms)
+✔ Police Officer and Admin can read tracking while only Admin can configure it (35.5112ms)
+✔ HTTP success headers and cookie wait for a pending COMMIT acknowledgement (250.2034ms)
+{"event":"request_failed","method":"POST","route":"/write","status":500}
+✔ HTTP deferred constraint failure returns an error without prepared success or cookie (39.6477ms)
+{"event":"request_failed","method":"POST","route":"/write","status":500}
+✔ HTTP lost commit acknowledgement returns an error without prepared success or cookie (34.3944ms)
+{"event":"request_failed","method":"POST","route":"/write","status":500}
+✔ HTTP COMMIT returning ROLLBACK returns an error without prepared success or cookie (47.1558ms)
+✔ response and session cookie are sent only after the outer commit (3.666ms)
+✔ concurrent repository reads are serialized on the ambient transaction client (73.8524ms)
+✔ commit failure discards prepared success and cookie and runs outer cleanup (7.8454ms)
+✔ lost commit acknowledgement preserves the unknown outcome and discards the client (0.9805ms)
+✔ PostgreSQL COMMIT returning ROLLBACK is never treated as success (0.8381ms)
+✔ rollback failure does not mask the original error or suppress cleanup (1.4419ms)
+✔ remote PostgreSQL TLS is verified even with sslmode=require URL options (3.4657ms)
+✔ invalid SSL modes and unencrypted remote production connections fail closed (1.122ms)
+✔ query hostname overrides cannot bypass production TLS requirements (1.5478ms)
+✔ unit telemetry validates bounds, time windows, and replay protection (9.4278ms)
+✔ unit telemetry freshness is centralized and fails closed for malformed records (1.8538ms)
+✔ primary dispatch requires fresh accurate authenticated live GPS (0.8791ms)
+✔ only active Police membership resolves a telemetry unit (2.2414ms)
+✔ response-unit schema and migration contain typed latest telemetry fields (10.6079ms)
+ℹ tests 482
+ℹ suites 0
+ℹ pass 472
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 10
+ℹ todo 0
+ℹ duration_ms 211166.6799
+EXIT_CODE=0

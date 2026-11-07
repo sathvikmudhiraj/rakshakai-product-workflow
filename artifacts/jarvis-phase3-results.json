@@ -1,0 +1,80 @@
+{
+  "generatedAt": "2026-11-07T20:16:07.449Z",
+  "results": [
+    {
+      "name": "T1 critical list returned entities",
+      "pass": true,
+      "detail": "entities=[{\"type\":\"incident\",\"id\":\"inc_d4da9408\"},{\"type\":\"incident\",\"id\":\"inc_55b74d80\"},{\"type\":\"incident\",\"id\":\"inc_d3b34599\"}"
+    },
+    {
+      "name": "T2 'first one' resolves to prior incident",
+      "pass": true,
+      "detail": "expected=inc_d4da9408 answer=inc_d4da9408\nRestricted-zone movement detected\nSeverity: critical\nStatus: Verifi"
+    },
+    {
+      "name": "T2 same conversationId reused",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "T3 topic switch answered operationally",
+      "pass": true,
+      "detail": "intent=followup answer=Cameras needing attention:\ncam_c27: OFFLINE · Exit Corridor\ncam_c05: O"
+    },
+    {
+      "name": "T4 'which one' selects from prior context",
+      "pass": true,
+      "detail": "intent=followup answer=cam_c27\nHealth: OFFLINE\nLocation: Exit Corridor\nThe camera is not curr"
+    },
+    {
+      "name": "T5 filter applies to current results",
+      "pass": true,
+      "detail": "intent=followup answer=Unassigned incidents:\ninc_d4da9408: Restricted-zone movement detected "
+    },
+    {
+      "name": "T6 Telugu query detected te",
+      "pass": true,
+      "detail": "detected=te responseLang=te"
+    },
+    {
+      "name": "T6 Telugu answer in Telugu",
+      "pass": true,
+      "detail": "answer=Matching incidents: 17\nCRITICAL ఘటనలు: 6\nఅధిక తీవ్రత ఘటనలు: "
+    },
+    {
+      "name": "T7 follow-up preserves conversation language (te)",
+      "pass": true,
+      "detail": "responseLang=te answer=Matching incidents: 17\nCRITICAL ఘటనలు: 6\nఅధిక తీవ్"
+    },
+    {
+      "name": "T8 manual en override switches response",
+      "pass": true,
+      "detail": "responseLang=en"
+    },
+    {
+      "name": "T9 vague follow-up handled without invention",
+      "pass": true,
+      "detail": "intent=clarification answer=I couldn't confidently identify the operational request. Try"
+    },
+    {
+      "name": "T10 history returns full exchange list",
+      "pass": true,
+      "detail": "messages=20"
+    },
+    {
+      "name": "T11 no cross-user history leakage",
+      "pass": true,
+      "detail": "policeSee=0"
+    },
+    {
+      "name": "T12 no cross-user entity context in answers",
+      "pass": true,
+      "detail": "answer=I can show details, filter, or check other areas. What would you like?"
+    },
+    {
+      "name": "T13 page entity context resolves selected incident",
+      "pass": true,
+      "detail": "intent=incident_lookup answer=inc_d4da9408\nRestricted-zone movement detected\nSeverity: cri"
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "passed": 20,
+  "failed": 0,
+  "results": [
+    {
+      "name": "live desktop login succeeded",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live desktop copilot drawer opens",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live desktop read-only trust note visible",
+      "ok": true,
+      "detail": "READ-ONLY\nAvailable"
+    },
+    {
+      "name": "live desktop language selector has Auto/English/Telugu/Hindi",
+      "ok": true,
+      "detail": "Auto,English,తెలుగు,हिन्दी"
+    },
+    {
+      "name": "live desktop active-incident answer has a count",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | Matching active incidents: 17 | Critical incidents: 6 | High i"
+    },
+    {
+      "name": "live desktop Telugu question answered in Telugu script",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | సరిపోలే యాక్టివ్ ఘటనలు: 17 | CRITICAL ఘట"
+    },
+    {
+      "name": "live desktop manual English override renders English",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | Okay. Let me know if you need anything"
+    },
+    {
+      "name": "live desktop write attempt refused in UI",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | I can show operational information but cannot modify Raksh"
+    },
+    {
+      "name": "live desktop no dialog executed from script payload",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live desktop script payload shown as inert text (or refused)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live desktop no horizontal overflow",
+      "ok": true,
+      "detail": "overflowPx=0"
+    },
+    {
+      "name": "live desktop no console errors (handled 409 recommend-unit excluded)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live tablet copilot answers",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | Matching incidents: 6 | Critical incidents: 6 |  | Cri"
+    },
+    {
+      "name": "live tablet no horizontal overflow",
+      "ok": true,
+      "detail": "overflowPx=0"
+    },
+    {
+      "name": "live tablet no console errors (handled 409 recommend-unit excluded)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live mobile copilot answers",
+      "ok": true,
+      "detail": "RAKSHAK AI |  | Matching active incidents: 17 | Critical incidents"
+    },
+    {
+      "name": "live mobile send button touch target >= 40px",
+      "ok": true,
+      "detail": "68x56"
+    },
+    {
+      "name": "live mobile no horizontal overflow",
+      "ok": true,
+      "detail": "overflowPx=0"
+    },
+    {
+      "name": "live mobile Escape closes drawer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "live mobile no console errors (handled 409 recommend-unit excluded)",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}
