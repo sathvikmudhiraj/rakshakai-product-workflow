@@ -40,6 +40,10 @@ ai-service/*.pt
 *.osrm.*
 docker/osrm-data/
 
+# Verification run outputs (screenshots, traces, reports) stay local; they are
+# large, machine-generated, and kept out of the release tree and secret scanning.
+artifacts/
+
 dist/
 build/
 .next/
