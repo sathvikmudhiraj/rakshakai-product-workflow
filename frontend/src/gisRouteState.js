@@ -2,7 +2,6 @@ export function emptyRouteNavigationState(overrides = {}) {
   return {
     start: null,
     destination: null,
-    searchPreview: null,
     route: null,
     routeOptions: [],
     routes: [],
@@ -10,7 +9,11 @@ export function emptyRouteNavigationState(overrides = {}) {
     selectionMode: null,
     routeLoading: false,
     locationLoading: false,
+    locationTracking: false,
+    followLocation: false,
+    locationTrackingFixes: 0,
     currentLocation: null,
+    activeNavigation: null,
     ...overrides
   };
 }

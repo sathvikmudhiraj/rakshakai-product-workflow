@@ -1,0 +1,7 @@
+﻿{
+ "version": 1,
+ "purpose": "Single-image exploratory manual ground truth; not field acceptance, not independently second-reviewed.",
+ "image": {"id":"citroen-cc0", "filename":"citroen.jpg", "width":2560, "height":1920, "sha256":"5ba6f90647824710993d542250bbaec60f2a4e55ca837bc44c9745cce7201600", "source":"https://commons.wikimedia.org/wiki/File:Citro%C3%ABn_C-ZERO.jpg", "author":"Tokumeigakarinoaoshima", "license":"CC0-1.0", "license_url":"https://creativecommons.org/publicdomain/zero/1.0/", "accessed":"2026-10-21", "tags":["daylight", "car", "large object", "heavy occlusion"], "annotation_origin":"Manual approximate boxes drawn before model inference by one reviewer, no independent second review. Occluded car uses visible extent."},
+ "box_format":"xyxy pixels",
+ "annotations":[{"class":"car", "box":[423,62,2200,1852]}, {"class":"car", "box":[20,186,640,1190], "note":"Heavily occluded; visible portion only."}]
+}

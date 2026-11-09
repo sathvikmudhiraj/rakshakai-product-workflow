@@ -77,7 +77,7 @@ docker compose --env-file .env.docker ps
 
 Open the app:
 
-- App URL: [http://localhost:3000](http://localhost:3000/)
+- App URL: [http://localhost:3001](http://localhost:3001/)
 - Backend health: [http://localhost:5000/api/health](http://localhost:5000/api/health)
 - AI health: [http://localhost:8000/health](http://localhost:8000/health)
 
@@ -86,6 +86,25 @@ Optional config validation:
 ```powershell
 npm run docker:config
 ```
+
+This check validates the merged local Docker configuration and prints only
+redacted PASS/FAIL summaries. Do not replace it with `docker compose config`
+when sharing terminal output; the fully rendered configuration contains
+credentials.
+
+The local host ports and the Docker PostgreSQL service address live in
+`.env.docker`. The backend connects to the Compose service name `postgres`
+inside Docker; the published PostgreSQL port is only for loopback host access.
+
+For the production override, set `PRODUCTION_CORS_ORIGIN`,
+`PRODUCTION_FRONTEND_ORIGINS`, and optionally `PRODUCTION_FRONTEND_PORT` to the
+real deployment values before rendering it. The production override inherits
+the base Compose PostgreSQL service and therefore still uses local Docker
+PostgreSQL. It does not switch the backend to Neon or another managed database.
+Set `PRODUCTION_ALLOW_CITIZEN_REGISTRATION` explicitly to `true` or `false`;
+the production overlay refuses to render until the operator makes that policy
+choice. Local and standalone workflows preserve the existing enabled behavior
+unless `ALLOW_CITIZEN_REGISTRATION=false` is set.
 
 ## CSP API and tile configuration
 
@@ -184,6 +203,14 @@ Stop containers but preserve PostgreSQL and the downloaded model:
 ```powershell
 npm run docker:down
 ```
+
+The backend handles `SIGTERM`/`SIGINT` with a bounded graceful shutdown:
+readiness (`/api/health`) reports `draining`, in-flight HTTP requests finish,
+Socket.IO clients are disconnected, background sweeps stop, and the PostgreSQL
+pool closes last. `SHUTDOWN_TIMEOUT_MS` (default `25000`) bounds the drain and
+must stay below the backend's `stop_grace_period` (`40s`). The Compose command
+uses `exec node server.js` so Node receives Docker's stop signal directly;
+`docker compose down` is therefore safe and never deletes volumes.
 
 Rebuild after dependency or Dockerfile changes:
 

@@ -25,10 +25,10 @@ function docker(args, { allowFailure = false } = {}) {
 async function startFrontend(environment, extraEnv = []) {
   const name = `${runId}-${environment}`;
   docker(["run", "--detach", "--name", name, "--label", `rakshakai.csp-test=${runId}`,
-    "--add-host", "backend:127.0.0.1", "--publish", "127.0.0.1::80",
+    "--add-host", "backend:127.0.0.1", "--publish", "127.0.0.1::8080",
     "--env", `CSP_ENV=${environment}`, ...extraEnv.flatMap((value) => ["--env", value]), image]);
   containers.push(name);
-  const address = docker(["port", name, "80/tcp"]).stdout.trim();
+  const address = docker(["port", name, "8080/tcp"]).stdout.trim();
   assert.match(address, /^127\.0\.0\.1:\d+$/);
   const base = `http://${address}`;
   let ready = false;
@@ -142,14 +142,14 @@ test("Nginx HTML error responses retain CSP without changing asset cache directi
 test("missing entry HTML returns 404 with CSP and no-cache", async () => {
   const { name, base } = servers.get("configured");
   // Only the disposable container is changed, never a repository or runtime volume.
-  docker(["exec", name, "mv", "/usr/share/nginx/html/index.html", "/tmp/csp-test-index.html"]);
+  docker(["exec", "--user", "root", name, "mv", "/usr/share/nginx/html/index.html", "/tmp/csp-test-index.html"]);
   try {
     const response = await fetch(`${base}/index.html`);
     assert.equal(response.status, 404);
     assertCsp(response, expectedPolicy("production", "https://api.example.invalid"));
     assert.equal(response.headers.get("cache-control"), "no-cache, must-revalidate");
   } finally {
-    docker(["exec", name, "mv", "/tmp/csp-test-index.html", "/usr/share/nginx/html/index.html"]);
+    docker(["exec", "--user", "root", name, "mv", "/tmp/csp-test-index.html", "/usr/share/nginx/html/index.html"]);
   }
 });
 

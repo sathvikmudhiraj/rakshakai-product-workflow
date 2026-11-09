@@ -4,13 +4,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: rakshakai
-      POSTGRES_USER: rakshakai
+      POSTGRES_DB: ${POSTGRES_DB:-rakshakai}
+      POSTGRES_USER: ${POSTGRES_USER:-rakshakai}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rakshakai -d rakshakai"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
 
   osrm:
-    image: osrm/osrm-backend:v5.27.1
+    image: ghcr.io/project-osrm/osrm-backend:v5.27.1
     profiles: ["osrm"]
     environment:
       OSRM_DATA_PATH: ${OSRM_DATA_PATH:-/data/region.osrm}
@@ -44,9 +44,7 @@ services:
       - |
         required="$$OSRM_DATA_PATH"
         for file in \
-          "$$required" \
-          "$$required.names" \
-          "$$required.nodes" \
+          "$$required.fileIndex" \
           "$$required.edges" \
           "$$required.geometry" \
           "$$required.datasource_names" \
@@ -77,14 +75,17 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       PORT: "5000"
-      DATABASE_URL: postgresql://rakshakai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@postgres:5432/rakshakai
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rakshakai}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-rakshakai}
       PG_SSL_MODE: disable
+      ALLOW_CITIZEN_REGISTRATION: ${ALLOW_CITIZEN_REGISTRATION:-true}
       PG_MIGRATION_RETRIES: "20"
       PG_MIGRATION_RETRY_MS: "1500"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
       # Optional passthrough: required when the compose stack runs with NODE_ENV=production
       # and stores real camera credentials. Generate a 64-hex-char key; see .env.docker.example.
       CAMERA_CREDENTIAL_ENCRYPTION_KEY: ${CAMERA_CREDENTIAL_ENCRYPTION_KEY:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN in .env.docker}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:?Set FRONTEND_ORIGINS in .env.docker}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?Set SEED_ADMIN_PASSWORD in .env.docker}
       SEED_POLICE_PASSWORD: ${SEED_POLICE_PASSWORD:?Set SEED_POLICE_PASSWORD in .env.docker}
       SEED_CITIZEN_PASSWORD: ${SEED_CITIZEN_PASSWORD:?Set SEED_CITIZEN_PASSWORD in .env.docker}
@@ -107,8 +108,10 @@ services:
       API_RATE_LIMIT: "600"
       AUTH_RATE_LIMIT: "10"
       PASSWORD_CHANGE_RATE_LIMIT: "10"
+      # Bounded graceful shutdown; must stay below stop_grace_period.
+      SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-25000}
       TRUST_PROXY: "1"
-    command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && node server.js"]
+    command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && exec node server.js"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,6 +133,9 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 5
+    # Docker defaults to a 10s SIGTERM grace period, which is shorter than the
+    # backend's shutdown deadline and would SIGKILL it mid-drain.
+    stop_grace_period: 40s
     restart: unless-stopped
 
   frontend:
@@ -141,6 +147,8 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3001}:8080"
     restart: unless-stopped
 
 volumes:

@@ -68,6 +68,11 @@ test("restore PostgreSQL and evidence together into fresh isolated containers", 
 
     compose(target, ["up", "--detach", "--wait", "postgres"]);
     compose(target, ["create", "--build", "backend"]);
+    // The disposable release Compose fixture creates this empty schema at
+    // PostgreSQL init. The dump includes its own schema definition, so make
+    // the restore target genuinely empty. RESTRICT refuses to remove it if
+    // any object has been added.
+    compose(target, ["exec", "-T", "postgres", "psql", "-U", "release_test", "-d", "rakshakai_test_release", "-v", "ON_ERROR_STOP=1", "-c", "DROP SCHEMA rakshakai_test_release RESTRICT"]);
     const manifestPath = path.join(output, "manifest.json");
     const originalManifest = fs.readFileSync(manifestPath, "utf8");
     const broken = JSON.parse(originalManifest);

@@ -14,7 +14,17 @@ $requiredVariables = @(
   "SEED_ADMIN_PASSWORD",
   "SEED_POLICE_PASSWORD",
   "SEED_CITIZEN_PASSWORD",
-  "AI_SERVICE_API_KEY"
+  "AI_SERVICE_API_KEY",
+  "CORS_ORIGIN",
+  "FRONTEND_ORIGINS",
+  "POSTGRES_HOST",
+  "POSTGRES_PORT",
+  "POSTGRES_DB",
+  "POSTGRES_USER",
+  "FRONTEND_PORT",
+  "BACKEND_HOST_PORT",
+  "AI_SERVICE_HOST_PORT",
+  "POSTGRES_HOST_PORT"
 )
 
 function Write-Check([string]$Label, [bool]$Passed, [string]$Detail) {
@@ -62,8 +72,22 @@ try {
 }
 Write-Check "Docker daemon" $dockerAvailable $(if ($dockerAvailable) { "available" } else { "unavailable; Docker Desktop was not started" })
 
+$portSettings = @{}
+foreach ($line in Get-Content -LiteralPath $envPath) {
+  if ($line -match '^\s*(FRONTEND_PORT|BACKEND_HOST_PORT|AI_SERVICE_HOST_PORT|POSTGRES_HOST_PORT)\s*=\s*(\d{1,5})\s*$') {
+    $portSettings[$Matches[1]] = [int]$Matches[2]
+  }
+}
+$portKeys = @("FRONTEND_PORT", "BACKEND_HOST_PORT", "AI_SERVICE_HOST_PORT", "POSTGRES_HOST_PORT")
+$invalidPorts = @($portKeys | Where-Object { -not $portSettings.ContainsKey($_) -or $portSettings[$_] -lt 1 -or $portSettings[$_] -gt 65535 })
+if ($invalidPorts.Count) {
+  Write-Check "host port settings" $false ("invalid or missing names: " + ($invalidPorts -join ", "))
+} else {
+  Write-Check "host port settings" $true "all configured ports are in range"
+}
+
 $occupiedPorts = @()
-foreach ($port in 3000, 5000, 8000) {
+foreach ($port in ($portSettings.Values | Sort-Object -Unique)) {
   $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
   if (-not $listeners.Count) {
     Write-Check "port $port" $true "available"
@@ -108,4 +132,4 @@ try {
 }
 Write-Check "Compose config" $composeValid $(if ($composeValid) { "valid" } else { "validation failed" })
 
-if ($missingVariables.Count -or $occupiedPorts.Count -or -not $dockerAvailable -or -not $composeValid) { exit 1 }
+if ($missingVariables.Count -or $invalidPorts.Count -or $occupiedPorts.Count -or -not $dockerAvailable -or -not $composeValid) { exit 1 }

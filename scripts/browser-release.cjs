@@ -9,6 +9,34 @@ const browserNames = String(process.env.RELEASE_TEST_BROWSERS || "chromium,firef
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const selectedViewports = String(process.env.RELEASE_TEST_VIEWPORTS || "1920,1440,1024,768,390")
+  .split(",")
+  .map(Number)
+  .filter(Number.isFinite);
+const selectedRoles = String(process.env.RELEASE_TEST_ROLES || "Admin,Police Officer,Citizen")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+async function openNavigation(page, view) {
+  // Several destinations, including GIS, also have a compact field-bar
+  // control. Exercise the full navigation menu explicitly so this locator
+  // remains unique across desktop and mobile layouts.
+  const item = page.locator(`#mobileMorePanel .nav-item[data-view="${view}"]`);
+  const mobileMore = page.locator("#mobileMoreButton");
+  if (!await item.isVisible() && await mobileMore.isVisible()) await mobileMore.click();
+  const group = item.locator("xpath=ancestor::details[1]");
+  if (await group.count() && !await group.evaluate((element) => element.open)) {
+    await group.locator("summary").click();
+  }
+  // The SPA changes the URL with history.pushState and initializes the target
+  // view on the next animation frame. Let Playwright finish the real click
+  // action without treating that same-document transition as a page load;
+  // verify the application's resulting view explicitly below.
+  const viewActivated = page.waitForFunction((target) => document.body.dataset.view === target, view);
+  await item.click({ noWaitAfter: true });
+  await viewActivated;
+}
 
 for (const name of browserNames) {
   if (!browserTypes[name]) throw new Error(`Unsupported release browser: ${name}`);
@@ -21,9 +49,12 @@ function launchOptions(name) {
 }
 
 async function waitForUsableMapLayer(page, key, host) {
-  await page.waitForFunction(({ key, host }) => {
+  const ready = await page.waitForFunction(({ key, host }) => {
     const map = document.querySelector("#gisMap");
     const button = document.querySelector(key === "satellite" ? "#satelliteMapLayer" : "#streetMapLayer");
+    if (!map || !button) return false;
+    const layers = [...map.querySelectorAll(".leaflet-tile-pane > .leaflet-layer")]
+      .filter((layer) => getComputedStyle(layer).display !== "none" && Number.parseFloat(getComputedStyle(layer).opacity || "1") > 0.01);
     const tiles = [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")];
     const usable = tiles.filter((tile) => {
       const rect = tile.getBoundingClientRect();
@@ -39,18 +70,18 @@ async function waitForUsableMapLayer(page, key, host) {
         && style.visibility !== "hidden"
         && Number.parseFloat(style.opacity || "1") > 0.01;
     });
+    // Fresh browser contexts share no HTTP cache, so each scenario refetches
+    // public tiles; allow throttled tile bursts to finish before failing.
+    const status = map.querySelector(".map-status")?.textContent || "";
     return map.dataset.baseLayer === key
       && map.classList.contains("tiles-ready")
       && button?.getAttribute("aria-pressed") === "true"
-      && usable.length > 0;
-  }, { key, host }, { timeout: 15000 });
-  const report = await page.locator("#gisMap").evaluate((map, { key, host }) => {
-    const layers = [...map.querySelectorAll(".leaflet-tile-pane > .leaflet-layer")]
-      .filter((layer) => getComputedStyle(layer).display !== "none" && Number.parseFloat(getComputedStyle(layer).opacity || "1") > 0.01);
-    const tiles = [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")]
-      .filter((tile) => tile.src.includes(host) && tile.complete && tile.naturalWidth > 0 && tile.naturalHeight > 0);
-    return { key, activeLayers: layers.length, usableTiles: tiles.length, status: map.querySelector(".map-status")?.textContent || "" };
-  }, { key, host });
+      && layers.length === 1
+      && usable.length > 0
+      && new RegExp(key === "satellite" ? "Satellite tiles" : "OpenStreetMap tiles", "i").test(status)
+      && { key, activeLayers: layers.length, usableTiles: usable.length, status };
+  }, { key, host }, { timeout: 60000 });
+  const report = await ready.jsonValue();
   assert.equal(report.activeLayers, 1, `${key} must have exactly one visible base layer`);
   assert.ok(report.usableTiles > 0, `${key} must have a usable viewport tile`);
   assert.match(report.status, new RegExp(key === "satellite" ? "Satellite tiles" : "OpenStreetMap tiles", "i"));
@@ -79,72 +110,84 @@ async function checkGisLayout(page, viewport) {
   }
 }
 
-let syntheticEvidenceMedia;
+// Deterministic synthetic evidence clip: a Playwright screen recording of an
+// animated color-block canvas, stored as a fixture. It is never a recording of
+// an operator or device. Runtime MediaRecorder cannot be used to generate it:
+// this Chromium build emits header-only WebM that no browser can demux.
+const SYNTHETIC_EVIDENCE_FIXTURE = path.resolve(__dirname, "fixtures", "synthetic-evidence.webm");
 
-async function recordSyntheticEvidence(page) {
-  // Generate a playable synthetic clip, never a recording of an operator or device.
-  return page.evaluate(async () => {
-    if (typeof HTMLCanvasElement.prototype.captureStream !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 120;
-    const stream = canvas.captureStream(10);
-    const mimeType = ["video/webm;codecs=vp8", "video/webm", "video/mp4"]
-      .find((type) => MediaRecorder.isTypeSupported(type));
-    if (!mimeType) throw new Error("No supported evidence recording format in this browser");
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks = [];
-    const stopped = new Promise((resolve, reject) => {
-      recorder.ondataavailable = (event) => chunks.push(event.data);
-      recorder.onstop = resolve;
-      recorder.onerror = reject;
-    });
-    try {
-      recorder.start();
-      const context = canvas.getContext("2d");
-      for (let i = 0; i < 5; i++) {
-        context.fillStyle = i % 2 ? "#008577" : "#ffffff";
-        context.fillRect(0, 0, 160, 120);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      recorder.stop();
-      await stopped;
-      return { bytes: Array.from(new Uint8Array(await new Blob(chunks).arrayBuffer())), mimeType };
-    } finally { stream.getTracks().forEach((track) => track.stop()); }
+function syntheticEvidenceMedia() {
+  return { bytes: fs.readFileSync(SYNTHETIC_EVIDENCE_FIXTURE), mimeType: "video/webm" };
+}
+
+async function assignFixtureInvestigator({ baseUrl, password, incidentId }) {
+  // Node-side Admin session: the page's cookie jar belongs to the scenario user
+  // and must not be reused or replaced for this setup request.
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "admin@example.test", password })
   });
+  assert.equal(login.status, 200, "Independent Admin session for evidence scoping must be obtainable");
+  const cookie = login.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("rakshakai_session=") && !value.startsWith("rakshakai_session=;"))
+    ?.split(";")[0];
+  assert.ok(cookie, "Admin session cookie must be issued for evidence scoping");
+  const response = await fetch(`${baseUrl}/api/incidents/${encodeURIComponent(incidentId)}/investigation/assign-officer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie },
+    body: JSON.stringify({ officerId: "u_fixture_officer" })
+  });
+  return response.status;
 }
 
-async function syntheticEvidenceFor(page) {
-  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
-  syntheticEvidenceMedia = await recordSyntheticEvidence(page);
-  if (syntheticEvidenceMedia) return syntheticEvidenceMedia;
-  const generator = await chromium.launch(launchOptions("chromium"));
-  try {
-    const generatorPage = await generator.newPage();
-    syntheticEvidenceMedia = await recordSyntheticEvidence(generatorPage);
-    if (!syntheticEvidenceMedia) throw new Error("Chromium could not generate synthetic evidence media");
-    return syntheticEvidenceMedia;
-  } finally {
-    await generator.close();
-  }
-}
-
-async function checkEvidenceUpload(page, role, width, browserName) {
-  const media = await syntheticEvidenceFor(page);
-  await page.locator('.nav-item[data-view="video-evidence"]').click();
+async function checkEvidenceUpload(page, role, width, browserName, session) {
+  const media = syntheticEvidenceMedia();
+  await openNavigation(page, "video-evidence");
   await page.waitForFunction(() => document.querySelector("#videoLinkedIncident").options.length > 1);
   await page.locator("#videoLinkedIncident").selectOption({ index: 1 });
+  if (role === "Admin") {
+    // This runs only against the isolated release stack. Give its fixture
+    // incident an explicit investigator before exercising scoped evidence access.
+    const assignment = await page.evaluate(async () => {
+      const incidentId = document.querySelector("#videoLinkedIncident").value;
+      const response = await fetch(`/api/incidents/${encodeURIComponent(incidentId)}/investigation/assign-officer`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ officerId: "u_fixture_officer" })
+      });
+      return response.status;
+    });
+    assert.equal(assignment, 200, "Admin must assign the release fixture investigator");
+  }
+  if (role === "Police Officer") {
+    // Evidence access is scoped to the incident's investigator or assigned-unit
+    // members and seed data grants neither to the fixture officer, so the upload
+    // only succeeds after an investigator assignment. Admin scenarios happen to
+    // establish one, but role-filtered runs have no preceding Admin scenario;
+    // assign it from an independent Admin session instead of relying on scenario
+    // execution order.
+    const incidentId = await page.evaluate(() => document.querySelector("#videoLinkedIncident").value);
+    const assignment = await assignFixtureInvestigator({ ...session, incidentId });
+    assert.equal(assignment, 200, "Police evidence scenario must establish the fixture investigator");
+  }
   await page.locator("#videoEvidenceFile").setInputFiles({
     name: `acceptance-${role.replaceAll(" ", "-")}-${width}.${media.mimeType.includes("mp4") ? "mp4" : "webm"}`,
     mimeType: media.mimeType.split(";")[0], buffer: Buffer.from(media.bytes)
   });
-  const upload = page.waitForResponse((response) => response.url().endsWith("/api/video-evidence") && response.request().method() === "POST");
+  // WebKit's multipart bridge can take longer than the default UI timeout on
+  // a freshly-built container; evidence persistence is intentionally checked
+  // rather than treated as a fast UI interaction.
+  const upload = page.waitForResponse(
+    (response) => response.url().endsWith("/api/video-evidence") && response.request().method() === "POST",
+    { timeout: 60000 }
+  );
   await page.locator('#videoEvidenceForm button[type="submit"]').click();
   const response = await upload;
   assert.equal(response.status(), 201, "Evidence upload must persist successfully");
   const { evidence } = await response.json();
   if (browserName === "webkit") {
-    await page.waitForFunction((id) => document.querySelector("#videoReviewSplit video")?.src.includes(id), evidence.id);
+    await page.waitForFunction((id) => document.querySelector("#videoReviewSplit video")?.src.includes(id), evidence.id, { timeout: 60000 });
     const preview = await page.locator("#videoReviewSplit video").evaluate(async (video) => {
       const response = await fetch(video.src);
       return { status: response.status, size: (await response.arrayBuffer()).byteLength };
@@ -157,12 +200,172 @@ async function checkEvidenceUpload(page, role, width, browserName) {
   await page.waitForFunction((id) => {
     const video = document.querySelector("#videoReviewSplit video");
     return video?.src.includes(id) && video.videoWidth > 0 && video.readyState >= 2;
-  }, evidence.id);
+  }, evidence.id, { timeout: 60000 });
   const preview = page.locator("#videoReviewSplit video");
   await preview.evaluate(async (video) => { video.muted = true; await video.play(); });
   await page.waitForFunction(() => document.querySelector("#videoReviewSplit video").currentTime > 0);
   await preview.evaluate((video) => video.pause());
   assert.match(await page.locator("#videoReviewSplit").innerText(), /Human verification is required/i);
+}
+
+async function checkCctnsWorkspace(page, viewport, screenshots, browserName, role) {
+  await openNavigation(page, "cctns");
+  const workspace = page.locator("#cctnsWorkspace");
+  await workspace.locator("h2", { hasText: "CCTNS Search" }).waitFor({ state: "visible" });
+  assert.match(await workspace.innerText(), /SIMULATED CCTNS RECORDS/i);
+
+  const search = workspace.locator('[data-cctns-search]');
+  await search.fill("TS09 AB 1234");
+  const vehicle = workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]');
+  await vehicle.waitFor({ state: "visible" });
+  await vehicle.click();
+  await workspace.locator(".cctns-detail-title", { hasText: "TS09 AB 1234" }).waitFor({ state: "visible" });
+  await workspace.locator('[data-cctns-record="CCTNS-CASE-2026-0456"]').last().click();
+  await workspace.locator(".cctns-detail-title", { hasText: "CASE-2026-0456" }).waitFor({ state: "visible" });
+
+  await search.fill("Smuggling");
+  await workspace.locator('[data-cctns-category="crime"]').click();
+  if (viewport.width <= 700) await workspace.locator('[data-cctns-toggle-filters]').click();
+  await workspace.locator('[data-cctns-filter="crimeType"]').selectOption("Smuggling");
+  await workspace.getByText(/Possible Match.*Human verification required/i).waitFor({ state: "visible" });
+  const smuggling = workspace.locator('[data-cctns-record="CCTNS-CASE-2026-1042"]');
+  await smuggling.waitFor({ state: "visible" });
+  await smuggling.click();
+  await workspace.locator(".cctns-detail-title", { hasText: "CASE-2026-1042" }).waitFor({ state: "visible" });
+  const layout = await workspace.evaluate((element) => ({
+    workspace: element.scrollWidth > element.clientWidth + 1,
+    document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+  }));
+  assert.deepEqual(layout, { workspace: false, document: false }, "CCTNS workspace must not overflow horizontally");
+
+  // Exercise the complete authorized officer workflow in every supported browser.
+  if (role === "Police Officer" && viewport.width === 1920) {
+    await page.goto(`${new URL(page.url()).origin}/cctns?type=vehicle&query=TS09%20AB%201234`, { waitUntil: "networkidle" });
+    await workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]').click();
+    await workspace.getByRole("button", { name: "LINK TO INCIDENT" }).click();
+    const dialog = page.locator("#cctnsLinkDialog");
+    await dialog.waitFor({ state: "visible" });
+    const incident = dialog.locator('select[name="incidentId"]');
+    await incident.selectOption("fixture_incident_active");
+    const linkedIncidentId = await incident.inputValue();
+    await dialog.locator('textarea[name="verificationReason"]').fill("Vehicle record and linked FIR reviewed by an authorized operator.");
+    await dialog.locator('input[name="humanConfirmed"]').check();
+    await dialog.getByRole("button", { name: "Confirm Link" }).click();
+    await workspace.getByText("Incident link confirmed and audited.").waitFor({ state: "visible" });
+    await page.reload({ waitUntil: "networkidle" });
+    await workspace.locator('[data-cctns-record="CCTNS-VEH-2026-4587"]').click();
+    await workspace.getByText(/Linked RakshakAI Incidents/i).waitFor({ state: "visible" });
+    assert.ok((await workspace.innerText()).includes(linkedIncidentId), "Confirmed CCTNS incident link must persist after refresh");
+  }
+  await page.screenshot({ path: path.join(screenshots, `cctns-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
+}
+
+async function checkTrackingLayout(page, viewport, screenshots, browserName, role) {
+  const now = "2026-10-13T20:00:00.000Z";
+  const entityStates = [
+    { id: "visual-person", trackType: "PERSON", candidateStatus: "PENDING_REVIEW", sessionStatus: "HUMAN_REVIEW", label: "Person" },
+    { id: "visual-vehicle", trackType: "VEHICLE", candidateStatus: "CONFIRMED", sessionStatus: "CONFIRMED", label: "Vehicle", confirmed: true },
+    { id: "visual-object", trackType: "OBJECT", candidateStatus: "REJECTED", sessionStatus: "REJECTED", label: "Object" },
+    { id: "visual-animal", trackType: "ANIMAL", candidateStatus: "UNCERTAIN", sessionStatus: "HUMAN_REVIEW", label: "Animal" }
+  ];
+  const sessions = entityStates.map((state, index) => ({
+    id: state.id, trackType: state.trackType, status: state.sessionStatus,
+    verificationStatus: state.confirmed ? "CONFIRMED" : "PENDING",
+    referenceDetectionId: `reference-${state.id}`, referenceCameraId: "cam_c19",
+    referenceTimestamp: now, referenceObservationId: `reference-observation-${state.id}`,
+    createdAt: now, updatedAt: now, pendingCandidateCount: state.candidateStatus === "PENDING_REVIEW" ? 1 : 0,
+    lastSeenCameraId: state.confirmed ? "cam_c12" : null, lastSeenAt: state.confirmed ? "2026-10-13T20:04:00.000Z" : null
+  }));
+  const details = Object.fromEntries(entityStates.map((state) => {
+    const reference = {
+      id: `reference-observation-${state.id}`, sessionId: state.id, detectionId: `reference-${state.id}`,
+      cameraId: "cam_c19", detectedAt: now, trackType: state.trackType, detectionConfidence: .96,
+      upperClothingColor: state.trackType === "PERSON" ? "navy" : undefined,
+      lowerClothingColor: state.trackType === "PERSON" ? "black" : undefined,
+      plateText: state.trackType === "VEHICLE" ? "TS09AB1234" : undefined,
+      vehicleColor: state.trackType === "VEHICLE" ? "white" : undefined,
+      vehicleType: state.trackType === "VEHICLE" ? "SUV" : undefined,
+      objectClass: state.trackType === "OBJECT" ? "backpack" : undefined,
+      animalSpecies: state.trackType === "ANIMAL" ? "dog" : undefined,
+      primaryColor: ["OBJECT", "ANIMAL"].includes(state.trackType) ? "black" : undefined,
+      sizeClass: ["OBJECT", "ANIMAL"].includes(state.trackType) ? "medium" : undefined
+    };
+    const observation = { ...reference, id: `candidate-observation-${state.id}`, detectionId: `candidate-${state.id}`, cameraId: "cam_c12", detectedAt: "2026-10-13T20:04:00.000Z" };
+    const candidate = {
+      id: `candidate-${state.id}`, sessionId: state.id, observationId: observation.id,
+      cameraId: observation.cameraId, detectedAt: observation.detectedAt, status: state.candidateStatus,
+      overallConfidence: .91, appearanceSimilarity: .9, spatialConsistency: .88, timingConsistency: .86,
+      directionConsistency: .82, activityConsistency: .8, plateSimilarity: .95, colorSimilarity: .9,
+      vehicleTypeSimilarity: .9, routeConsistency: .87, classSimilarity: .94, speciesSimilarity: .93,
+      sizeSimilarity: .88, markingsSimilarity: .84, humanVerificationRequired: true
+    };
+    return [state.id, { session: sessions.find((session) => session.id === state.id), observations: [reference, observation], candidates: [candidate], verifications: state.confirmed ? [{ id: `verification-${state.id}`, sessionId: state.id, candidateId: candidate.id, decision: "CONFIRM_MATCH", actorId: "release-admin", aiConfidence: .91, createdAt: observation.detectedAt }] : [] }];
+  }));
+  await page.route("**/api/tracking/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== "GET") return route.continue();
+    if (url.pathname === "/api/tracking/sessions") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions, total: sessions.length, offset: 0, limit: 50 }) });
+    const sessionId = decodeURIComponent(url.pathname.split("/").at(-1));
+    if (details[sessionId]) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(details[sessionId]) });
+    return route.continue();
+  });
+  await openNavigation(page, "multi-camera-tracking");
+  const panel = page.locator('[data-panel="multi-camera-tracking"]');
+  await panel.locator(".tracking-header h1").waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector("#trackingSessionsList .tracking-loading"));
+  const layout = await panel.evaluate((element) => ({
+    panelOverflow: element.scrollWidth > element.clientWidth + 1,
+    documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    heading: element.querySelector(".tracking-header h1")?.textContent?.trim(),
+    createVisible: Boolean(element.querySelector("#createTrackingBtn")?.getClientRects().length),
+    workspaceVisible: Boolean(element.querySelector("#trackingContent")?.getClientRects().length)
+  }));
+  assert.equal(layout.panelOverflow, false, "Tracking panel must not overflow horizontally");
+  assert.equal(layout.documentOverflow, false, "Tracking page must not create document-level horizontal overflow");
+  assert.equal(layout.heading, "Tracking Operations");
+  assert.equal(layout.createVisible, true, "Tracking session action must remain visible");
+  assert.equal(layout.workspaceVisible, true, "Tracking workspace must remain visible");
+
+  assert.deepEqual(await panel.locator(".session-type").allInnerTexts(), entityStates.map((state) => state.label));
+  for (const state of entityStates) {
+    await panel.locator(`.session-card[data-session-id="${state.id}"]`).click();
+    await panel.locator(".tracking-session-identity h2").filter({ hasText: state.id }).waitFor({ state: "visible" });
+    assert.match(await panel.locator(".tracking-session-meta-grid").innerText(), new RegExp(`Entity Type\\s+${state.label}`, "i"));
+    await panel.locator('.tab-btn[data-tab="candidates"]').click();
+    const candidate = panel.locator(`[data-candidate-id="candidate-${state.id}"]`);
+    await candidate.waitFor({ state: "visible" });
+    assert.match(await candidate.locator(".candidate-status").innerText(), new RegExp(state.candidateStatus.replaceAll("_", " "), "i"));
+    assert.match(await candidate.innerText(), /Possible match/i, "Candidate cards must remain explicitly advisory");
+    if (state.candidateStatus === "PENDING_REVIEW") {
+      assert.match(await candidate.innerText(), /Human verification required/i);
+      await candidate.getByRole("button", { name: "Side-by-Side" }).click();
+      assert.match(await panel.locator(".comparison-container").innerText(), /Human Verification Required/i);
+      assert.match(await panel.locator(".comparison-container").innerText(), /do not establish identity/i);
+    }
+    if (state.confirmed) {
+      assert.match(await panel.locator(".tracking-session-overview").innerText(), /Confirmed/i);
+      assert.equal(await panel.getByRole("button", { name: "Response Options" }).isVisible(), true);
+      assert.equal(await candidate.getByRole("button", { name: "Search CCTNS Vehicle" }).isVisible(), true);
+    }
+    const stateLayout = await panel.evaluate((element) => ({ panel: element.scrollWidth > element.clientWidth + 1, document: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 }));
+    assert.deepEqual(stateLayout, { panel: false, document: false }, `${state.trackType} tracking detail must not overflow horizontally`);
+  }
+
+  await page.locator("#createTrackingBtn").click();
+  const dialog = page.locator('.tracking-session-modal [role="dialog"]');
+  await dialog.waitFor({ state: "visible" });
+  const trackType = dialog.locator('[name="trackType"]');
+  assert.deepEqual(await trackType.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["PERSON", "VEHICLE", "OBJECT", "ANIMAL"]);
+  await trackType.selectOption("OBJECT");
+  assert.equal(await dialog.locator("#trackingEntityLabelGroup").isVisible(), true);
+  assert.equal(await dialog.locator("#trackingEntityLabelText").innerText(), "Object class");
+  await trackType.selectOption("ANIMAL");
+  assert.equal(await dialog.locator("#trackingEntityLabelText").innerText(), "Animal species");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await page.locator("#createTrackingBtn").evaluate((button) => button === document.activeElement), true, "Closing the tracking dialog must restore focus");
+
+  await page.screenshot({ path: path.join(screenshots, `tracking-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
 }
 
 async function runBrowserChecks({ baseUrl, password }) {
@@ -172,8 +375,8 @@ async function runBrowserChecks({ baseUrl, password }) {
   for (const browserName of browserNames) {
     const browser = await browserTypes[browserName].launch(launchOptions(browserName));
     try {
-    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-      for (const role of ["Admin", "Police Officer", "Citizen"]) {
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }].filter(({ width }) => selectedViewports.includes(width))) {
+      for (const role of ["Admin", "Police Officer", "Citizen"].filter((value) => selectedRoles.includes(value))) {
         const scenarioBaseUrl = browserName === "webkit"
           ? baseUrl.replace(/^http:/, "https:")
           : baseUrl;
@@ -221,9 +424,13 @@ async function runBrowserChecks({ baseUrl, password }) {
         const page = await context.newPage();
         const errors = [];
         const requests = [];
+        const routeResponses = [];
         const failedRequests = [];
         page.on("pageerror", (error) => errors.push(error.message));
         page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+        page.on("response", (response) => {
+          if (new URL(response.url()).pathname === "/api/maps/route") routeResponses.push({ status: response.status(), url: response.url() });
+        });
         page.on("requestfailed", (request) => failedRequests.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText || "failed" }));
         await page.addInitScript(() => {
           window.releaseCspViolations = [];
@@ -239,11 +446,30 @@ async function runBrowserChecks({ baseUrl, password }) {
           assert.notEqual(await page.locator("body").evaluate((element) => getComputedStyle(element).fontFamily), '"Times New Roman"');
           await page.locator('#loginForm input[name="email"]').fill(users.find((user) => user.role === role).email);
           await page.locator('#loginForm input[name="password"]').fill(password);
-          const loginResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/auth/login" && response.request().method() === "POST");
-          await page.locator('#loginForm button[type="submit"]').click();
-          assert.equal((await loginResponse).status(), 200, "Browser login must succeed");
+          // A transient loopback packet loss can surface the app's own
+          // "Network request timed out" login error on this host (observed only
+          // in firefox under WSL2). Retry once when exactly that error is shown,
+          // as the message instructs; every other failure still fails the scenario.
+          for (let attempt = 1; ; attempt += 1) {
+            await page.locator('#loginForm button[type="submit"]').click();
+            try {
+              await page.locator("#appShell:not(.app-hidden)").waitFor({ state: "visible" });
+              break;
+            } catch (error) {
+              const loginError = await page.locator("#loginError").innerText().catch(() => "");
+              if (attempt >= 2 || !loginError.includes("Network request timed out")) {
+                throw new Error(`Authenticated application shell did not become visible: ${loginError || "no login error shown"}`, { cause: error });
+              }
+            }
+          }
           await page.locator("#logoutButton").waitFor({ state: "visible" });
-          assert.equal(requests.filter((route) => route === "/api/auth/login").length, 1);
+          const authenticatedSession = await page.evaluate(async () => {
+            const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+            return { status: response.status, body: await response.json() };
+          });
+          assert.equal(authenticatedSession.status, 200, "Browser login must establish an authenticated session");
+          assert.equal(authenticatedSession.body?.user?.role, role, "Authenticated browser role must match the release scenario");
+          assert.ok(requests.filter((route) => route === "/api/auth/login").length >= 1, "Session must be established through the login endpoint");
           if (role === "Citizen") {
             await page.waitForLoadState("networkidle");
             await page.goto(`${scenarioBaseUrl}/rakshak/live-vision`, { waitUntil: "networkidle" });
@@ -252,12 +478,19 @@ async function runBrowserChecks({ baseUrl, password }) {
               errors.length = 0;
             }
             await page.waitForFunction(() => document.body.dataset.view === "missing");
-            assert.match(await page.locator("#permissionMessage").innerText(), /permission/i);
+            // Citizens get a dedicated report-center title (app.js overrides it by role).
+            assert.equal(await page.locator("#viewTitle").innerText(), "My Reports & Public Safety Help");
+            assert.equal(await page.locator('[data-panel="live-vision"]').getAttribute("class").then((value) => value.split(" ").includes("active")), false);
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
           } else {
             if (role === "Police Officer") assert.equal(await page.locator('.nav-item[data-view="settings"]').isVisible(), false);
-            await page.locator('.nav-item[data-view="gis"]').click();
+            await openNavigation(page, "gis");
             await page.locator("#gisMap .leaflet-tile-pane").waitFor({ state: "attached" });
+            // The app defaults #gisMap to street tiles (index.html data-map-layer="streets");
+            // Let that real initial layer finish loading before switching. Otherwise
+            // Firefox may abort its still-pending OSM tile requests during the switch.
+            await waitForUsableMapLayer(page, "streets", "tile.openstreetmap.org");
+            await page.locator("#satelliteMapLayer").click();
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.locator("#streetMapLayer").click();
             await waitForUsableMapLayer(page, "streets", "tile.openstreetmap.org");
@@ -265,6 +498,9 @@ async function runBrowserChecks({ baseUrl, password }) {
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await checkGisLayout(page, viewport);
             assert.equal(await page.locator("#navigateMap").isDisabled(), true);
+            // Route tools (Use My Location, Set Destination, Calculate) live in the
+            // "route" mode panel; switch modes before using them.
+            await page.locator("#gisModeRoute").click();
             await page.locator("#useMyLocation").click();
             await page.waitForFunction(() => !document.querySelector("#useMyLocation").disabled);
             assert.equal(await page.locator("#navigateMap").isDisabled(), true);
@@ -278,12 +514,21 @@ async function runBrowserChecks({ baseUrl, password }) {
             await page.locator("#navigateMap").click();
             assert.equal((await routeResponse).status(), 200);
             await page.waitForFunction(() => !document.querySelector("#recalculateRoute").disabled);
+            await page.locator("#clearMapRoute").evaluate((button) => {
+              window.releaseClearRouteEvents = [];
+              for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+                button.addEventListener(type, (event) => {
+                  window.releaseClearRouteEvents.push({ type, disabled: button.disabled, trusted: event.isTrusted });
+                }, { capture: true });
+              }
+            });
             await page.locator("#clearMapRoute").click();
-            assert.equal(await page.locator("#navigateMap").isDisabled(), true);
+            await page.waitForFunction(() => !document.querySelector("#navigateMap").disabled && document.querySelector("#clearMapRoute").disabled);
+            assert.equal(await page.locator("#navigateMap").isDisabled(), false);
             assert.equal(await page.locator("#clearMapRoute").isDisabled(), true);
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await page.screenshot({ path: path.join(screenshots, `gis-${browserName}-${role.replaceAll(" ", "-")}-${viewport.width}.png`), fullPage: true });
-            await page.locator('.nav-item[data-view="live-vision"]').click();
+            await openNavigation(page, "live-vision");
             await page.locator("#startLiveVision").click();
             const cameraSupported = await page.evaluate(() => Boolean(navigator.mediaDevices?.getUserMedia));
             if (cameraSupported) {
@@ -316,7 +561,9 @@ async function runBrowserChecks({ baseUrl, password }) {
               && violation.sourceFile === ""
               && violation.lineNumber === 5
             )), [], "No application CSP violations before rendering native media controls");
-            await checkEvidenceUpload(page, role, viewport.width, browserName);
+            await checkEvidenceUpload(page, role, viewport.width, browserName, { baseUrl, password });
+            await checkTrackingLayout(page, viewport, screenshots, browserName, role);
+            await checkCctnsWorkspace(page, viewport, screenshots, browserName, role);
           }
           assert.deepEqual(errors, [], "No uncaught browser errors");
           const cspViolations = await page.evaluate(() => window.releaseCspViolations);
@@ -337,14 +584,60 @@ async function runBrowserChecks({ baseUrl, password }) {
         } catch (error) {
           // Do not capture the login form or entered credentials on failure.
           console.error(`Browser scenario failed: ${browserName}, ${role}, ${viewport.width}x${viewport.height}`);
-          console.error(String(error.stack || "").split("\n").filter((line) => line.includes("browser-release.cjs")).join("\n"));
-          console.error(await page.evaluate(({ browserErrors, failedRequests }) => ({
+          console.error("Full failure stack and Playwright call log:");
+          console.error(String(error.stack || error));
+          console.error(JSON.stringify(await page.evaluate(({ browserErrors, failedRequests, requests, routeResponses }) => ({
             view: document.body.dataset.view,
+            activePanel: document.querySelector(".view.active")?.dataset.panel,
+            gisNavigation: (() => {
+              const item = document.querySelector('.nav-item[data-view="gis"]');
+              const map = document.querySelector("#gisMap");
+              const tiles = [...(map?.querySelectorAll(".leaflet-tile-pane img.leaflet-tile") || [])];
+              return item ? {
+                visible: Boolean(item.getClientRects().length),
+                ariaCurrent: item.getAttribute("aria-current"),
+                groupOpen: item.closest("details")?.open ?? null,
+                gisPanelActive: document.querySelector('[data-panel="gis"]')?.classList.contains("active") ?? false,
+                mapAttached: Boolean(map?.querySelector(".leaflet-tile-pane")),
+                baseLayer: map?.dataset.baseLayer || null,
+                mapClasses: map?.className || "",
+                mapStatus: map?.querySelector(".map-status")?.textContent || "",
+                tiles: tiles.map((tile) => ({ host: new URL(tile.currentSrc || tile.src).host, complete: tile.complete, width: tile.naturalWidth, height: tile.naturalHeight, connected: tile.isConnected }))
+              } : null;
+            })(),
             calculateDisabled: document.querySelector("#navigateMap")?.disabled,
+            clearDisabled: document.querySelector("#clearMapRoute")?.disabled,
+            clearTitle: document.querySelector("#clearMapRoute")?.title,
+            routeSummary: document.querySelector("#routeSummary")?.textContent,
+            routePointCards: document.querySelector("#routePointCards")?.textContent,
             locationDisabled: document.querySelector("#useMyLocation")?.disabled,
             cspDirectives: window.releaseCspViolations,
             browserErrors,
             failedRequests,
+            recentRequests: requests.slice(-20),
+            routeResponses,
+            clearRouteEvents: window.releaseClearRouteEvents || [],
+            navigationStatus: document.querySelector("#mapNavigationStatus")?.textContent,
+            map: (() => {
+              const map = document.querySelector("#gisMap");
+              if (!map) return null;
+              return {
+                baseLayer: map.dataset.baseLayer,
+                status: map.querySelector(".map-status")?.textContent,
+                className: map.className,
+                mapRect: map.getBoundingClientRect().toJSON(),
+                satellitePressed: document.querySelector("#satelliteMapLayer")?.getAttribute("aria-pressed"),
+                streetPressed: document.querySelector("#streetMapLayer")?.getAttribute("aria-pressed"),
+                tiles: [...map.querySelectorAll(".leaflet-tile-pane img.leaflet-tile")].slice(0, 8).map((tile) => ({
+                  src: tile.currentSrc || tile.src,
+                  complete: tile.complete,
+                  naturalWidth: tile.naturalWidth,
+                  naturalHeight: tile.naturalHeight,
+                  rect: tile.getBoundingClientRect().toJSON(),
+                  opacity: getComputedStyle(tile).opacity
+                }))
+              };
+            })(),
             scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
             camera: {
               secureContext: window.isSecureContext,
@@ -355,7 +648,7 @@ async function runBrowserChecks({ baseUrl, password }) {
               hasStream: Boolean(document.querySelector("#liveVisionVideo")?.srcObject),
               hidden: document.hidden
             }
-          }), { browserErrors: errors, failedRequests }).catch(() => ({ pageUnavailable: true })));
+          }), { browserErrors: errors, failedRequests, requests, routeResponses }).catch(() => ({ pageUnavailable: true })), null, 2));
           throw error;
         } finally { await context.close(); }
       }

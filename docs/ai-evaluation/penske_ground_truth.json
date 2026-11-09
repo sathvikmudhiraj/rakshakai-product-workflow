@@ -1,0 +1,11 @@
+﻿{
+  "version": 1,
+  "purpose": "Single-image exploratory manual ground truth; not field acceptance, not independently second-reviewed.",
+  "image": {"id": "penske-cc0", "filename": "penske.jpg", "width": 1000, "height": 373, "sha256": "226b538802ab84dfc65c0472b5850726239b07719c67b801a80a9350fdfbc20e", "source": "https://commons.wikimedia.org/wiki/File:PenskeRamp.jpg", "author": "Brad232", "license": "CC0-1.0", "license_url": "https://creativecommons.org/publicdomain/zero/1.0/", "accessed": "2026-10-21", "tags": ["daylight", "vehicle", "large object", "partial occlusion", "unusual angle"], "annotation_origin": "Manually drawn from image before running the model; single reviewer; approximate boxes; pickup class is an uncertain labeling convention."},
+  "box_format": "xyxy pixels",
+  "annotations": [
+    {"class": "truck", "box": [6, 49, 735, 372]},
+    {"class": "truck", "box": [785, 214, 960, 308], "note": "Pickup assigned to truck; partially occluded."}
+  ],
+  "other_classes": "No target objects visibly labeled; single-review uncertainty applies."
+}

@@ -15,13 +15,17 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
 FROM nginx:1.27-alpine
-RUN apk add --no-cache nodejs
+RUN apk add --no-cache nodejs \
+  && mkdir -p /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp /var/cache/nginx/fastcgi_temp /var/cache/nginx/uwsgi_temp /var/cache/nginx/scgi_temp \
+  && sed -i '/^user[[:space:]]/d' /etc/nginx/nginx.conf \
+  && chown -R nginx:nginx /run /var/cache/nginx /etc/nginx/conf.d
 COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template
 COPY csp.config.cjs /etc/rakshakai/csp.config.cjs
 COPY --chmod=755 frontend/docker-entrypoint.d/10-csp-defaults.sh /docker-entrypoint.d/10-csp-defaults.envsh
 COPY frontend/docker-entrypoint.d/render-csp.cjs /docker-entrypoint.d/render-csp.cjs
 COPY --from=build /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+USER nginx
+EXPOSE 8080
 HEALTHCHECK --interval=20s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1

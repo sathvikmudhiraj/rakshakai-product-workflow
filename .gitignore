@@ -10,6 +10,7 @@
 backend/.env
 frontend/.env
 ai-service/.env
+/login.json
 
 !.env.example
 !**/.env.example
@@ -40,6 +41,10 @@ ai-service/*.pt
 *.osrm.*
 docker/osrm-data/
 
+# Verification run outputs (screenshots, traces, reports) stay local; they are
+# large, machine-generated, and kept out of the release tree and secret scanning.
+artifacts/
+
 dist/
 build/
 .next/
@@ -52,5 +57,26 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Local database/OSRM diagnostic scripts retained outside the release tree.
+/backend/add_composite_fks.js
+/backend/add_composite_fks2.js
+/backend/check_fks.js
+/backend/check_fks2.js
+/backend/check_fks3.js
+/backend/check_schema.js
+/backend/check_schema2.js
+/backend/check_schema3.js
+/backend/check_users.js
+/backend/remove_migration_025.js
+/scripts/_debug-gis-click.cjs
+/data/osrm-telangana-build/diag-390prefix.cjs
+/data/osrm-telangana-build/diag-834.cjs
+/data/osrm-telangana-build/diag-834b.cjs
+/data/osrm-telangana-build/diag-834c.cjs
+/data/osrm-telangana-build/diag-834d.cjs
+/data/osrm-telangana-build/diag-backend.cjs
+/data/osrm-telangana-build/diag-search.cjs
+/data/osrm-telangana-build/diag-search2.cjs
 
 nul

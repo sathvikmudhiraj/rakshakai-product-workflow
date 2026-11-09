@@ -1,0 +1,53 @@
+const { createRepository, dateValue } = require("./base.repository");
+
+module.exports = createRepository({
+  table: "escalation_alerts",
+  jsonKey: "escalationAlerts",
+  columns: [
+    { name: "incident_id", value: (item) => item.incidentId || item.incident_id || "" },
+    { name: "alert_type", value: (item) => item.alertType || item.alert_type || "" },
+    { name: "severity", value: (item) => item.severity || "HIGH" },
+    { name: "escalation_level", value: (item) => item.escalationLevel || item.escalation_level || "L0" },
+    { name: "title", value: (item) => item.title || "" },
+    { name: "message", value: (item) => item.message || "" },
+    { name: "unique_key", value: (item) => item.uniqueKey || item.unique_key || "" },
+    { name: "acknowledged", value: (item) => Boolean(item.acknowledged) },
+    { name: "acknowledged_by", value: (item) => item.acknowledgedBy || item.acknowledged_by || null },
+    { name: "acknowledged_at", value: (item) => item.acknowledgedAt || item.acknowledged_at ? dateValue(item.acknowledgedAt || item.acknowledged_at) : null },
+    { name: "resolved", value: (item) => Boolean(item.resolved) },
+    { name: "resolved_by", value: (item) => item.resolvedBy || item.resolved_by || null },
+    { name: "resolved_at", value: (item) => item.resolvedAt || item.resolved_at ? dateValue(item.resolvedAt || item.resolved_at) : null },
+    { name: "active", value: (item) => Boolean(item.active !== undefined ? item.active : true) },
+    { name: "created_at", value: (item) => dateValue(item.createdAt) },
+    { name: "updated_at", value: (item) => dateValue(item.updatedAt) }
+  ],
+  serialize: (record) => record,
+  deserialize: (row) => ({
+    ...row.data,
+    id: row.id,
+    incidentId: row.data?.incident_id || row.incident_id || "",
+    incident_id: row.data?.incident_id || row.incident_id || "",
+    alertType: row.data?.alert_type || row.alert_type || "",
+    alert_type: row.data?.alert_type || row.alert_type || "",
+    severity: row.data?.severity || row.severity || "HIGH",
+    escalationLevel: row.data?.escalation_level || row.escalation_level || "L0",
+    escalation_level: row.data?.escalation_level || row.escalation_level || "L0",
+    title: row.data?.title || row.title || "",
+    message: row.data?.message || row.message || "",
+    uniqueKey: row.data?.unique_key || row.unique_key || "",
+    unique_key: row.data?.unique_key || row.unique_key || "",
+    acknowledged: row.data?.acknowledged ?? row.acknowledged ?? false,
+    acknowledgedBy: row.data?.acknowledged_by || row.acknowledged_by || null,
+    acknowledged_by: row.data?.acknowledged_by || row.acknowledged_by || null,
+    acknowledgedAt: row.data?.acknowledged_at || row.acknowledged_at || null,
+    acknowledged_at: row.data?.acknowledged_at || row.acknowledged_at || null,
+    resolved: row.data?.resolved ?? row.resolved ?? false,
+    resolvedBy: row.data?.resolved_by || row.resolved_by || null,
+    resolved_by: row.data?.resolved_by || row.resolved_by || null,
+    resolvedAt: row.data?.resolved_at || row.resolved_at || null,
+    resolved_at: row.data?.resolved_at || row.resolved_at || null,
+    active: row.data?.active ?? row.active ?? true,
+    createdAt: row.data?.created_at || row.created_at || null,
+    updatedAt: row.data?.updated_at || row.updated_at || null
+  })
+});

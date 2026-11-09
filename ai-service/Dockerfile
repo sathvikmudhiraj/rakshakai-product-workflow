@@ -12,8 +12,9 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt ./
 RUN python -m pip install --upgrade pip \
-    && python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.9.1+cpu" "torchvision==0.24.1+cpu" \
-    && python -m pip install -r requirements.txt
+    && python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.14.1+cpu" "torchvision==0.29.1+cpu" \
+    && python -m pip install -r requirements.txt \
+    && python -m pip check
 
 COPY main.py ./
 RUN mkdir -p /models \

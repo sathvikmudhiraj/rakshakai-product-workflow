@@ -111,9 +111,9 @@ values.
 
 ## Expected health
 
-- `http://localhost:3000` returns HTTP 200
+- `http://localhost:3001` returns HTTP 200
 - `http://localhost:5000/api/health` returns HTTP 200 with `database=postgres`
-- `http://localhost:3000/api/health` returns HTTP 200 through the Nginx proxy
+- `http://localhost:3001/api/health` returns HTTP 200 through the Nginx proxy
 - `http://localhost:8000/health` reports AI process/model readiness
 - routing health may report `approximate-fallback` while OSRM is inactive
 
