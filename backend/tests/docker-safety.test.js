@@ -49,6 +49,7 @@ test("Compose base is shared and environment-specific settings live in overrides
   assert.match(prodBackend, /NODE_ENV:\s*production/);
   assert.match(prodBackend, /CORS_ORIGIN:\s*\$\{PRODUCTION_CORS_ORIGIN:\?Set PRODUCTION_CORS_ORIGIN to the production frontend origin\}/);
   assert.match(prodBackend, /FRONTEND_ORIGINS:\s*\$\{PRODUCTION_FRONTEND_ORIGINS:\?Set PRODUCTION_FRONTEND_ORIGINS to the production frontend origin\}/);
+  assert.match(prodBackend, /ALLOW_CITIZEN_REGISTRATION:\s*\$\{PRODUCTION_ALLOW_CITIZEN_REGISTRATION:\?Set PRODUCTION_ALLOW_CITIZEN_REGISTRATION to true or false\}/);
   assert.match(prodFrontend, /CSP_ENV:\s*production/);
 });
 

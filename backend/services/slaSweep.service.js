@@ -10,7 +10,8 @@ async function runSlaSweep({
   getEscalationLevel,
   requiresInvestigation,
   isInvestigationOfficerMissing,
-  isInvestigationInactive
+  isInvestigationInactive,
+  isExplicitDemoIncident = () => false
 }) {
   const currentIso = new Date(currentTime).toISOString();
   const createdAlerts = [];
@@ -47,6 +48,10 @@ async function runSlaSweep({
   };
 
   for (const incident of db.incidents || []) {
+    if (isExplicitDemoIncident(incident)) {
+      results.push({ incidentId: incident.id, skipped: "demo", alertsCreated: 0, alertsResolved: 0 });
+      continue;
+    }
     const resolvedAtStart = resolvedAlerts.length;
     const alertsAtStart = createdAlerts.length;
     const incidentAlerts = () => db.escalationAlerts.filter((alert) => alert.incidentId === incident.id);

@@ -3,6 +3,7 @@ const { listRecords: listCctnsRecords } = require("./cctns.service");
 const { isOfficerCollectionQuery, officerIntent, listOfficersByStation, canReadOfficer, operationalAvailability } = require("./copilotOfficers.service");
 const { unitTelemetryFreshness, unitTelemetryDispatchQuality } = require("./unitTelemetry.service");
 const { activeOfficerDeployments } = require("./incidentOfficerAssignment.service");
+const { isExplicitDemoIncident } = require("./slaDataQuality.service");
 const {
   detectLanguage, normalizeQuery, responseLanguage, localizeAnswer,
   MULTILINGUAL_WRITE_PATTERN, SENSITIVE_REQUEST_PATTERN, INJECTION_PATTERN
@@ -255,10 +256,11 @@ function getTrackById(db, id) {
   return clean({ id: idOf(session, "trackId", "subjectId", "entityId"), internalId: session.id, type: session.trackType || null, status: session.status || null, verificationStatus: session.verificationStatus || null, confidence: session.confidence ?? null, lastSeenCameraId: session.lastSeenCameraId || lastSequence?.cameraId || null, lastSeenAt: session.lastSeenAt || lastSequence?.detectedAt || null, sequence, highestCandidate: candidates[0] || null, observation: last ? { plate: last.plateText || null, color: last.vehicleColor || null, vehicleType: last.vehicleType || null, brand: last.vehicleBrand || null, model: last.vehicleModel || null, brandModelConfidence: last.brandModelConfidence ?? null } : null });
 }
 
-const listCriticalIncidents = (db) => list(db, "incidents").filter((item) => upper(item.severity) === "CRITICAL" && !CLOSED.has(lower(item.status)));
+const operationalIncidents = (db) => list(db, "incidents").filter((item) => !isExplicitDemoIncident(item));
+const listCriticalIncidents = (db) => operationalIncidents(db).filter((item) => upper(item.severity) === "CRITICAL" && !CLOSED.has(lower(item.status)));
 const listAvailableUnits = (db) => list(db, "responseUnits").filter((item) => item.operational !== false && lower(item.status) === "available");
 const listUnhealthyCameras = (db) => list(db, "cameraSources").filter((item) => !HEALTHY.has(lower(valueFrom(item, "healthStatus", "status") || "unknown")));
-const listSlaBreaches = (db, now = Date.now()) => list(db, "incidents").filter((item) => { const sla = slaSnapshot(db, item, now); return sla.assignment.overdue || sla.response.overdue || ["L2", "L3", "L4"].includes(sla.escalationLevel); });
+const listSlaBreaches = (db, now = Date.now()) => operationalIncidents(db).filter((item) => { const sla = slaSnapshot(db, item, now); return sla.assignment.overdue || sla.response.overdue || ["L2", "L3", "L4"].includes(sla.escalationLevel); });
 
 // This is the complete tool surface. There are deliberately no generic repository or mutation tools.
 const READ_ONLY_QUERY_REGISTRY = Object.freeze({ getOfficerById, getIncidentById, getCameraById, getUnitById, getTrackById, listCriticalIncidents, listAvailableUnits, listUnhealthyCameras, listSlaBreaches, listOfficersByStation });
@@ -330,7 +332,7 @@ function trackAnswer(db, id, message) {
 }
 
 function dashboardAnswer(db, now) {
-  const active = list(db, "incidents").filter((item) => !CLOSED.has(lower(item.status)));
+  const active = operationalIncidents(db).filter((item) => !CLOSED.has(lower(item.status)));
   return result(["Current Operational Summary", "", `Active incidents: ${active.length}`, `Critical incidents: ${listCriticalIncidents(db).length}`, `Response units: ${list(db, "responseUnits").length} total`, `Available response units: ${listAvailableUnits(db).length}`, `CCTV sources: ${list(db, "cameraSources").length} total`, `Unhealthy cameras: ${listUnhealthyCameras(db).length}`, `Active SLA breaches: ${listSlaBreaches(db, now).length}`].join("\n"));
 }
 
@@ -527,7 +529,8 @@ function incidentLocationText(db, item) {
 }
 
 function incidentCollectionAnswer(db, text, now) {
-  let records = list(db, "incidents");
+  const operational = operationalIncidents(db);
+  let records = operational;
   const activeOnly = /\b(?:open|active|pending|unassigned)\b|needs? (?:a )?unit/i.test(text);
   if (activeOnly) records = records.filter((item) => !CLOSED.has(lower(item.status)));
   if (/unassigned|needs? (?:a )?unit/i.test(text)) records = records.filter((item) => !valueFrom(item, "assignedUnitId", "assigned_unit_id"));
@@ -537,7 +540,7 @@ function incidentCollectionAnswer(db, text, now) {
   let locationNote = null;
   if (locationPhrase) {
     const pattern = incidentLocationPattern(locationPhrase);
-    if (list(db, "incidents").some((item) => pattern.test(incidentLocationText(db, item)))) {
+    if (operational.some((item) => pattern.test(incidentLocationText(db, item)))) {
       records = records.filter((item) => pattern.test(incidentLocationText(db, item)));
       locationNote = `Location filter: ${locationPhrase}`;
     } else {

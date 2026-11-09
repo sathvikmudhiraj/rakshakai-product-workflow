@@ -96,6 +96,18 @@ test("100 scheduler sweeps create one alert for each unique condition and level"
   assert.equal(keys.filter((key) => key.includes("ASSIGNMENT_BREACH:L2")).length, 1);
 });
 
+test("SLA sweep skips explicitly classified demo incidents without changing their history", async () => {
+  const demo = incident({ id: "inc_demo_sla", recordClassification: "demo", escalationLevel: "L0" });
+  const existingAlert = { id: "existing_demo_alert", incidentId: demo.id, active: true, resolved: false };
+  const db = database(demo);
+  db.escalationAlerts.push(existingAlert);
+  const beforeTimeline = structuredClone(db.incidentTimeline);
+  const result = await sweep(db, baseTime + 10 * MINUTE);
+  assert.equal(result.results[0].skipped, "demo");
+  assert.deepEqual(db.escalationAlerts, [existingAlert]);
+  assert.deepEqual(db.incidentTimeline, beforeTimeline);
+});
+
 test("assigning a team resolves an active assignment breach and preserves it", async () => {
   const item = incident(); const db = database(item);
   await sweep(db, baseTime + 2 * MINUTE);

@@ -80,6 +80,13 @@ Provision these outside this repository before deployment:
 7. Central logs, metrics, tracing, durable alert delivery, a watchdog, defined
    SLOs, and an owned on-call escalation path.
 
+Before using `compose.prod.yaml`, explicitly choose
+`PRODUCTION_ALLOW_CITIZEN_REGISTRATION=true` or `false` in the private local
+configuration after the deployment owner approves the registration policy.
+The overlay has no default for this setting. For a host-run backend, set
+`ALLOW_CITIZEN_REGISTRATION=false` to disable public self-registration. The
+default remains enabled to preserve existing local behavior.
+
 ## Database and evidence
 
 Production requires PostgreSQL. Use a verified TLS connection and run migrations

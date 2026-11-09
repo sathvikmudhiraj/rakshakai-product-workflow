@@ -77,6 +77,7 @@ services:
       PORT: "5000"
       DATABASE_URL: postgresql://${POSTGRES_USER:-rakshakai}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-rakshakai}
       PG_SSL_MODE: disable
+      ALLOW_CITIZEN_REGISTRATION: ${ALLOW_CITIZEN_REGISTRATION:-true}
       PG_MIGRATION_RETRIES: "20"
       PG_MIGRATION_RETRY_MS: "1500"
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
@@ -107,8 +108,10 @@ services:
       API_RATE_LIMIT: "600"
       AUTH_RATE_LIMIT: "10"
       PASSWORD_CHANGE_RATE_LIMIT: "10"
+      # Bounded graceful shutdown; must stay below stop_grace_period.
+      SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-25000}
       TRUST_PROXY: "1"
-    command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && node server.js"]
+    command: ["sh", "-c", "npm run migrate && npm run import:json -- --if-empty && exec node server.js"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,6 +133,9 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 5
+    # Docker defaults to a 10s SIGTERM grace period, which is shorter than the
+    # backend's shutdown deadline and would SIGKILL it mid-drain.
+    stop_grace_period: 40s
     restart: unless-stopped
 
   frontend:

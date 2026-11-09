@@ -4916,7 +4916,11 @@ function publishCriticalIncident(incident) {
 function summary(db) {
   const sources = cameraSourcesForResponse(db);
   const activeIncidents = db.incidents.filter(isActiveIncident);
-  const openAlerts = db.alerts.filter(isActiveIncident);
+  const operationalAlerts = db.alerts.filter((alert) => {
+    const incident = db.incidents.find((item) => item.id === alert.incidentId);
+    return !isExplicitDemoIncident(alert) && !isExplicitDemoIncident(incident);
+  });
+  const openAlerts = operationalAlerts.filter(isActiveIncident);
   const etaIncidents = activeIncidents.filter((incident) => incident.etaMinutes !== null && incident.etaMinutes !== undefined && Number(incident.etaMinutes) > 0);
   const activeReports = db.reports.filter(isActiveOperationalReport);
   const missingPersons = activeReports.filter((report) => report.reportType === "missing_person").length;
@@ -4929,9 +4933,9 @@ function summary(db) {
     pendingCitizenReports: activeReports.length,
     camerasOnline: sources.filter((source) => source.enabled && ["online", "available", "ready"].includes(source.status)).length,
     unitsAvailable: db.responseUnits.filter((unit) => unit.status === "available").length,
-    pendingReview: db.alerts.filter((alert) => alert.status === "Pending Review").length
+    pendingReview: operationalAlerts.filter((alert) => alert.status === "Pending Review").length
       + db.reports.filter((report) => ["submitted_for_review", "possible_match"].includes(normalizedIncidentValue(report.status))).length,
-    pendingVideoObservations: db.alerts.filter((alert) => alert.source === "video_upload" && ["pending_review", "human_verification_required"].includes(String(alert.reviewStatus || alert.verificationStatus || "").toLowerCase())).length,
+    pendingVideoObservations: operationalAlerts.filter((alert) => alert.source === "video_upload" && ["pending_review", "human_verification_required"].includes(String(alert.reviewStatus || alert.verificationStatus || "").toLowerCase())).length,
     averageEtaMinutes: etaIncidents.length
       ? Math.round(etaIncidents.reduce((sum, incident) => sum + Number(incident.etaMinutes), 0) / etaIncidents.length)
       : null
@@ -5435,6 +5439,10 @@ async function apiInternal(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/alerts") {
     if (!hasRole(user, ["Police Officer", "Admin"])) return forbidden(res);
     const alerts = db.alerts
+      .filter((alert) => {
+        const incident = db.incidents.find((item) => item.id === alert.incidentId);
+        return !isExplicitDemoIncident(alert) && !isExplicitDemoIncident(incident);
+      })
       .filter((alert) => !["closed", "resolved", "false alarm"].includes(normalizedIncidentValue(alert.status)))
       .map((alert) => alertForResponse(db, alert));
     return sendJson(res, 200, { alerts });
@@ -7714,7 +7722,8 @@ async function runSlaEscalationSweep(options = {}) {
     getEscalationLevel: getEscalationLevelForIncident,
     requiresInvestigation,
     isInvestigationOfficerMissing,
-    isInvestigationInactive
+    isInvestigationInactive,
+    isExplicitDemoIncident
   });
   if ((options.persist ?? !options.db) && result.changed) {
     const incidentIds = new Set(result.results.map((entry) => entry.incidentId));

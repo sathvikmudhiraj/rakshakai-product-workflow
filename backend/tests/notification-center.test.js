@@ -14,7 +14,11 @@ const admin = fixture.users.find((user) => user.role === "Admin");
 const citizen = fixture.users.find((user) => user.role === "Citizen");
 const now = new Date().toISOString();
 fixture.incidents = [{ id: "inc_notification_1", title: "Possible Murder", type: "possible_murder", severity: "CRITICAL", status: "Verified", verificationStatus: "verified", sourceType: "manual", sourceName: "Command Center", reportedBy: admin.id, description: "Authoritative incident description", address: "Sector 7", lat: 17.5, lng: 78.3, locationStatus: "Verified", createdAt: now, updatedAt: now }];
-fixture.escalationAlerts = [{ id: "sla_notification_1", incidentId: "inc_notification_1", alertType: "RESPONSE_BREACH", title: "Response SLA Breach", message: "Response SLA exceeded", severity: "HIGH", escalationLevel: "L2", active: true, createdAt: now }];
+fixture.incidents.push({ id: "inc_demo_notification", title: "Demo critical incident", severity: "CRITICAL", status: "Verified", recordClassification: "demo", createdAt: now, updatedAt: now });
+fixture.escalationAlerts = [
+  { id: "sla_notification_1", incidentId: "inc_notification_1", alertType: "RESPONSE_BREACH", title: "Response SLA Breach", message: "Response SLA exceeded", severity: "HIGH", escalationLevel: "L2", active: true, createdAt: now },
+  { id: "sla_demo_notification", incidentId: "inc_demo_notification", alertType: "RESPONSE_BREACH", title: "Demo Response SLA Breach", message: "Demo record", severity: "HIGH", escalationLevel: "L2", active: true, createdAt: now }
+];
 fixture.cameraSources = [{ id: "cam_notification_1", cameraId: "C-05", name: "Gate Camera", zone: "Sector 7", sourceType: "demo_seed", isDemo: true, status: "offline", healthStatus: "OFFLINE", createdAt: now }];
 fixture.cameraHealthAlerts = [{ id: "camera_alert_1", cameraId: "cam_notification_1", status: "OFFLINE", healthStatus: "OFFLINE", message: "Camera stopped sending frames", severity: "HIGH", active: true, createdAt: now }];
 fixture.trackingSessions = [{ id: "track_session_1", trackType: "VEHICLE", status: "HUMAN_REVIEW", referenceCameraId: "cam_notification_1", createdAt: now }];
@@ -52,6 +56,7 @@ test("notification metadata is derived from real state and deduplicated", async 
   const payload = await first.json();
   assert.equal(first.status, 200, payload.error);
   assert.ok(payload.notifications.some((item) => item.type === "critical_incident" && item.entityId === "inc_notification_1"));
+  assert.ok(payload.notifications.every((item) => item.entityId !== "inc_demo_notification"));
   assert.ok(payload.notifications.some((item) => item.entityType === "camera"));
   assert.ok(payload.notifications.some((item) => item.entityType === "tracking_candidate"));
   assert.equal(new Set(payload.notifications.map((item) => item.id)).size, payload.notifications.length);

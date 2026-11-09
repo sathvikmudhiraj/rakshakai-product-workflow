@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const { getDatabaseMode, query } = require("./postgres.service");
 const { writeDb, canAccessVideoEvidence } = require("./core.service");
+const { isExplicitDemoIncident } = require("./slaDataQuality.service");
 
 const OPERATOR_ROLES = ["Admin", "Police Officer"];
 const CLOSED_INCIDENT_STATES = new Set(["closed", "resolved", "rejected / false alarm"]);
@@ -37,7 +38,9 @@ function titleWords(value) {
 
 function deriveNotifications(db) {
   const notifications = [];
+  const incidentsById = new Map((db.incidents || []).map((incident) => [String(incident.id), incident]));
   for (const incident of db.incidents || []) {
+    if (isExplicitDemoIncident(incident)) continue;
     if (!isActiveIncident(incident)) continue;
     if (String(incident.severity).toUpperCase() === "CRITICAL") {
       notifications.push(record({
@@ -59,6 +62,7 @@ function deriveNotifications(db) {
   }
 
   for (const alert of db.escalationAlerts || []) {
+    if (isExplicitDemoIncident(alert) || isExplicitDemoIncident(incidentsById.get(String(alert.incidentId)))) continue;
     const type = String(alert.alertType || "sla_alert").toLowerCase();
     notifications.push(record({
       dedupeKey: `${type}:${alert.id || `${alert.incidentId}:${alert.escalationLevel || "state"}`}`,
@@ -245,7 +249,11 @@ async function receiptsFor(userId, db) {
 async function listNotifications(db, user) {
   await syncNotifications(db);
   const receipts = await receiptsFor(user.id, db);
-  const items = (await storedNotifications(db)).filter((item) => canSeeNotification(item, user, db)).map((item) => ({
+  const items = (await storedNotifications(db)).filter((item) => {
+    if (item.entityType !== "incident") return true;
+    const incident = (db.incidents || []).find((entry) => String(entry.id) === String(item.entityId));
+    return !isExplicitDemoIncident(incident);
+  }).filter((item) => canSeeNotification(item, user, db)).map((item) => ({
     ...item, readAt: receipts.get(item.id) || null, read: receipts.has(item.id)
   }));
   return { notifications: items, unreadCount: items.filter((item) => !item.read).length };

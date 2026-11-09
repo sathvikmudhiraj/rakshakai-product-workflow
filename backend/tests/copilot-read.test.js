@@ -190,6 +190,23 @@ test("incident counts and lists override selection and conversation context with
   assert.equal(JSON.stringify(source), before);
 });
 
+test("operational copilot counts exclude explicitly classified demos but do not guess from titles", () => {
+  const source = db();
+  source.incidents.push(
+    { id: "demo-explicit", title: "Critical exercise", severity: "CRITICAL", status: "Open", isDemo: true },
+    { id: "review-title-only", title: "Demo site critical incident", severity: "CRITICAL", status: "Open", zone: "Madhapur" }
+  );
+
+  const counts = answer(source, "how many critical incidents?", { currentTime: NOW });
+  assert.match(counts.answer, /Critical incidents: 2/);
+  assert.doesNotMatch(counts.answer, /demo-explicit|Critical exercise/);
+  assert.match(counts.answer, /review-title-only|Demo site critical incident/);
+
+  const summary = answer(source, "Give today's operational summary", { currentTime: NOW });
+  assert.match(summary.answer, /Active incidents: 2/);
+  assert.match(summary.answer, /Critical incidents: 2/);
+});
+
 test("aggregate and selected incident answers share server actor scope; totals are not truncated", () => {
   const source = db();
   source.incidents = Array.from({ length: 25 }, (_, index) => ({ id: `INC-SCOPE-${index}`, title: `Scoped ${index}`, severity: "critical", status: "Verified", stationId: "allowed" }));

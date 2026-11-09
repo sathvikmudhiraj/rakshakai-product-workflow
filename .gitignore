@@ -10,6 +10,7 @@
 backend/.env
 frontend/.env
 ai-service/.env
+/login.json
 
 !.env.example
 !**/.env.example

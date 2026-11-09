@@ -30,6 +30,7 @@ const { validateJson } = require("./middleware/validate.middleware");
 const { aiFrameLimiter } = require("./middleware/aiFrameLimiter.middleware");
 const { readDatabase, userFromReq, userFromReqForSession, hasRole, repairLegacyPersistedData, runEscalationSweep, runSlaEscalationSweep } = require("./services/core.service");
 const { installSocketSessionGuard } = require("./services/socketSession.service");
+const { joinAuthorizedIncidentRoom } = require("./services/socketIncidentAccess.service");
 const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
@@ -37,7 +38,7 @@ const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = r
 const { legacyHandler } = require("./services/legacyRoute.service");
 const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./services/evidenceStorage.service");
 const { validateCameraCredentialConfig } = require("./services/cameraSecrets.service");
-const { installShutdownHandlers } = require("./services/shutdown.service");
+const { installShutdownHandlers, createDrainMiddleware } = require("./services/shutdown.service");
 const realtimeEvents = require("./services/realtimeEvents.service");
 const { runCameraHealthSweep } = require("./services/cameraHealthMonitor.service");
 const { gateway: mediaGateway, startConfiguredStreams } = require("./services/mediaGatewayRuntime.service");
@@ -75,6 +76,7 @@ function initializeSocketIO(httpServer) {
 
   const sessionGuard = installSocketSessionGuard(io, { resolveUser: userFromReqForSession, intervalMs: Number(process.env.SOCKET_SESSION_CHECK_MS || 30000) });
   io.revalidateSessions = sessionGuard.checkAll;
+  io.stopSessionGuard = sessionGuard.stop;
   httpServer.once("close", () => sessionGuard.stop());
 
   io.on("connection", (socket) => {
@@ -84,11 +86,14 @@ function initializeSocketIO(httpServer) {
     socket.join(`dashboard:${socket.data.user.role}`);
     console.log(`Socket.IO client connected: ${socket.id}`);
 
-    socket.on("join_incident_room", (incidentId) => {
-      if (incidentId) {
-        socket.join(`incident:${incidentId}`);
-        console.log(`Client ${socket.id} joined incident room: ${incidentId}`);
+    socket.on("join_incident_room", async (incidentId, acknowledge) => {
+      let joined = false;
+      try {
+        joined = await joinAuthorizedIncidentRoom({ socket, user: socket.data.user, incidentId, readDatabase });
+      } catch {
+        joined = false;
       }
+      if (typeof acknowledge === "function") acknowledge({ ok: joined });
     });
 
     socket.on("join_dashboard", () => {
@@ -333,6 +338,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Readiness reports draining; liveness stays a cheap, dependency-free 200.
+app.use(createDrainMiddleware(() => draining));
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1.5mb", strict: true }));
 app.use(validateJson);
 
@@ -878,6 +885,38 @@ async function runStartupDataRepair() {
   }
 }
 
+function createBackgroundJobs() {
+  const timers = [];
+  const active = new Set();
+  return {
+    every(name, intervalMs, run) {
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        let task;
+        task = Promise.resolve()
+          .then(run)
+          .catch((error) => {
+            console.error(`RakshakAI ${name} failed:`, error.message);
+          })
+          .finally(() => {
+            running = false;
+            active.delete(task);
+          });
+        active.add(task);
+      }, intervalMs);
+      timer.unref();
+      timers.push(timer);
+    },
+    async stop() {
+      for (const timer of timers) clearInterval(timer);
+      timers.length = 0;
+      if (active.size) await Promise.allSettled([...active]);
+    }
+  };
+}
+
 async function start(listenPort = port) {
   require("./services/googleWorkspace.service").config();
   validateAiServiceConfig();
@@ -930,63 +969,44 @@ async function start(listenPort = port) {
       const address = httpServer.address();
       const activePort = typeof address === "object" && address ? address.port : listenPort;
       console.log(`RakshakAI Backend running at http://localhost:${activePort}/api (${getDatabaseMode()})`);
-      startConfiguredStreams().then((count) => {
+      const backgroundJobs = createBackgroundJobs();
+      const streamsStartup = startConfiguredStreams().then((count) => {
         if (count) console.log(`RakshakAI media gateway started ${count} configured stream(s).`);
       }).catch((error) => console.error("RakshakAI media gateway startup failed:", error.message));
       // Dispatch escalation sweep: flips expired "pending" ACK windows and auto-dispatches
       // backup units. In-process guard prevents overlap; a session-level pg advisory lock
       // (in runEscalationSweep) ensures only one instance sweeps in multi-instance setups.
       const sweepIntervalMs = Math.max(5000, Number(process.env.ESCALATION_SWEEP_INTERVAL_MS || 15000));
-      let sweepRunning = false;
-      const escalationTimer = setInterval(async () => {
-        if (sweepRunning) return;
-        sweepRunning = true;
-        try {
-          await runEscalationSweep();
-        } catch (error) {
-          console.error("RakshakAI escalation sweep failed:", error.message);
-        } finally {
-          sweepRunning = false;
-        }
-      }, sweepIntervalMs);
+      backgroundJobs.every("escalation sweep", sweepIntervalMs, runEscalationSweep);
 
       // SLA Escalation sweep - runs every 30 seconds
       const slaSweepIntervalMs = Math.max(30000, Number(process.env.SLA_SWEEP_INTERVAL_MS || 30000));
-      let slaSweepRunning = false;
-      const slaEscalationTimer = setInterval(async () => {
-        if (slaSweepRunning) return;
-        slaSweepRunning = true;
-        try {
-          const result = await runSlaEscalationSweep();
-          emitSlaSweepEvents(result);
-          if (result.escalated > 0) {
-            console.log(`SLA Escalation sweep: ${result.escalated} alerts created for ${result.results.filter(r => r.alertsCreated > 0).length} incidents`);
-          }
-        } catch (error) {
-          console.error("RakshakAI SLA escalation sweep failed:", error.message);
-        } finally {
-          slaSweepRunning = false;
+      backgroundJobs.every("SLA escalation sweep", slaSweepIntervalMs, async () => {
+        const result = await runSlaEscalationSweep();
+        emitSlaSweepEvents(result);
+        if (result.escalated > 0) {
+          console.log(`SLA Escalation sweep: ${result.escalated} alerts created for ${result.results.filter(r => r.alertsCreated > 0).length} incidents`);
         }
-      }, slaSweepIntervalMs);
+      });
 
       const cameraHealthSweepIntervalMs = Math.max(5_000, Number(process.env.CAMERA_HEALTH_SWEEP_INTERVAL_MS || 15_000));
-      let cameraHealthSweepRunning = false;
-      const cameraHealthTimer = setInterval(async () => {
-        if (cameraHealthSweepRunning) return;
-        cameraHealthSweepRunning = true;
-        try { await runCameraHealthSweep(); }
-        catch (error) { console.error("RakshakAI camera health sweep failed:", error.message); }
-        finally { cameraHealthSweepRunning = false; }
-      }, cameraHealthSweepIntervalMs);
+      backgroundJobs.every("camera health sweep", cameraHealthSweepIntervalMs, runCameraHealthSweep);
 
-      escalationTimer.unref();
-      slaEscalationTimer.unref();
-      cameraHealthTimer.unref();
+      // Timers and in-flight sweeps are stopped before the PostgreSQL pool closes.
+      const shutdownResources = {
+        stopBackgroundJobs: async () => {
+          io?.stopSessionGuard?.();
+          await backgroundJobs.stop();
+        },
+        stopApplicationResources: async () => {
+          await streamsStartup;
+          await mediaGateway.stopAll();
+        }
+      };
+      Object.defineProperty(httpServer, "shutdownResources", { value: shutdownResources, enumerable: false });
       httpServer.once("close", () => {
-        clearInterval(escalationTimer);
-        clearInterval(slaEscalationTimer);
-        clearInterval(cameraHealthTimer);
-        mediaGateway.stopAll().catch(() => {});
+        shutdownResources.stopBackgroundJobs().catch(() => {});
+        shutdownResources.stopApplicationResources().catch(() => {});
       });
       console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
       console.log(`RakshakAI SLA escalation sweep every ${slaSweepIntervalMs}ms`);
@@ -999,7 +1019,14 @@ async function start(listenPort = port) {
 
 if (require.main === module) {
   start().then((server) => {
-    installShutdownHandlers(server, { closePool, onDrain: () => { draining = true; } });
+    installShutdownHandlers(server, {
+      closePool,
+      io: getIO(),
+      onDrain: () => { draining = true; },
+      stopBackgroundJobs: server.shutdownResources.stopBackgroundJobs,
+      stopResources: server.shutdownResources.stopApplicationResources,
+      exit: (code) => process.exit(code)
+    });
   }).catch((error) => {
     console.error("RakshakAI Backend failed to start:", error.message);
     process.exitCode = 1;

@@ -4,6 +4,7 @@ services:
       NODE_ENV: production
       CORS_ORIGIN: ${PRODUCTION_CORS_ORIGIN:?Set PRODUCTION_CORS_ORIGIN to the production frontend origin}
       FRONTEND_ORIGINS: ${PRODUCTION_FRONTEND_ORIGINS:?Set PRODUCTION_FRONTEND_ORIGINS to the production frontend origin}
+      ALLOW_CITIZEN_REGISTRATION: ${PRODUCTION_ALLOW_CITIZEN_REGISTRATION:?Set PRODUCTION_ALLOW_CITIZEN_REGISTRATION to true or false}
 
   frontend:
     environment:

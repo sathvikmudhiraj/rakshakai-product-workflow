@@ -101,6 +101,10 @@ For the production override, set `PRODUCTION_CORS_ORIGIN`,
 real deployment values before rendering it. The production override inherits
 the base Compose PostgreSQL service and therefore still uses local Docker
 PostgreSQL. It does not switch the backend to Neon or another managed database.
+Set `PRODUCTION_ALLOW_CITIZEN_REGISTRATION` explicitly to `true` or `false`;
+the production overlay refuses to render until the operator makes that policy
+choice. Local and standalone workflows preserve the existing enabled behavior
+unless `ALLOW_CITIZEN_REGISTRATION=false` is set.
 
 ## CSP API and tile configuration
 
@@ -199,6 +203,14 @@ Stop containers but preserve PostgreSQL and the downloaded model:
 ```powershell
 npm run docker:down
 ```
+
+The backend handles `SIGTERM`/`SIGINT` with a bounded graceful shutdown:
+readiness (`/api/health`) reports `draining`, in-flight HTTP requests finish,
+Socket.IO clients are disconnected, background sweeps stop, and the PostgreSQL
+pool closes last. `SHUTDOWN_TIMEOUT_MS` (default `25000`) bounds the drain and
+must stay below the backend's `stop_grace_period` (`40s`). The Compose command
+uses `exec node server.js` so Node receives Docker's stop signal directly;
+`docker compose down` is therefore safe and never deletes volumes.
 
 Rebuild after dependency or Dockerfile changes:
 
