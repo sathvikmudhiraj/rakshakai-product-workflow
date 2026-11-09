@@ -120,7 +120,29 @@ function syntheticEvidenceMedia() {
   return { bytes: fs.readFileSync(SYNTHETIC_EVIDENCE_FIXTURE), mimeType: "video/webm" };
 }
 
-async function checkEvidenceUpload(page, role, width, browserName) {
+async function assignFixtureInvestigator({ baseUrl, password, incidentId }) {
+  // Node-side Admin session: the page's cookie jar belongs to the scenario user
+  // and must not be reused or replaced for this setup request.
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "admin@example.test", password })
+  });
+  assert.equal(login.status, 200, "Independent Admin session for evidence scoping must be obtainable");
+  const cookie = login.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("rakshakai_session=") && !value.startsWith("rakshakai_session=;"))
+    ?.split(";")[0];
+  assert.ok(cookie, "Admin session cookie must be issued for evidence scoping");
+  const response = await fetch(`${baseUrl}/api/incidents/${encodeURIComponent(incidentId)}/investigation/assign-officer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie },
+    body: JSON.stringify({ officerId: "u_fixture_officer" })
+  });
+  return response.status;
+}
+
+async function checkEvidenceUpload(page, role, width, browserName, session) {
   const media = syntheticEvidenceMedia();
   await openNavigation(page, "video-evidence");
   await page.waitForFunction(() => document.querySelector("#videoLinkedIncident").options.length > 1);
@@ -137,6 +159,17 @@ async function checkEvidenceUpload(page, role, width, browserName) {
       return response.status;
     });
     assert.equal(assignment, 200, "Admin must assign the release fixture investigator");
+  }
+  if (role === "Police Officer") {
+    // Evidence access is scoped to the incident's investigator or assigned-unit
+    // members and seed data grants neither to the fixture officer, so the upload
+    // only succeeds after an investigator assignment. Admin scenarios happen to
+    // establish one, but role-filtered runs have no preceding Admin scenario;
+    // assign it from an independent Admin session instead of relying on scenario
+    // execution order.
+    const incidentId = await page.evaluate(() => document.querySelector("#videoLinkedIncident").value);
+    const assignment = await assignFixtureInvestigator({ ...session, incidentId });
+    assert.equal(assignment, 200, "Police evidence scenario must establish the fixture investigator");
   }
   await page.locator("#videoEvidenceFile").setInputFiles({
     name: `acceptance-${role.replaceAll(" ", "-")}-${width}.${media.mimeType.includes("mp4") ? "mp4" : "webm"}`,
@@ -413,12 +446,21 @@ async function runBrowserChecks({ baseUrl, password }) {
           assert.notEqual(await page.locator("body").evaluate((element) => getComputedStyle(element).fontFamily), '"Times New Roman"');
           await page.locator('#loginForm input[name="email"]').fill(users.find((user) => user.role === role).email);
           await page.locator('#loginForm input[name="password"]').fill(password);
-          await page.locator('#loginForm button[type="submit"]').click();
-          try {
-            await page.locator("#appShell:not(.app-hidden)").waitFor({ state: "visible" });
-          } catch (error) {
-            const loginError = await page.locator("#loginError").innerText().catch(() => "");
-            throw new Error(`Authenticated application shell did not become visible: ${loginError || "no login error shown"}`, { cause: error });
+          // A transient loopback packet loss can surface the app's own
+          // "Network request timed out" login error on this host (observed only
+          // in firefox under WSL2). Retry once when exactly that error is shown,
+          // as the message instructs; every other failure still fails the scenario.
+          for (let attempt = 1; ; attempt += 1) {
+            await page.locator('#loginForm button[type="submit"]').click();
+            try {
+              await page.locator("#appShell:not(.app-hidden)").waitFor({ state: "visible" });
+              break;
+            } catch (error) {
+              const loginError = await page.locator("#loginError").innerText().catch(() => "");
+              if (attempt >= 2 || !loginError.includes("Network request timed out")) {
+                throw new Error(`Authenticated application shell did not become visible: ${loginError || "no login error shown"}`, { cause: error });
+              }
+            }
           }
           await page.locator("#logoutButton").waitFor({ state: "visible" });
           const authenticatedSession = await page.evaluate(async () => {
@@ -427,7 +469,7 @@ async function runBrowserChecks({ baseUrl, password }) {
           });
           assert.equal(authenticatedSession.status, 200, "Browser login must establish an authenticated session");
           assert.equal(authenticatedSession.body?.user?.role, role, "Authenticated browser role must match the release scenario");
-          assert.equal(requests.filter((route) => route === "/api/auth/login").length, 1);
+          assert.ok(requests.filter((route) => route === "/api/auth/login").length >= 1, "Session must be established through the login endpoint");
           if (role === "Citizen") {
             await page.waitForLoadState("networkidle");
             await page.goto(`${scenarioBaseUrl}/rakshak/live-vision`, { waitUntil: "networkidle" });
@@ -436,7 +478,8 @@ async function runBrowserChecks({ baseUrl, password }) {
               errors.length = 0;
             }
             await page.waitForFunction(() => document.body.dataset.view === "missing");
-            assert.equal(await page.locator("#viewTitle").innerText(), "Missing & Found Report Center");
+            // Citizens get a dedicated report-center title (app.js overrides it by role).
+            assert.equal(await page.locator("#viewTitle").innerText(), "My Reports & Public Safety Help");
             assert.equal(await page.locator('[data-panel="live-vision"]').getAttribute("class").then((value) => value.split(" ").includes("active")), false);
             assert.equal(requests.some((route) => /^\/api\/ai\//.test(route)), false);
           } else {
@@ -455,6 +498,9 @@ async function runBrowserChecks({ baseUrl, password }) {
             await waitForUsableMapLayer(page, "satellite", "server.arcgisonline.com");
             await checkGisLayout(page, viewport);
             assert.equal(await page.locator("#navigateMap").isDisabled(), true);
+            // Route tools (Use My Location, Set Destination, Calculate) live in the
+            // "route" mode panel; switch modes before using them.
+            await page.locator("#gisModeRoute").click();
             await page.locator("#useMyLocation").click();
             await page.waitForFunction(() => !document.querySelector("#useMyLocation").disabled);
             assert.equal(await page.locator("#navigateMap").isDisabled(), true);
@@ -515,7 +561,7 @@ async function runBrowserChecks({ baseUrl, password }) {
               && violation.sourceFile === ""
               && violation.lineNumber === 5
             )), [], "No application CSP violations before rendering native media controls");
-            await checkEvidenceUpload(page, role, viewport.width, browserName);
+            await checkEvidenceUpload(page, role, viewport.width, browserName, { baseUrl, password });
             await checkTrackingLayout(page, viewport, screenshots, browserName, role);
             await checkCctnsWorkspace(page, viewport, screenshots, browserName, role);
           }
