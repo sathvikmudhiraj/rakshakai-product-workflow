@@ -138,3 +138,53 @@ test("conversation history restores after drawer reopen without duplicates and c
     dom.window.close();
   }
 });
+
+test("clear button wipes the drawer, resets the conversation, and reports server failures", async () => {
+  const dom = new JSDOM('<body></body>', { url: "http://localhost:3000" });
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch };
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  const requests = [];
+  let deleteShouldFail = false;
+  globalThis.fetch = async (url, options) => {
+    const method = options?.method || "GET";
+    requests.push({ url: String(url), method });
+    if (method === "DELETE") {
+      if (deleteShouldFail) return new Response(JSON.stringify({ error: "Backend unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ cleared: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (String(url).includes("/api/copilot/history")) return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ answer: "Read-only answer", readOnly: true, conversationId: "00000000-0000-0000-0000-000000000123" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const module = await import(`../src/components/RakshakCopilot.js?clear=${Date.now()}`);
+  try {
+    module.mountCopilot();
+    module.openCopilot();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const messages = document.querySelector(".copilot-messages");
+    const input = document.querySelector("#copilotQuestion");
+    input.value = "Show critical incidents";
+    document.querySelector(".copilot-form").dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(messages.textContent, /Read-only answer/);
+    assert.equal(document.querySelector(".copilot-empty").hidden, true);
+
+    const clear = document.querySelector(".copilot-clear");
+    clear.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const deletes = requests.filter((request) => request.method === "DELETE");
+    assert.equal(deletes.length, 1);
+    assert.match(deletes[0].url, /\/api\/copilot\/history$/);
+    assert.equal(messages.children.length, 0);
+    assert.equal(document.querySelector(".copilot-empty").hidden, false);
+    assert.equal(dom.window.sessionStorage.getItem("rakshakai_copilot_conversation_id"), null);
+
+    deleteShouldFail = true;
+    clear.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(document.querySelector(".copilot-status").textContent, /Unable to clear/);
+  } finally {
+    module.unmountCopilot();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch;
+    dom.window.close();
+  }
+});

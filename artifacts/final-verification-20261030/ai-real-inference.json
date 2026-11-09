@@ -1,0 +1,67 @@
+{
+  "image": "bus.jpg",
+  "modelSha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+  "health": {
+    "status": "ok",
+    "service": "RakshakAI AI Service",
+    "modelLoaded": true,
+    "modelName": "yolov8n.pt",
+    "modelError": null,
+    "device": "cpu",
+    "imageSize": 640,
+    "minimumConfidence": 0.5,
+    "maxDetections": 30,
+    "duplicateWindowSeconds": 8.0,
+    "plateOcrAvailable": false,
+    "timestamp": "2026-10-30T16:19:02.972254+00:00"
+  },
+  "status": 200,
+  "inference": {
+    "inferenceMs": 5552.5,
+    "analyzedAt": "2026-10-30T16:19:03.016225+00:00",
+    "imageWidth": 810,
+    "imageHeight": 1080,
+    "device": "cpu"
+  },
+  "threatDetected": false,
+  "threatType": "person_detected",
+  "detections": [
+    {
+      "label": "bus",
+      "confidence": 0.8734
+    },
+    {
+      "label": "person",
+      "confidence": 0.8657
+    },
+    {
+      "label": "person",
+      "confidence": 0.8528
+    },
+    {
+      "label": "person",
+      "confidence": 0.8252
+    }
+  ],
+  "personIdentity": {
+    "identified": false,
+    "status": "unsupported",
+    "message": "Person identity is not inferred. Investigation-assist only; human review required."
+  },
+  "objectCondition": {
+    "status": "unknown",
+    "damageLevel": null,
+    "confidence": 0,
+    "verification": "human_verification_required"
+  },
+  "duplicateSuppression": true,
+  "invalidMedia": {
+    "status": 200,
+    "message": "Invalid image frame"
+  },
+  "authentication": [
+    "missing=401",
+    "wrong=401",
+    "valid=200"
+  ]
+}

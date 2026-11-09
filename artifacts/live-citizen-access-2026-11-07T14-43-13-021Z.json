@@ -1,0 +1,14 @@
+{
+  "role": "Citizen",
+  "sidebar": {
+    "slaVisible": false,
+    "auditVisible": false
+  },
+  "endpoints": {
+    "/api/sla/monitoring": 403,
+    "/api/audit-logs?limit=1&offset=0": 403
+  },
+  "directSlaPanelCount": 0,
+  "directAuditPanelCount": 0,
+  "pageErrors": []
+}

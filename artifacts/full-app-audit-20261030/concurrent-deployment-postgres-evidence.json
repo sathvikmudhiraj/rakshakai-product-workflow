@@ -1,0 +1,60 @@
+{
+  "officerId": "u_5961ef35",
+  "incidentIds": [
+    "inc_7dd8cc72",
+    "inc_850eaf4d"
+  ],
+  "unitIds": [
+    "unit_22584cc5",
+    "unit_9a980fbf"
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "http": [
+        {
+          "status": 201,
+          "code": "CREATED"
+        },
+        {
+          "status": 409,
+          "code": "OFFICER_BUSY"
+        }
+      ],
+      "winnerIncidentId": "inc_7dd8cc72",
+      "activeRows": 1,
+      "assignmentAuditRows": 1,
+      "timelineRows": 1,
+      "loserMessage": "Officer is already deployed to inc_7dd8cc72"
+    },
+    {
+      "round": 2,
+      "http": [
+        {
+          "status": 201,
+          "code": "CREATED"
+        },
+        {
+          "status": 409,
+          "code": "OFFICER_BUSY"
+        }
+      ],
+      "winnerIncidentId": "inc_7dd8cc72",
+      "activeRows": 1,
+      "assignmentAuditRows": 2,
+      "timelineRows": 2,
+      "loserMessage": "Officer is already deployed to inc_7dd8cc72"
+    }
+  ],
+  "finalRows": [
+    {
+      "incident_id": "inc_7dd8cc72",
+      "status": "RELEASED"
+    },
+    {
+      "incident_id": "inc_7dd8cc72",
+      "status": "ASSIGNED"
+    }
+  ],
+  "uniqueIndex": "CREATE UNIQUE INDEX uq_incident_officer_one_active_per_officer ON rakshakai_test_full_f4ab9181cd.incident_officer_assignments USING btree (officer_id) WHERE (status = ANY (ARRAY['ASSIGNED'::text, 'EN_ROUTE'::text, 'ON_SCENE'::text]))"
+}

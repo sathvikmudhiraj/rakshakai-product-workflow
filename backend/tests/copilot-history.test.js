@@ -271,3 +271,49 @@ test("Conversation metadata includes page context and language", async () => {
   assert.ok(assistantMsg.metadata.intent);
   assert.ok(assistantMsg.metadata.responseLanguage);
 });
+
+test("expired conversations are pruned on next access (TTL)", async () => {
+  const admin = await login("admin@history.test");
+  const first = await query(admin, { message: "TTL expiry probe", pageContext: { page: "dashboard" } });
+  const { conversationId } = await first.json();
+
+  const { readDb, writeDb } = require("../services/core.service");
+  const db = readDb();
+  const conv = (db.copilotConversations || []).find((c) => c.id === conversationId);
+  assert.ok(conv, "conversation row should exist before expiry");
+  conv.updatedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  writeDb(db);
+  require("../services/copilotConversation.service").clear();
+
+  const stale = await history(admin, conversationId);
+  assert.equal(stale.status, 200);
+  assert.equal((await stale.json()).messages.length, 0, "expired history must not be served");
+
+  const rows = readDb();
+  assert.ok(!(rows.copilotConversations || []).some((c) => c.id === conversationId), "expired conversation row must be deleted");
+  assert.ok(!(rows.copilotMessages || []).some((m) => m.conversationId === conversationId), "expired messages must be deleted");
+});
+
+test("DELETE /history clears only the calling user's conversations", async () => {
+  const admin = await login("admin@history.test");
+  const police = await login("police@history.test");
+  const adminConv = (await (await query(admin, { message: "Admin clear probe", pageContext: { page: "dashboard" } })).json()).conversationId;
+  const policeConv = (await (await query(police, { message: "Police clear probe", pageContext: { page: "dashboard" } })).json()).conversationId;
+
+  const unauthenticated = await fetch(`${baseUrl}/api/copilot/history`, { method: "DELETE" });
+  assert.equal(unauthenticated.status, 401);
+
+  const citizen = await login("citizen@history.test");
+  const forbidden = await fetch(`${baseUrl}/api/copilot/history`, { method: "DELETE", headers: { cookie: citizen } });
+  assert.equal(forbidden.status, 403);
+
+  const cleared = await fetch(`${baseUrl}/api/copilot/history`, { method: "DELETE", headers: { cookie: admin } });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(await cleared.json(), { cleared: true });
+
+  const adminHist = await history(admin, adminConv);
+  assert.equal((await adminHist.json()).messages.length, 0, "admin's conversations must be cleared");
+
+  const policeHist = await history(police, policeConv);
+  assert.equal((await policeHist.json()).messages.length, 2, "other users' conversations must be untouched");
+});

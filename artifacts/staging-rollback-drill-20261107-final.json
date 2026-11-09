@@ -1,0 +1,89 @@
+{
+  "project": "rakshakai-stage-verify-1103-a4b7",
+  "port": 48124,
+  "network": "rakshakai-stage-verify-1103-a4b7_default",
+  "startedAt": "2026-11-07T14:54:09.846Z",
+  "baselineImage": "sha256:af33abfe8ac0dd6380e0e37ad3347c9944190d06fc778dafa9aaf60c297a2236",
+  "candidateImage": "sha256:ccc7a5cbe3cbacc6771b1c5c1bab1efd19697fe6b878703573cea98cae598fd7",
+  "productionContainers": [
+    {
+      "id": "063e1239a628faa6593674b69136b468b7bb2a19a25eb0afcdce2399e83541f0",
+      "service": "frontend",
+      "imageId": "sha256:ccc7a5cbe3cbacc6771b1c5c1bab1efd19697fe6b878703573cea98cae598fd7"
+    },
+    {
+      "id": "4a7cc7343904a92b90cdad6e62090d9790c7e592967bca3496748303a636f2cb",
+      "service": "ai-service",
+      "imageId": "sha256:f263996c4d754d5243713142075801011a62c3d6df490519fdca8da2e065abff"
+    },
+    {
+      "id": "8c5cb2ee81cd377bc400c464c29abb5dc987350c99919c9d85723a0e8fe74c71",
+      "service": "osrm",
+      "imageId": "sha256:855614a38f464b0558a2ad6eaa7cb8c139f39887da9b38b485ce453c6e6e6124"
+    },
+    {
+      "id": "bee730aae73047b39dd0fba8f1253511fd394c146b25f18a0c490d458e23b794",
+      "service": "postgres",
+      "imageId": "sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"
+    },
+    {
+      "id": "fb3e6b8f4cd2ea1c0bbc2cef8dcc30c65cf3e9e3408091780ec1a62640afc823",
+      "service": "backend",
+      "imageId": "sha256:ab89ba07ccd4be62fd4a364fe759dadb98f0890d30d107fea3cb2522a019747a"
+    }
+  ],
+  "stagingContainers": [
+    {
+      "id": "0b1a204ea24f3f677c61db6fe22e810b1f9cba0a3f93d229d554034c833f9b48",
+      "service": "postgres",
+      "imageId": "sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"
+    },
+    {
+      "id": "4c4b915cae327af9390d6b09339b75ba4e15fc03da9c3cb7911666cff0141657",
+      "service": "backend",
+      "imageId": "sha256:31c04cc630a30f7295ac72fb22e79abfb0a505625b43f849f4f171a010e6316b"
+    },
+    {
+      "id": "704366f3d5f1419b3e0e798da5c5279a669db75d3b77d92ab2a4beaa74c9a6e0",
+      "service": "frontend",
+      "imageId": "sha256:af33abfe8ac0dd6380e0e37ad3347c9944190d06fc778dafa9aaf60c297a2236"
+    },
+    {
+      "id": "768c4b1f64b716bdc8ba3819729e1b0d2316e7ef287a420532c10a9663687885",
+      "service": "osrm",
+      "imageId": "sha256:855614a38f464b0558a2ad6eaa7cb8c139f39887da9b38b485ce453c6e6e6124"
+    },
+    {
+      "id": "80e1e2ef1c42ac0cd9e2f68b850466a8b187748fd44c183822c4dae6e5f0914a",
+      "service": "ai-service",
+      "imageId": "sha256:dd95687cad6f3c5bf4b10f42b362962c69b08cd0027f97e2cbae498aa17150df"
+    }
+  ],
+  "baseline": {
+    "id": "e445c3080f61c2281e3f5e27f007e9ca6c440fc8f61bc259241d01ce8972b8ce",
+    "imageId": "sha256:af33abfe8ac0dd6380e0e37ad3347c9944190d06fc778dafa9aaf60c297a2236",
+    "healthStatus": 200,
+    "apiStatus": 200,
+    "indexStatus": 200,
+    "indexSha256": "5b859ffa4e21fb76f0445be2bfe3f3b4373654aa161800e5cd716deac2fffcd6"
+  },
+  "candidate": {
+    "id": "d2ddfdf25812336e9c01a285d1b1f4f60d67113758befd5349e9473832ff3141",
+    "imageId": "sha256:ccc7a5cbe3cbacc6771b1c5c1bab1efd19697fe6b878703573cea98cae598fd7",
+    "healthStatus": 200,
+    "apiStatus": 200,
+    "indexStatus": 200,
+    "indexSha256": "0919734a02ac3ae808ba54a58ca44bd6569b69503e2fe15ac12402082de0c1f7"
+  },
+  "rollback": {
+    "id": "0c46f8101174935addf0619da42a34f2377ae8f358e4b002cc4ca78b0ff0541d",
+    "imageId": "sha256:af33abfe8ac0dd6380e0e37ad3347c9944190d06fc778dafa9aaf60c297a2236",
+    "healthStatus": 200,
+    "apiStatus": 200,
+    "indexStatus": 200,
+    "indexSha256": "5b859ffa4e21fb76f0445be2bfe3f3b4373654aa161800e5cd716deac2fffcd6"
+  },
+  "result": "PASS",
+  "existingContainersUnchanged": true,
+  "completedAt": "2026-11-07T14:54:26.990Z"
+}

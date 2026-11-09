@@ -1,0 +1,80 @@
+{
+  "baseUrl": "http://localhost:3001",
+  "viewports": {
+    "1440x900": {
+      "identity": {
+        "status": 200,
+        "role": "Admin"
+      },
+      "health": {
+        "status": 200,
+        "database": "postgres"
+      },
+      "incidentQueue": {
+        "defaultCount": 9,
+        "includingDemo": 17,
+        "location": "Synthetic test location",
+        "inactiveCurrentCount": 0
+      },
+      "accountLabels": [
+        "Sessions",
+        "Sign out"
+      ],
+      "alerts": {
+        "sendButtonVisible": true,
+        "outsideAdvanced": true
+      },
+      "sla": {
+        "status": 200,
+        "activeCases": 17,
+        "renderedActive": "17"
+      },
+      "audit": {
+        "status": 200,
+        "renderedRows": 25,
+        "total": 965
+      }
+    },
+    "390x844": {
+      "identity": {
+        "status": 200,
+        "role": "Admin"
+      },
+      "health": {
+        "status": 200,
+        "database": "postgres"
+      },
+      "incidentQueue": {
+        "defaultCount": 9,
+        "includingDemo": 17,
+        "location": "Synthetic test location",
+        "inactiveCurrentCount": 0
+      },
+      "accountLabels": [
+        "Sessions",
+        "Sign out"
+      ],
+      "alerts": {
+        "sendButtonVisible": true,
+        "outsideAdvanced": true
+      },
+      "sla": {
+        "status": 200,
+        "activeCases": 17,
+        "renderedActive": "17"
+      },
+      "audit": {
+        "status": 200,
+        "renderedRows": 25,
+        "total": 968
+      }
+    }
+  },
+  "diagnostics": {
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": [],
+    "apiErrors": []
+  },
+  "result": "PASS"
+}

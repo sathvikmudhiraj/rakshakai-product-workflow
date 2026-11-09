@@ -85,6 +85,46 @@ test("conversational evidence follow-up excludes incidents outside the officer's
   assert.doesNotMatch(response.answer, /ev_secret|INC-9999/);
 });
 
+test("badge-number lookups resolve officers and stay honest for unknown or out-of-scope badges", () => {
+  const source = db();
+  source.policeOfficers[0].badgeId = "B204";
+  const response = answer(source, "Who is officer badge B204?", { actor: { id: "admin", role: "Admin" }, currentTime: NOW });
+  assert.equal(response.intent, "officer_badge_lookup");
+  assert.match(response.answer, /Arjun Kumar/);
+  assert.match(response.answer, /Madhapur Police Station/);
+  assert.equal(response.entities[0].type, "officer");
+
+  const missing = answer(db(), "Show details for badge B999", { actor: { id: "admin", role: "Admin" }, currentTime: NOW });
+  assert.equal(missing.intent, "officer_badge_lookup");
+  assert.match(missing.answer, /No officer with badge B999 was found/);
+
+  const scoped = answer(db(), "Who is badge B204?", { actor: { id: "user_999", role: "Police Officer", stationId: "station_other" } });
+  assert.doesNotMatch(scoped.answer, /Arjun Kumar/);
+  assert.match(scoped.answer, /No officer with badge B204 was found in your authorized scope/);
+});
+
+test("location qualifiers filter incident collections and admit unmatchable places honestly", () => {
+  const source = db();
+  source.incidents[0].zone = "Madhapur";
+  source.incidents.push({ id: "INC-2001", title: "BHEL incident", severity: "CRITICAL", status: "Open", zone: "BHEL Township" });
+  source.incidents.push({ id: "INC-2002", title: "Other critical", severity: "CRITICAL", status: "Open", zone: "Kukatpally" });
+
+  const filtered = answer(source, "Show critical incidents in Madhapur", { currentTime: NOW });
+  assert.match(filtered.answer, /Location filter: madhapur/);
+  assert.match(filtered.answer, /INC-1042/);
+  assert.doesNotMatch(filtered.answer, /INC-2001|INC-2002/);
+
+  const telugu = answer(source, "BHEL lo critical incidents", { currentTime: NOW });
+  assert.match(telugu.answer, /Location filter: bhel/);
+  assert.match(telugu.answer, /INC-2001/);
+  assert.doesNotMatch(telugu.answer, /INC-1042|INC-2002/);
+
+  const unmatched = answer(source, "Show critical incidents in Kondapur", { currentTime: NOW });
+  assert.match(unmatched.answer, /couldn't match the location "kondapur"/);
+  assert.match(unmatched.answer, /INC-1042/);
+  assert.match(unmatched.answer, /INC-2001/);
+});
+
 test("all operational mutation requests are blocked without changing data", () => {
   for (const prompt of ["Assign P-14 to INC-1042", "Delete CAM-C27", "Close INC-1042", "Update INC-1042", "Change severity for INC-1042", "Resolve INC-1042", "Start maintenance for CAM-C27", "Confirm the match for PERSON-8421"]) {
     const source = db(), before = JSON.stringify(source);

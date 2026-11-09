@@ -4360,13 +4360,18 @@ test("frontend production build emits a stylesheet bundle", async () => {
   assert.equal(distHtml.includes("/src/styles.css"), false);
   assert.match(distHtml, /src="\/assets\/[^"]+\.js"/);
 
+  // Design tokens live in the app bundle; vendor CSS chunks (leaflet, socket.io) are separate files.
+  const combinedCss = [];
   for (const href of cssLinks) {
     const cssPath = path.join(buildOut, href.replace(/^\//, ""));
     assert.ok(fs.existsSync(cssPath), `missing built stylesheet ${href}`);
     const css = fs.readFileSync(cssPath, "utf8");
-    assert.match(css, /--teal:\s*#087d78/);
-    assert.match(css, /\.portal-login/);
+    assert.ok(css.trim().length > 0, `built stylesheet ${href} is empty`);
+    combinedCss.push(css);
   }
+  const stylesheetBundle = combinedCss.join("\n");
+  assert.match(stylesheetBundle, /--teal:\s*#087d78/);
+  assert.match(stylesheetBundle, /\.portal-login/);
 });
 
 test("CSP builder supports same-origin and explicit HTTPS production API origins only", () => {

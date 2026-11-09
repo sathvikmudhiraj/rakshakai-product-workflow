@@ -87,6 +87,21 @@ Optional config validation:
 npm run docker:config
 ```
 
+This check validates the merged local Docker configuration and prints only
+redacted PASS/FAIL summaries. Do not replace it with `docker compose config`
+when sharing terminal output; the fully rendered configuration contains
+credentials.
+
+The local host ports and the Docker PostgreSQL service address live in
+`.env.docker`. The backend connects to the Compose service name `postgres`
+inside Docker; the published PostgreSQL port is only for loopback host access.
+
+For the production override, set `PRODUCTION_CORS_ORIGIN`,
+`PRODUCTION_FRONTEND_ORIGINS`, and optionally `PRODUCTION_FRONTEND_PORT` to the
+real deployment values before rendering it. The production override inherits
+the base Compose PostgreSQL service and therefore still uses local Docker
+PostgreSQL. It does not switch the backend to Neon or another managed database.
+
 ## CSP API and tile configuration
 
 The production frontend CSP allows same-origin API calls with

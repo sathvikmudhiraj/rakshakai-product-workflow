@@ -58,13 +58,13 @@ export function mountCopilot() {
     <div class="copilot-backdrop" hidden></div>
     <aside class="copilot-drawer" role="dialog" aria-modal="true" aria-labelledby="copilotTitle" aria-hidden="true">
       <header class="copilot-header"><div class="copilot-identity"><span class="copilot-identity-icon" aria-hidden="true">RA</span><div><strong id="copilotTitle"></strong><div class="copilot-trust-row"><small class="copilot-read-only"></small><span class="copilot-availability"><i aria-hidden="true"></i><span></span></span></div></div></div><button type="button" class="copilot-close">×</button></header>
-      <div class="copilot-control-bar"><label class="copilot-language-label"><span></span><select class="copilot-language" aria-label="Assistant language"><option value="auto">Auto</option><option value="en">English</option><option value="te">తెలుగు</option><option value="hi">हिन्दी</option></select></label><p class="copilot-context"></p></div>
+      <div class="copilot-control-bar"><label class="copilot-language-label"><span></span><select class="copilot-language" aria-label="Assistant language"><option value="auto">Auto</option><option value="en">English</option><option value="te">తెలుగు</option><option value="hi">हिन्दी</option></select></label><p class="copilot-context"></p><button type="button" class="copilot-clear" aria-label=""></button></div>
       <section class="copilot-prompt-section" aria-labelledby="copilotSuggestionsLabel"><span id="copilotSuggestionsLabel"></span><div class="copilot-suggestions"></div></section>
       <div class="copilot-conversation"><section class="copilot-empty"><span class="copilot-empty-icon" aria-hidden="true">RA</span><h3></h3><p></p></section><div class="copilot-messages" role="log" aria-live="polite" aria-relevant="additions"></div></div>
       <form class="copilot-form"><label class="sr-only" for="copilotQuestion"></label><textarea id="copilotQuestion" maxlength="2000" rows="2" dir="auto"></textarea><button class="copilot-send" type="submit"></button><div class="copilot-form-footer"><p class="copilot-status" role="status" aria-live="polite"></p><span class="copilot-safety-note"></span></div></form>
     </aside>`;
   document.body.append(root);
-  const launcher = root.querySelector(".copilot-launcher"), drawer = root.querySelector(".copilot-drawer"), backdrop = root.querySelector(".copilot-backdrop"), close = root.querySelector(".copilot-close"), messages = root.querySelector(".copilot-messages"), empty = root.querySelector(".copilot-empty"), contextText = root.querySelector(".copilot-context"), suggestionBox = root.querySelector(".copilot-suggestions"), form = root.querySelector(".copilot-form"), input = root.querySelector("textarea"), status = root.querySelector(".copilot-status"), send = root.querySelector(".copilot-send"), languageSelect = root.querySelector(".copilot-language");
+  const launcher = root.querySelector(".copilot-launcher"), drawer = root.querySelector(".copilot-drawer"), backdrop = root.querySelector(".copilot-backdrop"), close = root.querySelector(".copilot-close"), messages = root.querySelector(".copilot-messages"), empty = root.querySelector(".copilot-empty"), contextText = root.querySelector(".copilot-context"), suggestionBox = root.querySelector(".copilot-suggestions"), form = root.querySelector(".copilot-form"), input = root.querySelector("textarea"), status = root.querySelector(".copilot-status"), send = root.querySelector(".copilot-send"), languageSelect = root.querySelector(".copilot-language"), clearButton = root.querySelector(".copilot-clear");
   let previousFocus = null, drag = null, suppressClick = false, responseLanguage = "en", languageMode = storedLanguage();
   try { conversationId = window.sessionStorage.getItem(CONVERSATION_KEY) || null; } catch { conversationId = null; }
   const compact = window.matchMedia?.("(max-width: 1120px)") || { matches: false, addEventListener() {}, removeEventListener() {} };
@@ -79,7 +79,7 @@ export function mountCopilot() {
   const applyLocale = () => {
     const copy = locale(), context = getContext(); drawer.lang = htmlLanguage(effectiveLanguage());
     root.querySelector("#copilotTitle").textContent = copy.title; root.querySelector(".copilot-read-only").textContent = copy.readOnly; root.querySelector(".copilot-availability span").textContent = copy.live; root.querySelector(".copilot-language-label > span").textContent = copy.language; root.querySelector('.copilot-language option[value="auto"]').textContent = copy.auto;
-    close.setAttribute("aria-label", copy.close); contextText.textContent = `${copy.context}: ${titleCase(context.page)}${context.entityId ? ` · ${context.entityId}` : ""}`; input.placeholder = copy.placeholder; root.querySelector('label[for="copilotQuestion"]').textContent = copy.inputLabel; send.textContent = copy.send; root.querySelector(".copilot-safety-note").textContent = `${copy.readOnly} · ${copy.operationalCopilot}`; empty.querySelector("h3").textContent = copy.welcomeTitle; empty.querySelector("p").textContent = copy.welcomeBody;
+    close.setAttribute("aria-label", copy.close); contextText.textContent = `${copy.context}: ${titleCase(context.page)}${context.entityId ? ` · ${context.entityId}` : ""}`; input.placeholder = copy.placeholder; root.querySelector('label[for="copilotQuestion"]').textContent = copy.inputLabel; send.textContent = copy.send; clearButton.textContent = copy.clear; clearButton.setAttribute("aria-label", copy.clearAria); root.querySelector(".copilot-safety-note").textContent = `${copy.readOnly} · ${copy.operationalCopilot}`; empty.querySelector("h3").textContent = copy.welcomeTitle; empty.querySelector("p").textContent = copy.welcomeBody;
     messages.querySelectorAll(".copilot-message.user .copilot-message-role").forEach((node) => { node.textContent = copy.you; }); messages.querySelectorAll(".copilot-message.assistant .copilot-message-role").forEach((node) => { node.textContent = copy.assistant; }); renderSuggestions();
   };
   const navigate = ({ view, entityId }) => { const nav = [...document.querySelectorAll(".nav-item")].find((button) => button.dataset.view === view && !button.hidden); if (nav) { if (entityId) document.body.dataset.copilotEntityId = entityId; nav.click(); hide(); } };
@@ -123,6 +123,25 @@ export function mountCopilot() {
     finally { status.classList.remove("loading"); send.disabled = false; input.disabled = false; input.focus(); }
   };
 
+  const clearConversation = async () => {
+    if (clearButton.disabled) return;
+    clearButton.disabled = true;
+    const copy = locale();
+    try {
+      await api("/api/copilot/history", { method: "DELETE" });
+      messages.replaceChildren();
+      empty.hidden = false;
+      conversationId = null;
+      try { window.sessionStorage.removeItem(CONVERSATION_KEY); } catch {}
+      status.classList.remove("loading");
+      status.textContent = copy.cleared;
+    } catch {
+      status.textContent = copy.clearError;
+    } finally {
+      clearButton.disabled = false;
+    }
+  };
+
   let composing = false;
   input.addEventListener("compositionstart", () => { composing = true; });
   input.addEventListener("compositionend", () => { composing = false; });
@@ -137,7 +156,7 @@ export function mountCopilot() {
   const onPointerUp = (event) => { if (!drag || drag.id !== event.pointerId) return; suppressClick = drag.moved; if (drag.moved) position({ left: event.clientX - drag.x, top: event.clientY - drag.y }, true); launcher.releasePointerCapture?.(event.pointerId); launcher.classList.remove("dragging"); drag = null; };
   const onKeydown = (event) => { if (!drawer.classList.contains("open")) return; if (event.key === "Escape") { event.preventDefault(); hide(); return; } if (event.key !== "Tab") return; const nodes = [...drawer.querySelectorAll('button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((node) => node.getClientRects().length); if (!nodes.length) return; if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes.at(-1).focus(); } else if (!event.shiftKey && document.activeElement === nodes.at(-1)) { event.preventDefault(); nodes[0].focus(); } };
   const onResize = () => { if (!root.classList.contains("docked") && launcher.style.left) position({ left: parseFloat(launcher.style.left), top: parseFloat(launcher.style.top) }, true); };
-  launcher.addEventListener("click", () => { if (suppressClick) { suppressClick = false; return; } open(); }); launcher.addEventListener("pointerdown", onPointerDown); launcher.addEventListener("pointermove", onPointerMove); launcher.addEventListener("pointerup", onPointerUp); launcher.addEventListener("pointercancel", onPointerUp); close.addEventListener("click", hide); backdrop.addEventListener("click", hide); form.addEventListener("submit", (event) => { event.preventDefault(); submitQuery(input.value); }); languageSelect.addEventListener("change", () => { languageMode = languageSelect.value; try { window.localStorage.setItem(COPILOT_LANGUAGE_KEY, languageMode); } catch {} if (languageMode !== "auto") responseLanguage = languageMode; applyLocale(); input.focus(); }); document.addEventListener("keydown", onKeydown); window.addEventListener("resize", onResize); compact.addEventListener?.("change", syncDock);
+  launcher.addEventListener("click", () => { if (suppressClick) { suppressClick = false; return; } open(); }); launcher.addEventListener("pointerdown", onPointerDown); launcher.addEventListener("pointermove", onPointerMove); launcher.addEventListener("pointerup", onPointerUp); launcher.addEventListener("pointercancel", onPointerUp); close.addEventListener("click", hide); backdrop.addEventListener("click", hide); clearButton.addEventListener("click", clearConversation); form.addEventListener("submit", (event) => { event.preventDefault(); submitQuery(input.value); }); languageSelect.addEventListener("change", () => { languageMode = languageSelect.value; try { window.localStorage.setItem(COPILOT_LANGUAGE_KEY, languageMode); } catch {} if (languageMode !== "auto") responseLanguage = languageMode; applyLocale(); input.focus(); }); document.addEventListener("keydown", onKeydown); window.addEventListener("resize", onResize); compact.addEventListener?.("change", syncDock);
   removeGlobalListeners = () => { document.removeEventListener("keydown", onKeydown); window.removeEventListener("resize", onResize); compact.removeEventListener?.("change", syncDock); };
   syncDock(); applyLocale();
 }

@@ -16,6 +16,13 @@ function enforceMessageLimit(messages) {
   return messages;
 }
 
+async function pruneIfExpired(state) {
+  if (!state || !Number.isFinite(state.updatedAt) || Date.now() - state.updatedAt <= TTL_MS) return false;
+  conversationCache.delete(`${state.userId}:${state.conversationId}`);
+  await deleteConversationFromDb(state.conversationId);
+  return true;
+}
+
 async function saveConversationToDb(conversation, messages) {
   const limitedMessages = enforceMessageLimit(messages);
   if (getDatabaseMode() === "json") {
@@ -177,6 +184,8 @@ async function open(userId, suppliedId) {
     }
   }
 
+  if (await pruneIfExpired(state)) state = null;
+
   if (!state) {
     state = {
       conversationId,
@@ -268,6 +277,7 @@ async function getMessages(key) {
     await open(userId, conversationId);
     state = conversationCache.get(key);
   }
+  if (await pruneIfExpired(state)) return [];
   return state?.messages || [];
 }
 

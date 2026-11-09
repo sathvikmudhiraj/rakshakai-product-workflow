@@ -35,6 +35,19 @@ router.get("/history", async (req, res, next) => {
   }
 });
 
+router.delete("/history", async (req, res, next) => {
+  try {
+    const user = userFromReq(req, await readDatabase());
+    if (!user) throw Object.assign(new Error("Authentication required"), { status: 401 });
+    if (!hasRole(user, ["Admin", "Police Officer"])) throw Object.assign(new Error("Copilot is available to authorized operational personnel only"), { status: 403 });
+
+    await conversations.clearUserConversations(user.id);
+    res.json({ cleared: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/query", limiter, async (req, res, next) => {
   try {
     const db = await readDatabase();

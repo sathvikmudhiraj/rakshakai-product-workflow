@@ -1,0 +1,12 @@
+{
+  "baseUrl": "http://localhost:3001",
+  "viewports": {},
+  "diagnostics": {
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": [],
+    "apiErrors": []
+  },
+  "result": "FAIL",
+  "error": "locator.waitFor: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#appShell:not(.app-hidden)') to be visible\u001b[22m\n\n    at openPanel (C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\scripts\\verify-live-ux-review.cjs:27:52)\n    at async verifyViewport (C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\scripts\\verify-live-ux-review.cjs:37:5)\n    at async main (C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\scripts\\verify-live-ux-review.cjs:122:66)"
+}

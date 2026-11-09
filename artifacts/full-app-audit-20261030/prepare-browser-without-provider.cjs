@@ -1,0 +1,10 @@
+﻿const fs = require('node:fs');
+const source = fs.readFileSync('scripts/browser-release.cjs', 'utf8');
+const start = source.indexOf('async function waitForUsableMapLayer');
+const end = source.indexOf('\nasync function checkGisLayout', start);
+if (start < 0 || end < 0) throw new Error('Could not isolate provider-specific browser check.');
+const adapted = source.slice(0, start) + 'async function waitForUsableMapLayer() { return { providerTiles: "NOT TESTED: external tile provider unreachable in this environment" }; }' + source.slice(end);
+fs.writeFileSync('scripts/browser-release-no-map-provider.cjs', adapted);
+const runnerPath = 'artifacts/full-app-audit-20261030/run-local-postgres-browser-release.cjs';
+const runner = fs.readFileSync(runnerPath, 'utf8').replace("path.join(root, 'scripts/browser-release.cjs')", "path.join(root, 'scripts/browser-release-no-map-provider.cjs')");
+fs.writeFileSync(runnerPath, runner);

@@ -13,7 +13,7 @@
     "test:critical-ux": "node scripts/test-critical-ux.cjs",
     "test:release": "node scripts/test-release.cjs",
     "reset:demo-users": "npm --prefix backend run reset:demo-users",
-    "docker:config": "docker compose --env-file .env.docker config",
+    "docker:config": "node scripts/docker-config-check.cjs",
     "docker:preflight": "powershell -ExecutionPolicy Bypass -File scripts/docker-preflight.ps1",
     "docker:up": "powershell -ExecutionPolicy Bypass -File scripts/docker-up.ps1",
     "docker:up:osrm": "docker compose --env-file .env.docker --profile osrm up -d --build",

@@ -153,6 +153,23 @@ function extractReferences(message) {
   return Object.fromEntries(Object.entries(patterns).map(([type, pattern]) => [type, [...new Set((text.match(pattern) || []).map((item) => item.toUpperCase()))]]));
 }
 
+// Badge references require at least two digits so words like "badge of the officer" never match.
+const BADGE_REQUEST_PATTERN = /\bbadge\s*(?:no\.?|number|id)?\s*[:#-]?\s*([A-Za-z][A-Za-z-]*?\d[A-Za-z0-9-]*|\d{2,}[A-Za-z0-9-]*)/i;
+
+function extractBadgeRef(text) {
+  const match = String(text || "").match(BADGE_REQUEST_PATTERN);
+  const token = match?.[1];
+  return token && token.length <= 20 ? token.toUpperCase() : null;
+}
+
+function officerBadgeAnswer(db, text, actor) {
+  const badge = extractBadgeRef(text);
+  if (!badge) return result("Please provide the officer badge number to look up.", [], { clarificationRequired: true });
+  const item = getOfficerById(db, badge);
+  if (item && canReadOfficer(db, actor, badge)) return officerAnswer(db, badge);
+  return result(`No officer with badge ${badge} was found in your authorized scope.`);
+}
+
 function sanitizePageContext(context = {}) {
   const page = PAGES.has(String(context.page || "")) ? String(context.page) : "dashboard";
   const entityId = /^[A-Za-z0-9_-]{1,100}$/.test(String(context.entityId || "")) ? String(context.entityId) : null;
@@ -483,6 +500,32 @@ function scopedIncidents(db, actor) {
   }) };
 }
 
+// Location qualifiers are only applied when the named place matches at least one
+// recorded incident location; otherwise the assistant says so instead of
+// pretending an empty result proves anything about that place.
+const LOCATION_STOPWORDS = /^(?:the|a|an|last|past|next|this|all|any|and|or|me|my)$/i;
+const LOCATION_PREPOSITION_PATTERN = /\b(?:in|at|near|around)\s+([a-z][a-z0-9 .'-]{1,39}?)(?=\s+(?:critical|high|medium|low|incidents?|cases?|active|open|pending|unassigned|assigned|today|yesterday|sla|breach|escalation|hours?|hrs?|days?|weeks?|months?|minutes?|last|past|lo)\b|\s*[?.!]|\s*$)/i;
+const LOCATION_POSTPOSITION_PATTERN = /\b([a-z][a-z0-9 .'-]{1,39}?)\s+lo\b/i;
+
+function extractLocationQualifier(text) {
+  const normalized = lower(String(text || ""));
+  for (const pattern of [LOCATION_PREPOSITION_PATTERN, LOCATION_POSTPOSITION_PATTERN]) {
+    const phrase = normalized.match(pattern)?.[1]?.replace(/\s+/g, " ").trim();
+    if (phrase && phrase.length >= 3 && !LOCATION_STOPWORDS.test(phrase)) return phrase;
+  }
+  return null;
+}
+
+function incidentLocationPattern(phrase) {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:[^\\p{L}\\p{N}]|$)`, "iu");
+}
+
+function incidentLocationText(db, item) {
+  const station = stationFor(db, item);
+  return [valueFrom(item, "zone", "address", "location", "area"), valueFrom(station, "stationName", "name")].filter(Boolean).map(lower).join(" | ");
+}
+
 function incidentCollectionAnswer(db, text, now) {
   let records = list(db, "incidents");
   const activeOnly = /\b(?:open|active|pending|unassigned)\b|needs? (?:a )?unit/i.test(text);
@@ -490,9 +533,20 @@ function incidentCollectionAnswer(db, text, now) {
   if (/unassigned|needs? (?:a )?unit/i.test(text)) records = records.filter((item) => !valueFrom(item, "assignedUnitId", "assigned_unit_id"));
   const severities = ["critical", "high", "medium", "low"].filter((severity) => new RegExp(`\\b${severity}\\b`, "i").test(text));
   if (severities.length) records = records.filter((item) => severities.includes(lower(item.severity)));
+  const locationPhrase = extractLocationQualifier(text);
+  let locationNote = null;
+  if (locationPhrase) {
+    const pattern = incidentLocationPattern(locationPhrase);
+    if (list(db, "incidents").some((item) => pattern.test(incidentLocationText(db, item)))) {
+      records = records.filter((item) => pattern.test(incidentLocationText(db, item)));
+      locationNote = `Location filter: ${locationPhrase}`;
+    } else {
+      locationNote = `I couldn't match the location "${locationPhrase}" to any recorded incident location; showing results across all recorded locations.`;
+    }
+  }
   if (/\btoday\b/i.test(text)) records = records.filter((item) => String(valueFrom(item, "createdAt", "updatedAt") || "").slice(0, 10) === new Date(now).toISOString().slice(0, 10));
   const groups = severities.length ? severities : [...new Set(["critical", "high", "medium", "low", ...records.map((item) => lower(item.severity) || "unknown")])];
-  const lines = [`${activeOnly ? "Matching active incidents" : "Matching incidents"}: ${records.length}`];
+  const lines = [locationNote, `${activeOnly ? "Matching active incidents" : "Matching incidents"}: ${records.length}`].filter(Boolean);
   const entities = [];
   for (const severity of groups) {
     const matches = records.filter((item) => (lower(item.severity) || "unknown") === severity);
@@ -527,6 +581,8 @@ function classify(text, refs, collection = false, priorEntities = [], page = {})
   if (WRITE_REQUEST_PATTERN.test(text) || MULTILINGUAL_WRITE_PATTERN.test(text)) return "blocked_write";
   if (refs.incident.length && /\b(?:responding|supporting)\b/i.test(text)) return /\bsupporting\b/i.test(text) ? "incident_support" : "incident_responders";
   if (/\b(?:unit|units|patrol)\b/i.test(text) && /\brecommend(?:ed|ation)?\b/i.test(text)) return "unit_recommendation";
+  const badgeRef = extractBadgeRef(text);
+  if (badgeRef && !/\bofficers\b/i.test(text) && !refs.incident.length) return "officer_badge_lookup";
   // Explicit operational references and collection requests take precedence over
   // conversational words such as "why", "okay", or "which one".
   const explicit = extractReferences(text);
@@ -817,6 +873,7 @@ function answer(db, message, options = {}) {
     response = /\b(?:pending|open)\b/i.test(text) ? cctnsCaseCount(db, options.actor) : result("CCTNS case searches are handled on the CCTNS page. You can search FIRs, crime records, persons, and vehicles there.", [], { navigation: navigation("cctns") });
   }
   else if (intent === "compare") response = compareAnswer(db, refs, now);
+  else if (intent === "officer_badge_lookup") response = officerBadgeAnswer(db, text, options.actor);
   else if (officerCollection) response = listOfficersByStation(db, text, options.actor, intent);
   else if (intent === "officer_lookup") response = canReadOfficer(db, options.actor, refs.officer[0]) ? officerAnswer(db, refs.officer[0]) : result(`No officer with ID ${refs.officer[0]} was found in your authorized scope.`);
   else if (intent === "tracking_lookup") response = trackAnswer(db, refs.track[0], text);
@@ -863,4 +920,4 @@ function answer(db, message, options = {}) {
   return { ...response, answer: localizeAnswer(response.answer, language), sources, intent, detectedLanguage: detected.language, responseLanguage: language, languageConfidence: detected.confidence };
 }
 
-module.exports = { answer, clean, relativeTime, extractReferences, sanitizePageContext, classify, sourceMetadata, READ_ONLY_QUERY_REGISTRY, WRITE_PATTERN: WRITE_REQUEST_PATTERN, WRITE_REQUEST_PATTERN, isCasualQuery, getCasualType, isFollowupQuery, getFollowupType, resolvePronouns };
+module.exports = { answer, clean, relativeTime, extractReferences, extractBadgeRef, extractLocationQualifier, sanitizePageContext, classify, sourceMetadata, READ_ONLY_QUERY_REGISTRY, WRITE_PATTERN: WRITE_REQUEST_PATTERN, WRITE_REQUEST_PATTERN, isCasualQuery, getCasualType, isFollowupQuery, getFollowupType, resolvePronouns };

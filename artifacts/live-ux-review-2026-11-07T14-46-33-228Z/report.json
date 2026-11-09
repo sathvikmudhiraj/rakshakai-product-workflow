@@ -1,0 +1,164 @@
+{
+  "baseUrl": "http://localhost:3001",
+  "viewports": {
+    "1440x900": {
+      "identity": {
+        "status": 200,
+        "role": "Admin"
+      },
+      "health": {
+        "status": 200,
+        "database": "postgres"
+      },
+      "incidentQueue": {
+        "defaultCount": 9,
+        "includingDemo": 17,
+        "location": "Synthetic test location",
+        "inactiveCurrentCount": 0,
+        "layout": {
+          "panelOverflow": 0,
+          "filterOverflow": 0,
+          "rowOverflow": 0,
+          "searchClippedLeft": false,
+          "viewScrollLeft": 0
+        }
+      },
+      "accountLabels": [
+        "Sessions",
+        "Sign out"
+      ],
+      "alerts": {
+        "sendButtonVisible": true,
+        "outsideAdvanced": true
+      },
+      "sla": {
+        "status": 200,
+        "activeCases": 17,
+        "renderedActive": "17"
+      },
+      "audit": {
+        "status": 200,
+        "renderedRows": 25,
+        "total": 988,
+        "filterLayout": {
+          "formOverflow": 0,
+          "resetWithinPanel": true,
+          "resetWidth": 66.625
+        }
+      }
+    }
+  },
+  "diagnostics": {
+    "pageErrors": [],
+    "consoleErrors": [
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Initial application data refresh failed; keeping the restored view. Error: Backend unavailable. Start the RakshakAI backend service and try again.\n    at x (http://localhost:3001/assets/index-u_jytCB7.js:1:155459)\n    at async Promise.all (index 6)\n    at async Q (http://localhost:3001/assets/index-u_jytCB7.js:128:55641)\n    at async Dr (http://localhost:3001/assets/index-u_jytCB7.js:10:44410)"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "message": "Failed to load resource: net::ERR_NETWORK_CHANGED"
+      }
+    ],
+    "failedRequests": [
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/police-stations",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/device-health",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/audit-logs",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/integrations/status",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/admin/police-users",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/incidents/history",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/escalation/alerts?active=true&limit=100",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/sla/config",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/camera-health",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/erss/events",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      },
+      {
+        "viewport": "390x844",
+        "url": "http://localhost:3001/api/auth/me",
+        "failure": "net::ERR_NETWORK_CHANGED"
+      }
+    ],
+    "apiErrors": []
+  },
+  "result": "FAIL",
+  "error": "page.evaluate: TypeError: Failed to fetch\n    at eval (eval at evaluate (:311:30), <anonymous>:2:30)\n    at UtilityScript.evaluate (<anonymous>:313:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\n    at verifyViewport (C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\scripts\\verify-live-ux-review.cjs:65:33)\n    at async main (C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\scripts\\verify-live-ux-review.cjs:180:66)"
+}

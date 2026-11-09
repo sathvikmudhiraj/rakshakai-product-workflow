@@ -1,0 +1,343 @@
+{
+  "environment": {
+    "frontend": "http://127.0.0.1:3002",
+    "backend": "http://127.0.0.1:5001",
+    "database": "rakshakai_test_copilot_utf8",
+    "schema": "rakshakai_test_copilot_utf8",
+    "postgres": "127.0.0.1:55440",
+    "fixtures": [
+      "synthetic admin",
+      "synthetic citizen",
+      "synthetic officer",
+      "synthetic incident",
+      "synthetic unit",
+      "synthetic camera"
+    ]
+  },
+  "checks": [
+    {
+      "name": "Admin sees one visible AI Assistant launcher",
+      "evidence": null
+    },
+    {
+      "name": "Shift+Enter inserts a newline without submitting",
+      "evidence": null
+    },
+    {
+      "name": "Enter submits a Copilot question",
+      "evidence": null
+    },
+    {
+      "name": "Drawer uses AI Assistant naming",
+      "evidence": null
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "How many active incidents are there?",
+        "intent": "incident_search",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "English active-incident count matches synthetic PostgreSQL fixture",
+      "evidence": {
+        "answer": "Matching active incidents: 1\nCritical incidents: 0\nHigh incidents: 1\nMedium incidents: 0\nLow incidents: 0\n\nHigh incidents:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "How many active incidents are there?",
+        "intent": "incident_search",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "Repeated question sees a PostgreSQL fixture update rather than cached facts",
+      "evidence": {
+        "answer": "Matching active incidents: 1\nCritical incidents: 1\nHigh incidents: 0\nMedium incidents: 0\nLow incidents: 0\n\nCritical incidents:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "Ippudu enni active incidents unnayi?",
+        "intent": "incident_search",
+        "detectedLanguage": "te",
+        "responseLanguage": "te"
+      }
+    },
+    {
+      "name": "Auto detects Romanized Telugu",
+      "evidence": {
+        "answer": "సరిపోలే యాక్టివ్ ఘటనలు: 1\nCRITICAL ఘటనలు: 1\nఅధిక తీవ్రత ఘటనలు: 0\nమధ్యమ తీవ్రత ఘటనలు: 0\nతక్కువ తీవ్రత ఘటనలు: 0\n\nCRITICAL ఘటనలు:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "ప్రస్తుతం ఎన్ని యాక్టివ్ ఇన్సిడెంట్స్ ఉన్నాయి?",
+        "intent": "incident_search",
+        "detectedLanguage": "te",
+        "responseLanguage": "te"
+      }
+    },
+    {
+      "name": "Native Telugu query answers from the PostgreSQL incident fixture",
+      "evidence": {
+        "answer": "సరిపోలే యాక్టివ్ ఘటనలు: 1\nCRITICAL ఘటనలు: 1\nఅధిక తీవ్రత ఘటనలు: 0\nమధ్యమ తీవ్రత ఘటనలు: 0\nతక్కువ తీవ్రత ఘటనలు: 0\n\nCRITICAL ఘటనలు:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "अभी कितने सक्रिय इन्सिडेंट हैं?",
+        "intent": "incident_search",
+        "detectedLanguage": "hi",
+        "responseLanguage": "hi"
+      }
+    },
+    {
+      "name": "Hindi override retains the exact incident identifier",
+      "evidence": {
+        "answer": "मेल खाती सक्रिय घटनाएँ: 1\nCRITICAL घटनाएँ: 1\nउच्च गंभीरता की घटनाएँ: 0\nमध्यम गंभीरता की घटनाएँ: 0\nकम गंभीरता की घटनाएँ: 0\n\nCRITICAL घटनाएँ:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "Abhi kitne active incidents hain?",
+        "intent": "incident_search",
+        "detectedLanguage": "hi",
+        "responseLanguage": "hi"
+      }
+    },
+    {
+      "name": "Auto detects Romanized Hindi in a fresh conversation",
+      "evidence": {
+        "answer": "मेल खाती सक्रिय घटनाएँ: 1\nCRITICAL घटनाएँ: 1\nउच्च गंभीरता की घटनाएँ: 0\nमध्यम गंभीरता की घटनाएँ: 0\nकम गंभीरता की घटनाएँ: 0\n\nCRITICAL घटनाएँ:\n1. Synthetic UI Workflow Incident (INC-UI-001) — New — Unassigned"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "Show INC-UI-001",
+        "intent": "incident_lookup",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "Synthetic incident lookup returns seeded title",
+      "evidence": null
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "What is the status?",
+        "intent": "incident_lookup",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "Follow-up retains incident context",
+      "evidence": {
+        "intent": "incident_lookup",
+        "answer": "INC-UI-001\nSynthetic UI Workflow Incident\nSeverity: CRITICAL\nStatus: New\nAssigned unit: Unassigned\nAssignment SLA: NO_DEADLINE\nResponse SLA: NO_DEADLINE\nEscalation: L0\nIncident updated: 0s ago"
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "UI-P01 unit lo available officers entha mandi unnaru?",
+        "intent": "OFFICERS_BY_UNIT",
+        "detectedLanguage": "te",
+        "responseLanguage": "te"
+      }
+    },
+    {
+      "name": "Mixed-language unit roster uses the synthetic member",
+      "evidence": null
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "Show camera CAM-COPILOT-1",
+        "intent": "camera_lookup",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "Camera source navigation button opens CCTV Monitoring",
+      "evidence": {
+        "view": "cctv",
+        "path": "/cctv",
+        "buttonCount": 8,
+        "buttonLabels": [
+          "View details: Incident Command",
+          "View details: Incident Command",
+          "వివరాలు చూడండి: Incident Command",
+          "వివరాలు చూడండి: Incident Command",
+          "विवरण देखें: Incident Command",
+          "View details: Incident Command INC-UI-001",
+          "View details: Incident Command INC-UI-001",
+          "View details: Cctv CAM-COPILOT-1"
+        ]
+      }
+    },
+    {
+      "name": "Camera lookup reports seeded synthetic camera status",
+      "evidence": {
+        "answer": "CAM-COPILOT-1\nHealth: OFFLINE\nLocation: UI Test District\nThe camera is not currently reachable.\nDevice reachable: No\nStream connected: No\nNo current tamper evidence is recorded."
+      }
+    },
+    {
+      "name": "Copilot HTTP query 200",
+      "evidence": {
+        "message": "Show INC-NOT-REAL-999",
+        "intent": "incident_lookup",
+        "detectedLanguage": "en",
+        "responseLanguage": "en"
+      }
+    },
+    {
+      "name": "Invalid entity is reported as missing without invented facts",
+      "evidence": {
+        "answer": "No incident with ID INC-NOT-REAL-999 was found."
+      }
+    },
+    {
+      "name": "Drawer closes",
+      "evidence": null
+    },
+    {
+      "name": "Close/reopen restores history without duplicate messages",
+      "evidence": null
+    },
+    {
+      "name": "Assistant drawer fits viewport at 1920px",
+      "evidence": {
+        "viewport": 1920,
+        "document": 1920,
+        "drawer": 500,
+        "input": 387
+      }
+    },
+    {
+      "name": "Assistant drawer fits viewport at 1440px",
+      "evidence": {
+        "viewport": 1440,
+        "document": 1440,
+        "drawer": 500,
+        "input": 387
+      }
+    },
+    {
+      "name": "Assistant drawer fits viewport at 1024px",
+      "evidence": {
+        "viewport": 1024,
+        "document": 1024,
+        "drawer": 500,
+        "input": 387
+      }
+    },
+    {
+      "name": "Assistant drawer fits viewport at 768px",
+      "evidence": {
+        "viewport": 768,
+        "document": 768,
+        "drawer": 500,
+        "input": 387
+      }
+    },
+    {
+      "name": "Assistant drawer fits viewport at 390px",
+      "evidence": {
+        "viewport": 390,
+        "document": 390,
+        "drawer": 390,
+        "input": 285
+      }
+    },
+    {
+      "name": "PostgreSQL-backed chat restores after browser refresh",
+      "evidence": null
+    },
+    {
+      "name": "Conversation pointer survives browser refresh in tab session",
+      "evidence": null
+    },
+    {
+      "name": "PostgreSQL history restores after backend process restart",
+      "evidence": null
+    },
+    {
+      "name": "Network failure shows a retry control",
+      "evidence": null
+    },
+    {
+      "name": "Retry succeeds after network recovers",
+      "evidence": null
+    },
+    {
+      "name": "Logout removes authorized assistant UI and clears conversation pointer",
+      "evidence": null
+    },
+    {
+      "name": "Citizen does not see AI Assistant launcher",
+      "evidence": null
+    },
+    {
+      "name": "Citizen API query is denied server-side",
+      "evidence": {
+        "status": 403
+      }
+    },
+    {
+      "name": "Citizen API history is denied server-side",
+      "evidence": {
+        "status": 403
+      }
+    }
+  ],
+  "consoleErrors": [
+    "WebSocket connection to 'ws://127.0.0.1:3002/socket.io/?EIO=4&transport=websocket' failed: Connection closed before receiving a handshake response",
+    "Failed to load resource: net::ERR_FAILED",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  ],
+  "pageErrors": [],
+  "failedRequests": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:3002/api/copilot/query",
+      "error": "net::ERR_FAILED"
+    }
+  ],
+  "apiFailures": [
+    {
+      "status": 403,
+      "method": "POST",
+      "url": "http://127.0.0.1:3002/api/copilot/query"
+    },
+    {
+      "status": 403,
+      "method": "GET",
+      "url": "http://127.0.0.1:3002/api/copilot/history?conversationId=29f9e762-6097-479b-8794-2b64b13b3f83"
+    }
+  ],
+  "screenshotPaths": [
+    "assistant-1024.png",
+    "assistant-1440.png",
+    "assistant-1920.png",
+    "assistant-390.png",
+    "assistant-768.png",
+    "assistant-history-restored.png"
+  ],
+  "tracePath": "C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\artifacts\\ai-assistant-e2e-20261030\\copilot-playwright-trace.zip"
+}

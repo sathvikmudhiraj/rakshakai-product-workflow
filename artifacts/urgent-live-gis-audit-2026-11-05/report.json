@@ -1,0 +1,134 @@
+{
+  "url": "http://localhost:3001/gis",
+  "viewports": [
+    {
+      "width": 390,
+      "height": 844,
+      "buttonVisible": true,
+      "mapBox": {
+        "x": 56,
+        "y": 1421.453125,
+        "width": 278,
+        "height": 480
+      },
+      "horizontalOverflow": false
+    }
+  ],
+  "checks": {
+    "fullscreenButton": {
+      "count": 1,
+      "visible": true,
+      "enabled": true
+    },
+    "slaSidebar": {
+      "count": 1,
+      "visible": true
+    },
+    "legacyPreviewDomCount": 0,
+    "oldPreviewSelectCount": 0,
+    "fullscreenAfterEnter": {
+      "native": true,
+      "fallback": false,
+      "exitLabel": "Exit Fullscreen"
+    },
+    "fullscreenAfterExit": {
+      "native": false,
+      "fallback": false,
+      "label": "Show Full Map"
+    },
+    "placeCardFromSearch": {
+      "visible": true,
+      "title": "Medak, Telangana, India",
+      "actions": [
+        "Directions",
+        "Set as Start",
+        "Set as Destination",
+        "Close"
+      ],
+      "resultCount": 1,
+      "legacyConfirmation": 0
+    },
+    "directionsAction": {
+      "panel": "Destination selected. Choose a start point or use My Location to calculate directions.",
+      "destinationCard": "DESTINATION\nMedak, Telangana, India\n17.93751, 78.21174\nSource: nominatim"
+    },
+    "setStartAction": "START\nMedak, Telangana, India\n17.93751, 78.21174\nSource: nominatim",
+    "setDestinationAction": "DESTINATION\nMedak, Telangana, India\n17.93751, 78.21174\nSource: nominatim",
+    "unarmedMapClickCard": {
+      "visible": false,
+      "title": "",
+      "legacyConfirmation": 0
+    },
+    "mapClickRouteStart": "START\nSelected map start\n17.51502, 78.31077\nSource: Snapped to road",
+    "slaNavigation": {
+      "view": "sla-monitoring",
+      "panelActive": true,
+      "heading": "Case SLA Monitoring",
+      "apiStatus": 200,
+      "loadingHidden": true
+    },
+    "mobileFullscreen": {
+      "native": true,
+      "fallback": false,
+      "exitButtonVisible": true
+    },
+    "mobileEscapeExit": {
+      "native": false,
+      "fallback": false
+    }
+  },
+  "events": {
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 409 (Conflict)",
+      "Failed to load resource: net::ERR_EMPTY_RESPONSE",
+      "WebSocket connection to 'ws://localhost:3001/socket.io/?EIO=4&transport=websocket' failed: Connection closed before receiving a handshake response",
+      "Failed to load resource: net::ERR_EMPTY_RESPONSE",
+      "WebSocket connection to 'ws://localhost:3001/socket.io/?EIO=4&transport=websocket' failed: Connection closed before receiving a handshake response",
+      "WebSocket connection to 'ws://localhost:3001/socket.io/?EIO=4&transport=websocket' failed: Error during WebSocket handshake: net::ERR_CONNECTION_RESET",
+      "Failed to load resource: net::ERR_CONNECTION_RESET",
+      "Failed to load resource: net::ERR_EMPTY_RESPONSE",
+      "WebSocket connection to 'ws://localhost:3001/socket.io/?EIO=4&transport=websocket' failed: Connection closed before receiving a handshake response",
+      "Failed to load resource: net::ERR_EMPTY_RESPONSE"
+    ],
+    "pageErrors": [],
+    "failedRequests": [
+      {
+        "url": "http://localhost:3001/api/response-units",
+        "error": "net::ERR_EMPTY_RESPONSE"
+      },
+      {
+        "url": "http://localhost:3001/api/response-units",
+        "error": "net::ERR_EMPTY_RESPONSE"
+      },
+      {
+        "url": "http://localhost:3001/api/response-units",
+        "error": "net::ERR_CONNECTION_RESET"
+      },
+      {
+        "url": "http://localhost:3001/api/response-units",
+        "error": "net::ERR_EMPTY_RESPONSE"
+      },
+      {
+        "url": "http://localhost:3001/api/response-units",
+        "error": "net::ERR_EMPTY_RESPONSE"
+      }
+    ],
+    "badResponses": [
+      {
+        "status": 409,
+        "url": "http://localhost:3001/api/incidents/inc_db7fb5a5/recommend-unit"
+      }
+    ]
+  },
+  "role": "Active role: Demo Admin",
+  "assetVersions": [
+    "http://localhost:3001/assets/index-DT0zXAFs.js",
+    "http://localhost:3001/assets/index-BYuQfD7_.css"
+  ],
+  "bundleLogic": {
+    "containsFullscreen": true,
+    "containsLocationActions": true,
+    "containsLegacyPreviewCopy": false,
+    "containsSlaMonitoring": true
+  }
+}

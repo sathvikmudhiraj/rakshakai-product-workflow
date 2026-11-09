@@ -1,0 +1,247 @@
+[
+  {
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "button": {
+      "rect": {
+        "x": 552.265625,
+        "y": 472.609375,
+        "width": 172.28125,
+        "height": 38
+      },
+      "hit": true,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    "layout": {
+      "width": 1920,
+      "documentWidth": 1920,
+      "mapWidth": 1032,
+      "mapHeight": 698,
+      "usableTiles": 15,
+      "markerCount": 8,
+      "routePaths": 2,
+      "tracking": "false"
+    },
+    "fullscreen": {
+      "mode": "native",
+      "normal": {
+        "width": 1032,
+        "height": 698
+      },
+      "fullscreen": {
+        "width": 1844,
+        "height": 698
+      },
+      "cycles": 2,
+      "escape": true,
+      "exitVisible": {
+        "visible": true,
+        "hit": true
+      },
+      "mapState": {
+        "markers": 8,
+        "routes": 2
+      },
+      "statePreserved": true
+    }
+  },
+  {
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "button": {
+      "rect": {
+        "x": 475.109375,
+        "y": 486.953125,
+        "width": 95.125,
+        "height": 42.78125
+      },
+      "hit": true,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    "layout": {
+      "width": 1440,
+      "documentWidth": 1440,
+      "mapWidth": 612,
+      "mapHeight": 610,
+      "usableTiles": 8,
+      "markerCount": 9,
+      "routePaths": 3,
+      "tracking": "true"
+    },
+    "fullscreen": {
+      "mode": "native",
+      "normal": {
+        "width": 612,
+        "height": 610
+      },
+      "fullscreen": {
+        "width": 1364,
+        "height": 610
+      },
+      "cycles": 2,
+      "escape": true,
+      "exitVisible": {
+        "visible": true,
+        "hit": true
+      },
+      "mapState": {
+        "markers": 9,
+        "routes": 3
+      },
+      "statePreserved": true
+    }
+  },
+  {
+    "viewport": {
+      "width": 1024,
+      "height": 768
+    },
+    "button": {
+      "rect": {
+        "x": 653,
+        "y": 460.875,
+        "width": 276.734375,
+        "height": 38
+      },
+      "hit": true,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    "layout": {
+      "width": 1024,
+      "documentWidth": 1024,
+      "mapWidth": 591,
+      "mapHeight": 478,
+      "usableTiles": 9,
+      "markerCount": 9,
+      "routePaths": 3,
+      "tracking": "true"
+    },
+    "fullscreen": {
+      "mode": "native",
+      "normal": {
+        "width": 591,
+        "height": 478
+      },
+      "fullscreen": {
+        "width": 949,
+        "height": 520
+      },
+      "cycles": 2,
+      "escape": true,
+      "exitVisible": {
+        "visible": true,
+        "hit": true
+      },
+      "mapState": {
+        "markers": 9,
+        "routes": 3
+      },
+      "statePreserved": true
+    }
+  },
+  {
+    "viewport": {
+      "width": 768,
+      "height": 1024
+    },
+    "button": {
+      "rect": {
+        "x": 387,
+        "y": 844.640625,
+        "width": 299.96875,
+        "height": 38
+      },
+      "hit": true,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    "layout": {
+      "width": 768,
+      "documentWidth": 768,
+      "mapWidth": 638,
+      "mapHeight": 478,
+      "usableTiles": 12,
+      "markerCount": 9,
+      "routePaths": 3,
+      "tracking": "true"
+    },
+    "fullscreen": {
+      "mode": "fallback",
+      "normal": {
+        "width": 638,
+        "height": 478
+      },
+      "fullscreen": {
+        "width": 704,
+        "height": 694
+      },
+      "cycles": 2,
+      "escape": true,
+      "exitVisible": {
+        "visible": true,
+        "hit": true
+      },
+      "mapState": {
+        "markers": 9,
+        "routes": 3
+      },
+      "statePreserved": true
+    }
+  },
+  {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "button": {
+      "rect": {
+        "x": 198,
+        "y": 399.609375,
+        "width": 119,
+        "height": 44
+      },
+      "hit": true,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    "layout": {
+      "width": 390,
+      "documentWidth": 390,
+      "mapWidth": 276,
+      "mapHeight": 478,
+      "usableTiles": 6,
+      "markerCount": 9,
+      "routePaths": 3,
+      "tracking": "true"
+    },
+    "fullscreen": {
+      "mode": "fallback",
+      "normal": {
+        "width": 276,
+        "height": 478
+      },
+      "fullscreen": {
+        "width": 334,
+        "height": 462
+      },
+      "cycles": 2,
+      "escape": true,
+      "exitVisible": {
+        "visible": true,
+        "hit": true
+      },
+      "mapState": {
+        "markers": 9,
+        "routes": 3
+      },
+      "statePreserved": true
+    }
+  }
+]

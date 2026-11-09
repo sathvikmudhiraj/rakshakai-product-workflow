@@ -98,5 +98,17 @@ export default defineConfig({
         changeOrigin: false
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("leaflet")) return "leaflet";
+          if (id.includes("socket.io-client")) return "socket-io";
+          return "vendor";
+        }
+      }
+    }
   }
 });

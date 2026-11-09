@@ -1,0 +1,13 @@
+{
+  "result": "PASS",
+  "selectedPlace": "Medak, Telangana, India",
+  "actions": [
+    "Directions",
+    "Set as Start",
+    "Set as Destination",
+    "Close"
+  ],
+  "cardVisible": true,
+  "pageErrors": [],
+  "screenshot": "C:\\Users\\Admin\\Documents\\Codex\\2026-05-22\\rakshakai-product-workflow\\artifacts\\live-gis-place-card-final-2026-11-06\\gis-place-card-1440.png"
+}

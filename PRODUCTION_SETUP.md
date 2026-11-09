@@ -91,6 +91,12 @@ $env:PG_SSL_CA_FILE = "C:\secure\postgres-ca.pem"
 npm --prefix backend run migrate
 ```
 
+The repository's `compose.prod.yaml` is an origin/port override for the local
+Compose stack; it inherits `compose.yaml`'s local `postgres` service and does
+not target the managed database above. Do not use that override for a Neon
+deployment without a separately reviewed Compose change that explicitly routes
+the backend to the managed URL and removes the local PostgreSQL dependency.
+
 Evidence bytes must remain private and must be served only through the authorized
 preview API. The filesystem driver is acceptable for isolated release tests and
 a controlled single-host pilot. Use a reviewed durable object-storage adapter

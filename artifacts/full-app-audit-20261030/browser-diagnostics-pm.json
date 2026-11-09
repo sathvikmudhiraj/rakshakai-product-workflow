@@ -1,0 +1,269 @@
+[
+  {
+    "browser": "chromium",
+    "role": "Admin",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": [
+      {
+        "url": "https://tile.openstreetmap.org/12/2939/1845.png",
+        "path": "/12/2939/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2938/1845.png",
+        "path": "/12/2938/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2940/1845.png",
+        "path": "/12/2940/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2939/1846.png",
+        "path": "/12/2939/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2938/1844.png",
+        "path": "/12/2938/1844.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2940/1844.png",
+        "path": "/12/2940/1844.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2938/1846.png",
+        "path": "/12/2938/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2940/1846.png",
+        "path": "/12/2940/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2937/1845.png",
+        "path": "/12/2937/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2941/1845.png",
+        "path": "/12/2941/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2937/1844.png",
+        "path": "/12/2937/1844.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2941/1844.png",
+        "path": "/12/2941/1844.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2937/1846.png",
+        "path": "/12/2937/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2941/1846.png",
+        "path": "/12/2941/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2939",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2939",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2939",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2939",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2938",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2938",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2940",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2940",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2939",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2939",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2938",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2938",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2940",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2940",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2938",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2938",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2940",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2940",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2937",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2937",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2941",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1845/2941",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2937",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2937",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2941",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1844/2941",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2937",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2937",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2941",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1846/2941",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11756",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11756",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11755",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11755",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11755",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11755",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11756",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11756",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11755",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11755",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11757",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11757",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11754",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7381/11754",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11754",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11754",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11758",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11758",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11754",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7380/11754",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11754",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11754",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11758",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7383/11758",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11756",
+        "path": "/ArcGIS/rest/services/World_Imagery/MapServer/tile/14/7382/11756",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "httpErrors": [],
+    "allowlists": {
+      "http": "Citizen access-control denial for /api/missing-persons (401/403)",
+      "network": "External GIS tile hosts tile.openstreetmap.org and server.arcgisonline.com are unavailable in this isolated environment",
+      "console": "External GIS tile host load errors from the same two known providers"
+    },
+    "unexpectedHttpErrors": [],
+    "unexpectedFailedRequests": [],
+    "unexpectedConsoleErrors": []
+  },
+  {
+    "browser": "chromium",
+    "role": "Admin",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "pageErrors": [],
+    "consoleErrors": [],
+    "failedRequests": [
+      {
+        "url": "https://tile.openstreetmap.org/12/2939/1845.png",
+        "path": "/12/2939/1845.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2938/1846.png",
+        "path": "/12/2938/1846.png",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://tile.openstreetmap.org/12/2939/1846.png",
+        "path": "/12/2939/1846.png",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "httpErrors": [],
+    "allowlists": {
+      "http": "Citizen access-control denial for /api/missing-persons (401/403)",
+      "network": "External GIS tile hosts tile.openstreetmap.org and server.arcgisonline.com are unavailable in this isolated environment",
+      "console": "External GIS tile host load errors from the same two known providers"
+    },
+    "unexpectedHttpErrors": [],
+    "unexpectedFailedRequests": [],
+    "unexpectedConsoleErrors": []
+  }
+]
