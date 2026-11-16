@@ -4,11 +4,14 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
+const bcrypt = require("bcryptjs");
 const {
   IMPORT_LOCK_ID,
   loadImportDatabase,
   parseImportOptions
 } = require("../scripts/import-json-to-postgres");
+const { seedDb } = require("../services/core.service");
 
 const fixturePath = path.join(__dirname, "fixtures", "db.fixture.json");
 const examplePath = path.join(__dirname, "..", "data", "db.example.json");
@@ -62,6 +65,34 @@ test("sanitized fixture does not contain runtime audit history or plaintext pass
   const serialized = JSON.stringify(fixture);
   assert.doesNotMatch(serialized, /"password"\s*:/i);
   assert.doesNotMatch(serialized, /(?:gitam|gmail|yahoo|outlook|hotmail|rakshakai\.local)/i);
+});
+
+test("local demo account hashes require distinct passwords from local environment configuration", async () => {
+  const names = ["SEED_ADMIN_PASSWORD", "SEED_POLICE_PASSWORD", "SEED_CITIZEN_PASSWORD"];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    assert.ok(seedDb().users.every((user) => !user.passwordHash));
+
+    const values = names.map((_, index) => `TestSeed${index}-${crypto.randomBytes(18).toString("hex")}A9`);
+    names.forEach((name, index) => { process.env[name] = values[index]; });
+    const seededUsers = seedDb().users;
+    const accounts = [
+      ["Admin", "u_admin", values[0]],
+      ["Police Officer", "u_police", values[1]],
+      ["Citizen", "u_citizen", values[2]]
+    ];
+    for (const [role, id, password] of accounts) {
+      const account = seededUsers.find((user) => user.id === id && user.role === role);
+      assert.ok(account?.passwordHash);
+      assert.equal(await bcrypt.compare(password, account.passwordHash), true);
+    }
+  } finally {
+    names.forEach((name) => {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    });
+  }
 });
 
 test("security access tests use a temporary runtime copy instead of the committed fixture", () => {

@@ -1,0 +1,2009 @@
+{
+  "description": "Exploratory single-review manual-label smoke test; original images only have bounding-box ground truth. Derived-frame counts are unlabeled.",
+  "model": "yolov8n.pt",
+  "device": "cpu",
+  "image_size": 640,
+  "model_predict_confidence": 0.3,
+  "match_iou": 0.5,
+  "max_detections": 30,
+  "runs": [
+    {
+      "image": "penske",
+      "results": [
+        {
+          "image": "penske.jpg",
+          "scenario": "original",
+          "latency_ms": 66.8,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 2,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "darkened",
+          "latency_ms": 52.8,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "very_dark",
+          "latency_ms": 49.4,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "overexposed",
+          "latency_ms": 49.1,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "low_contrast",
+          "latency_ms": 49.4,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "mild_blur",
+          "latency_ms": 49.7,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "blurred",
+          "latency_ms": 47.7,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "jpeg_compression",
+          "latency_ms": 49.1,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 2
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "center_occluded",
+          "latency_ms": 49.9,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 2
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            }
+          }
+        },
+        {
+          "image": "penske.jpg",
+          "scenario": "low_resolution",
+          "latency_ms": 56.2,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 1,
+                "truck": 1
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "image": "citroen",
+      "results": [
+        {
+          "image": "citroen.jpg",
+          "scenario": "original",
+          "latency_ms": 105.1,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 1
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 1
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 1,
+                  "fp": 0,
+                  "fn": 1
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 2
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 2
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 2
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              },
+              "matched_iou_0_5": {
+                "person": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bicycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "car": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 2
+                },
+                "motorcycle": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "bus": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                },
+                "truck": {
+                  "tp": 0,
+                  "fp": 0,
+                  "fn": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "darkened",
+          "latency_ms": 87.2,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "very_dark",
+          "latency_ms": 82.4,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "overexposed",
+          "latency_ms": 83.7,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "low_contrast",
+          "latency_ms": 80.9,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "mild_blur",
+          "latency_ms": 83.9,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "blurred",
+          "latency_ms": 84.5,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "jpeg_compression",
+          "latency_ms": 83.7,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 1
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "center_occluded",
+          "latency_ms": 81.2,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        },
+        {
+          "image": "citroen.jpg",
+          "scenario": "low_resolution",
+          "latency_ms": 84,
+          "thresholds": {
+            "0.3": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.35": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.4": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 1,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.45": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.5": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.55": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            },
+            "0.6": {
+              "detections": {
+                "person": 0,
+                "bicycle": 0,
+                "car": 0,
+                "motorcycle": 0,
+                "bus": 0,
+                "truck": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

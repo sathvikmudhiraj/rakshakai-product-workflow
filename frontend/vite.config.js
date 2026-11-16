@@ -58,15 +58,28 @@ function rakshakaiStylesheetFallbackGuard() {
   };
 }
 
+function developmentHttpsOptions() {
+  const keyPath = process.env.VITE_DEV_HTTPS_KEY;
+  const certPath = process.env.VITE_DEV_HTTPS_CERT;
+  if (!keyPath || !certPath) return undefined;
+  if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
+    throw new Error(
+      "VITE_DEV_HTTPS_KEY/VITE_DEV_HTTPS_CERT are set but the PEM files do not exist. Generate a trusted local certificate first (see docs/GIS_REAL_DEVICE_ACCEPTANCE.md)."
+    );
+  }
+  return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+}
+
 export default defineConfig({
   plugins: [rakshakaiDevelopmentCsp(), rakshakaiStylesheetFallbackGuard()],
   server: {
     host: "0.0.0.0",
     port: 3000,
     strictPort: true,
+    https: developmentHttpsOptions(),
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:5000",
+        target: process.env.VITE_BACKEND_PROXY_TARGET || "http://127.0.0.1:5000",
         changeOrigin: false,
         configure(proxy) {
           proxy.on("error", (error, req, res) => {
@@ -77,6 +90,23 @@ export default defineConfig({
             });
             res.end(JSON.stringify({ error: "Backend unavailable" }));
           });
+        }
+      },
+      "/socket.io": {
+        target: process.env.VITE_BACKEND_PROXY_TARGET || "http://127.0.0.1:5000",
+        ws: true,
+        changeOrigin: false
+      }
+    }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("leaflet")) return "leaflet";
+          if (id.includes("socket.io-client")) return "socket-io";
+          return "vendor";
         }
       }
     }

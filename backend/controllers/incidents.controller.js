@@ -10,10 +10,17 @@ exports.timeline = legacyHandler((req) => `/api/incidents/${req.params.id}/timel
 exports.create = legacyHandler("/api/incidents");
 exports.createSample = legacyHandler("/api/incidents/sample");
 exports.recommendUnit = legacyHandler((req) => `/api/incidents/${req.params.id}/recommend-unit`);
+exports.rejectDispatchRecommendation = legacyHandler((req) => `/api/incidents/${req.params.id}/dispatch-recommendation/reject`);
 exports.updateLocation = legacyHandler((req) => `/api/incidents/${req.params.id}/location`);
 exports.confirmLocation = legacyHandler((req) => `/api/incidents/${req.params.id}/confirm-location`);
 exports.history = legacyHandler("/api/incidents/history");
 exports.clearHistory = legacyHandler("/api/incidents/history");
 exports.assignUnit = legacyHandler((req) => `/api/incidents/${req.params.id}/assign-unit`);
+exports.releaseUnit = legacyHandler((req) => `/api/incidents/${req.params.id}/release-unit`);
+exports.releaseSupport = legacyHandler((req) => `/api/incidents/${req.params.id}/release-support`);
 exports.close = legacyHandler((req) => `/api/incidents/${req.params.id}/close`);
 exports.updateStatus = legacyHandler((req) => `/api/incidents/${req.params.id}/status`);
+exports.unitMembers = legacyHandler((req) => `/api/incidents/${req.params.id}/unit-members`);
+exports.officerAssignments = legacyHandler((req) => `/api/incidents/${req.params.id}/officer-assignments`);
+exports.updateOfficerAssignment = legacyHandler((req) => `/api/incidents/${req.params.id}/officer-assignments/${req.params.assignmentId}`);
+exports.releaseOfficerAssignment = legacyHandler((req) => `/api/incidents/${req.params.id}/officer-assignments/${req.params.assignmentId}/release`);

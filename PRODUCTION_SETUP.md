@@ -51,6 +51,14 @@ node --test backend/integration/operational-load.test.cjs
 
 The GitHub `verify` job runs these gates and must remain required on `main`.
 
+The `verify` job also depends on `ai-service-checks`, which installs the pinned
+CPU AI dependencies on Python 3.11, runs `pip check` and the Python tests, and
+audits all installed distributions with `scripts/audit-ai-dependencies.py`.
+Run that script using the AI environment's Python with `pip-audit` installed in
+the validation environment (or pass `--auditor-python` for an isolated audit
+tool environment). Official PyTorch `+cpu` wheel versions are audited as the
+matching upstream release; unknown local builds fail the strict advisory gate.
+
 ## Required production services
 
 Provision these outside this repository before deployment:
@@ -72,6 +80,13 @@ Provision these outside this repository before deployment:
 7. Central logs, metrics, tracing, durable alert delivery, a watchdog, defined
    SLOs, and an owned on-call escalation path.
 
+Before using `compose.prod.yaml`, explicitly choose
+`PRODUCTION_ALLOW_CITIZEN_REGISTRATION=true` or `false` in the private local
+configuration after the deployment owner approves the registration policy.
+The overlay has no default for this setting. For a host-run backend, set
+`ALLOW_CITIZEN_REGISTRATION=false` to disable public self-registration. The
+default remains enabled to preserve existing local behavior.
+
 ## Database and evidence
 
 Production requires PostgreSQL. Use a verified TLS connection and run migrations
@@ -82,6 +97,12 @@ $env:DATABASE_URL = "postgresql://user:password@host/database?sslmode=require"
 $env:PG_SSL_CA_FILE = "C:\secure\postgres-ca.pem"
 npm --prefix backend run migrate
 ```
+
+The repository's `compose.prod.yaml` is an origin/port override for the local
+Compose stack; it inherits `compose.yaml`'s local `postgres` service and does
+not target the managed database above. Do not use that override for a Neon
+deployment without a separately reviewed Compose change that explicitly routes
+the backend to the managed URL and removes the local PostgreSQL dependency.
 
 Evidence bytes must remain private and must be served only through the authorized
 preview API. The filesystem driver is acceptable for isolated release tests and

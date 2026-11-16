@@ -4,6 +4,7 @@ export function gisRouteButtonStates({
   route = null,
   routeLoading = false,
   locationLoading = false,
+  locationTracking = false,
   selectionMode = null,
   baseLayer = "streets",
   hasRouteWork = false,
@@ -32,7 +33,7 @@ export function gisRouteButtonStates({
   return {
     street: {
       disabled: false,
-      label: "Street View",
+      label: "Street Map",
       icon: "street",
       title: "Show street map tiles.",
       pressed: baseLayer === "streets",
@@ -47,11 +48,20 @@ export function gisRouteButtonStates({
       active: baseLayer === "satellite"
     },
     location: {
-      disabled: routeLoading || locationLoading,
+      disabled: routeLoading || locationLoading || locationTracking,
       label: locationLoading ? "Getting location..." : "Use My Location",
       icon: "location",
       title: locationLoading ? "Getting your current location." : "Use your current location as the route start.",
-      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Getting your current location." : ""
+      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Getting your current location." : locationTracking ? "Stop live GPS tracking before requesting a one-time location." : ""
+    },
+    tracking: {
+      disabled: routeLoading || locationLoading,
+      label: locationTracking ? "Stop GPS Tracking" : "Start GPS Tracking",
+      icon: "location",
+      title: locationTracking ? "Stop continuous GPS tracking." : "Continuously update the route start from this device.",
+      reason: routeLoading ? "Wait for route calculation to finish." : locationLoading ? "Wait for the current location request to finish." : "",
+      pressed: locationTracking,
+      active: locationTracking
     },
     fit: {
       disabled: false,
@@ -109,11 +119,11 @@ export function gisRouteButtonStates({
           : !hasRealRoute ? calculatedRouteReason : ""
     },
     clear: {
-      disabled: !hasRouteWork || routeLoading,
+      disabled: !route || routeLoading,
       label: "Clear Route",
       icon: "trash",
-      title: "Clear route points, lines, options, and warnings.",
-      reason: routeLoading ? "Wait for route calculation to finish." : !hasRouteWork ? "Choose a point or calculate a route before clearing." : ""
+      title: "Clear the calculated route line, distance, and ETA. Start and destination points are kept.",
+      reason: routeLoading ? "Wait for route calculation to finish." : !route ? "Calculate a route before clearing." : ""
     },
     clearStart: {
       disabled: !hasStart || routeLoading,

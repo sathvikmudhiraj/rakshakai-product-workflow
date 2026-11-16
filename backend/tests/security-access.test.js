@@ -31,6 +31,27 @@ function evidenceDataUrl(mimeType, suffix = "") {
   return `data:${mimeType};base64,${Buffer.concat([base, Buffer.from(String(suffix))]).toString("base64")}`;
 }
 
+async function stubEvidenceAi(t) {
+  let received;
+  const stub = http.createServer((req, res) => {
+    if (req.url === "/health") { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ modelLoaded: true, modelName: "test-model", minimumConfidence: 0.5 })); return; }
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      received = JSON.parse(Buffer.concat(chunks).toString()).imageBase64;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ configured: true, detections: [], performance: {
+        imageWidth: 100, imageHeight: 100, inferenceMs: 1, analyzedAt: new Date().toISOString()
+      } }));
+    });
+  });
+  await new Promise((resolve) => stub.listen(0, "127.0.0.1", resolve));
+  const previous = process.env.AI_SERVICE_URL;
+  process.env.AI_SERVICE_URL = `http://127.0.0.1:${stub.address().port}`;
+  t.after(async () => { process.env.AI_SERVICE_URL = previous; await new Promise((resolve) => stub.close(resolve)); });
+  return () => received;
+}
+
 const database = JSON.parse(fs.readFileSync(sourceDatabase, "utf8"));
 const passwordHash = bcrypt.hashSync(TEST_PASSWORD, 4);
 database.users.forEach((user) => {
@@ -175,6 +196,20 @@ database.responseUnits.forEach((unit) => {
   unit.lastUpdated = new Date().toISOString();
   unit.lastLocationUpdatedAt = unit.lastUpdated;
 });
+database.responseUnitMembers = [
+  ...(database.responseUnitMembers || []).filter((member) => member.officerUserId !== "u_fixture_officer"),
+  {
+    id: "fixture_member_alpha",
+    unitId: "fixture_unit_alpha",
+    officerUserId: "u_fixture_officer",
+    role: "primary",
+    createdAt: new Date().toISOString()
+  }
+];
+database.officerRanks = [
+  ...(database.officerRanks || []),
+  { id: "fixture_security_rank", code: "FX-SI", name: "Fixture Sub Inspector", level: 1, active: true }
+];
 database.cameraSources.push(
   {
     id: "test-camera",
@@ -222,8 +257,8 @@ process.env.API_RATE_LIMIT = "10000";
 process.env.AUTH_RATE_LIMIT = "3";
 process.env.FRONTEND_ORIGINS = "https://ops.rakshak.example.com";
 
-const { start } = require("../server");
-const { readDatabase, writeDatabase, repairLegacyPersistedData } = require("../services/core.service");
+const { start, getIO } = require("../server");
+const { readDatabase, writeDatabase, repairLegacyPersistedData, withCctnsState, writeErssChanges, completeGoogleLogin, addAuditLog } = require("../services/core.service");
 const { decryptSecret } = require("../services/cameraSecrets.service");
 
 let server;
@@ -363,8 +398,19 @@ async function login(role, origin = "http://localhost:3000") {
 test.before(async () => {
   osrmServer = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, "http://localhost");
-    if (parsedUrl.pathname.startsWith("/route/v1/")) {
+    if (parsedUrl.pathname.startsWith("/route/v1/") || parsedUrl.pathname.startsWith("/nearest/v1/")) {
       osrmRequests.push({ method: req.method, url: req.url });
+    }
+    if (parsedUrl.pathname.startsWith("/nearest/v1/")) {
+      const coordinates = parsedUrl.pathname.split("/").pop() || "";
+      const [lng, lat] = coordinates.split(";")[0].split(",").map(Number);
+      // Snap mock: requested point snapped ~0.001 degree north onto a road.
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({
+        code: "Ok",
+        mapmatching: [{ confidence: 0.9, distance: 111, nodes: [1, 2] }],
+        waypoints: [{ location: [lng, lat + 0.001], distance: 111, name: "Mock Road", alternatives_count: 0 }]
+      }));
     }
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -468,6 +514,7 @@ test("security headers are present and Express signature is hidden", async () =>
   assert.equal(response.headers.get("x-powered-by"), null);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(response.headers.get("x-frame-options"), "SAMEORIGIN");
+  assert.equal(response.headers.get("cache-control"), "no-store");
   assert.ok(response.headers.get("referrer-policy"));
   assertRestrictiveCsp(response.headers.get("content-security-policy"), { allowDevelopmentLocalhost: true });
 });
@@ -602,6 +649,77 @@ test("more than 100 logouts cannot resurrect an unexpired revoked session", () =
   assert.equal(userHasRevokedSession(user, { jti: "test-session-0" }), true);
 });
 
+test("session inventory is private, supports remote revocation and rotates the current session", async () => {
+  const original = await readDatabase();
+  try {
+    const a = await login("Admin"); const b = await login("Admin"); const citizen = await login("Citizen");
+    assert.equal((await request("/api/auth/sessions")).status, 401);
+    const listing = await (await request("/api/auth/sessions", { headers: { Cookie: b.cookie } })).json();
+    const current = listing.sessions.find((session) => session.current);
+    assert.ok(current);
+    assert.ok(listing.sessions.length >= 2);
+    assert.equal("token" in current, false); assert.equal("sessionVersion" in current, false);
+    assert.equal((await request(`/api/auth/sessions/${current.id}`, { method: "DELETE", headers: { Cookie: citizen.cookie } })).status, 404);
+    assert.equal((await request(`/api/auth/sessions/${current.id}`, { method: "DELETE", headers: { Cookie: a.cookie } })).status, 200);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: b.cookie } })).json()).user, null);
+    const rotation = await request("/api/auth/sessions/revoke-others", { method: "POST", headers: { Cookie: a.cookie } });
+    assert.equal(rotation.status, 200);
+    const renewed = cookieFrom(rotation).cookie;
+    assert.ok(renewed); assert.notEqual(renewed, a.cookie);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: a.cookie } })).json()).user, null);
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: renewed } })).json()).user.role, "Admin");
+    const onlyCurrent = await (await request("/api/auth/sessions", { headers: { Cookie: renewed } })).json();
+    assert.equal(onlyCurrent.sessions.length, 1); assert.equal(onlyCurrent.sessions[0].current, true);
+  } finally { await writeDatabase(original); }
+});
+
+test("Google sign-in preserves approved roles, pins subjects, and can enforce Workspace-only operator access", async () => {
+  const original = await readDatabase(); const policy = process.env.GOOGLE_REQUIRE_WORKSPACE_SSO;
+  try {
+    assert.equal((await (await request("/api/auth/google/status")).json()).enabled, false);
+    const admin = original.users.find((user) => user.role === "Admin");
+    const result = await completeGoogleLogin({ sub: "verified-google-subject", email: admin.email }, { headers: { "user-agent": "Test Workspace device" } });
+    assert.equal(result.user.role, "Admin");
+    assert.equal(result.user.id, admin.id);
+    assert.equal("googleSubject" in result.user, false);
+    const cookie = result.cookies[0].split(";")[0];
+    await assert.rejects(completeGoogleLogin({ sub: "different-subject", email: admin.email }, { headers: {} }), { status: 403 });
+    await assert.rejects(completeGoogleLogin({ sub: "unapproved", email: "unapproved@example.test" }, { headers: {} }), { status: 403 });
+    process.env.GOOGLE_REQUIRE_WORKSPACE_SSO = "true";
+    assert.equal((await (await request("/api/auth/me", { headers: { Cookie: cookie } })).json()).user.role, "Admin");
+    // Exercise the actual backend policy without consuming the shared HTTP
+    // limiter budget reserved for the existing password/rate-limit tests.
+    let deniedStatus;
+    await require("../services/core.service").api({ method: "POST", headers: {}, body: { email: admin.email, password: TEST_PASSWORD } },
+      { writeHead(status) { deniedStatus = status; }, end() {} }, new URL("http://localhost/api/login"));
+    assert.equal(deniedStatus, 403);
+    assert.equal((await login("Citizen")).response.status, 200);
+  } finally {
+    if (policy === undefined) delete process.env.GOOGLE_REQUIRE_WORKSPACE_SSO; else process.env.GOOGLE_REQUIRE_WORKSPACE_SSO = policy;
+    await writeDatabase(original);
+  }
+});
+
+test("live dashboard sockets disconnect after their session is revoked", async () => {
+  const { io: connect } = require("socket.io-client");
+  const { once } = require("node:events");
+  const session = await login("Admin");
+  const socket = connect(baseUrl, { transports: ["websocket"], reconnection: false, extraHeaders: { Cookie: session.cookie } });
+  try {
+    await once(socket, "connect", { signal: AbortSignal.timeout(5000) });
+    await request("/api/auth/logout", { method: "POST", headers: { Cookie: session.cookie } });
+    const disconnected = once(socket, "disconnect", { signal: AbortSignal.timeout(5000) });
+    await getIO().revalidateSessions();
+    await disconnected;
+    assert.equal(socket.connected, false);
+  } finally { socket.close(); }
+});
+
+test("malformed cookie encoding is treated as an invalid session instead of an exception", async () => {
+  const response = await request("/api/auth/me", { headers: { Cookie: "rakshakai_session=%E0%A4%A" } });
+  assert.equal(response.status, 200); assert.equal((await response.json()).user, null);
+});
+
 test("Public registration always creates Citizen accounts only", async () => {
   const weak = await request("/api/register", {
     method: "POST",
@@ -724,14 +842,150 @@ test("Admin can access admin-only routes while Police and Citizen cannot", async
   }
 });
 
+test("audit log endpoint paginates, filters, and preserves its legacy response shape", async () => {
+  const original = await readDatabase();
+  try {
+    const db = structuredClone(original);
+    const timestamp = new Date().toISOString();
+    const fixtures = Array.from({ length: 35 }, (_, index) => ({
+      id: `audit_page_fixture_${index}`,
+      actorName: "Audit Pagination Fixture Actor",
+      actorId: "audit_page_fixture_user",
+      actorRole: "Admin",
+      action: "audit_fixture_recorded",
+      incidentId: null,
+      details: JSON.stringify({ reason: `fixture ${index}` }),
+      timestamp
+    }));
+    db.auditLogs = [...fixtures, ...(db.auditLogs || [])];
+    await writeDatabase(db);
+
+    const legacy = await request("/api/audit-logs", { headers: authHeaders("Admin") });
+    assert.equal(legacy.status, 200);
+    const legacyBody = await legacy.json();
+    assert.ok(Array.isArray(legacyBody.auditLogs));
+    assert.equal("total" in legacyBody, false);
+
+    const first = await request("/api/audit-logs?limit=10&offset=0&actor=audit_page_fixture_user&category=other", { headers: authHeaders("Admin") });
+    assert.equal(first.status, 200);
+    const firstBody = await first.json();
+    assert.equal(firstBody.total, 35);
+    assert.equal(firstBody.auditLogs.length, 10);
+    assert.equal(firstBody.hasMore, true);
+    const second = await request("/api/audit-logs?limit=10&offset=10&actor=audit_page_fixture_user&category=other", { headers: authHeaders("Admin") });
+    const secondBody = await second.json();
+    assert.equal(secondBody.total, 35);
+    assert.equal(secondBody.auditLogs.length, 10);
+    assert.equal(new Set([...firstBody.auditLogs, ...secondBody.auditLogs].map((log) => log.id)).size, 20);
+
+    const searched = await request("/api/audit-logs?limit=10&search=fixture%2034&actor=audit_page_fixture_user", { headers: authHeaders("Admin") });
+    assert.equal((await searched.json()).total, 1);
+    for (const role of ["Police Officer", "Citizen"]) {
+      assert.equal((await request("/api/audit-logs?limit=10", { headers: authHeaders(role) })).status, 403, role);
+    }
+    assert.equal((await request("/api/audit-logs?limit=10&category=not-a-category", { headers: authHeaders("Admin") })).status, 400);
+  } finally {
+    await writeDatabase(original);
+  }
+});
+
+test("SLA updates are Admin-only, validated, persisted, and audited", async () => {
+  const currentResponse = await request("/api/sla/config", { headers: authHeaders("Admin") });
+  assert.equal(currentResponse.status, 200);
+  const current = (await currentResponse.json()).config;
+  const high = current.find((policy) => policy.severity === "HIGH");
+  assert.ok(high);
+
+  const invalid = await request("/api/sla/config", {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ updates: [{ ...high, warningBeforeAssignmentMinutes: high.assignmentSlaMinutes }] })
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json()).error, /warning.*less than/i);
+
+  for (const role of ["Police Officer", "Citizen"]) {
+    const denied = await request("/api/sla/config", {
+      method: "PATCH",
+      headers: { ...authHeaders(role), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ updates: [high] })
+    });
+    assert.equal(denied.status, 403, role);
+  }
+
+  const nextResponseMinutes = Number(high.responseSlaMinutes) + 1;
+  const updated = await request("/api/sla/config", {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ updates: [{ ...high, responseSlaMinutes: nextResponseMinutes }] })
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).message, "SLA settings updated successfully");
+
+  const persisted = await readDatabase();
+  assert.equal(persisted.slaConfig.find((policy) => policy.severity === "HIGH").responseSlaMinutes, nextResponseMinutes);
+  const audit = persisted.auditLogs.find((log) => log.action === "sla_policy_updated" && log.severity === "HIGH");
+  assert.ok(audit);
+  assert.ok(audit.changedFields.includes("responseSlaMinutes"));
+  assert.equal(audit.oldValues.responseSlaMinutes, high.responseSlaMinutes);
+  assert.equal(audit.newValues.responseSlaMinutes, nextResponseMinutes);
+});
+
+test("SLA monitoring is role-restricted and reports non-overlapping server-calculated active states", async () => {
+  const original = await readDatabase();
+  try {
+    const db = JSON.parse(JSON.stringify(original));
+    const timestamp = Date.now();
+    const createdAt = new Date(timestamp - 10 * 60_000).toISOString();
+    const policeUser = db.users.find((item) => item.role === "Police Officer");
+    policeUser.stationId = "sla_station_local";
+    policeUser.jurisdiction = "Patancheru";
+    policeUser.data = { ...policeUser.data, stationId: "sla_station_local", jurisdiction: "Patancheru" };
+    db.policeStations = [{ id: "sla_station_local", stationId: "SLA-LOCAL", stationCode: "SLA-LOCAL", stationName: "SLA Local Station", jurisdiction: "Patancheru", operational: true }];
+    db.incidents = [
+      { id: "sla_monitor_breached", incidentId: "SLA-QA-01", title: "Synthetic unassigned critical case", status: "New", severity: "CRITICAL", jurisdiction: "Patancheru", createdAt, assignmentDeadline: new Date(timestamp - 60_000).toISOString(), responseDeadline: new Date(timestamp + 10 * 60_000).toISOString(), assignedUnitId: null, escalationLevel: "L0" },
+      { id: "sla_monitor_ontime", incidentId: "SLA-QA-02", title: "Synthetic assigned case", status: "Assigned", severity: "LOW", jurisdiction: "Patancheru", createdAt, assignmentDeadline: new Date(timestamp + 30 * 60_000).toISOString(), responseDeadline: new Date(timestamp + 120 * 60_000).toISOString(), assignedUnitId: "unit1", escalationLevel: "L0" },
+      { id: "sla_monitor_no_deadline", incidentId: "SLA-QA-03", title: "Synthetic missing policy dates", status: "Verified", severity: "MEDIUM", jurisdiction: "Patancheru", createdAt, assignedUnitId: null, escalationLevel: "L0" },
+      { id: "sla_monitor_remote", incidentId: "SLA-REMOTE-01", title: "Out of jurisdiction case", status: "New", severity: "LOW", jurisdiction: "Remote District", createdAt, assignmentDeadline: new Date(timestamp + 30 * 60_000).toISOString(), responseDeadline: new Date(timestamp + 120 * 60_000).toISOString(), assignedUnitId: null, escalationLevel: "L0" }
+    ];
+    db.responseUnits = [...(db.responseUnits || []), { id: "unit1", unitCode: "SLA-QA-UNIT", name: "Synthetic unit", status: "busy", linkedStationId: "station1" }];
+    await writeDatabase(db);
+
+    const citizen = await request("/api/sla/monitoring", { headers: authHeaders("Citizen") });
+    assert.equal(citizen.status, 403);
+    const response = await request("/api/sla/monitoring", { headers: authHeaders("Admin") });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.ok(Number.isFinite(Date.parse(result.asOf)), "server snapshot timestamp is present");
+    assert.equal(result.summary.activeCases, 4);
+    assert.equal(result.summary.breached, 1);
+    assert.equal(result.summary.withinSla, 2);
+    assert.equal(result.summary.noDeadline, 1);
+    assert.equal(result.summary.approaching, 0);
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_breached").assignedUnitId, null, "unassigned active case remains in the queue");
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_breached").slaState, "BREACHED");
+    assert.equal(result.incidents.find((item) => item.id === "sla_monitor_no_deadline").slaState, "NO_DEADLINE");
+    assert.equal(result.summary.onTimeResolutionRate, null, "the API does not infer resolution performance without a resolution target");
+    assert.equal(result.summary.resolutionSlaConfigured, false);
+    assert.equal(result.breachTrend.length, 7);
+    const scopedPoliceResponse = await request("/api/sla/monitoring", { headers: authHeaders("Police Officer") });
+    assert.equal(scopedPoliceResponse.status, 200);
+    const scopedPolice = await scopedPoliceResponse.json();
+    assert.equal(scopedPolice.summary.activeCases, 3);
+    assert.equal(scopedPolice.incidents.some((item) => item.id === "sla_monitor_remote"), false);
+  } finally {
+    await writeDatabase(original);
+  }
+});
+
 test("Admin can create, list, update, deactivate, activate, and reset Police accounts", async () => {
   const payload = {
     name: "Inspector Meera Singh",
     email: "meera.singh@rakshakai.local",
     temporaryPassword: "TempPolice123",
     badgeId: "DL-2042",
-    unitId: "PCR-11",
-    station: "Central Command",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Sector 7",
     jurisdiction: "North Zone"
   };
@@ -749,7 +1003,7 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
   assert.equal(createdBody.user.role, "Police Officer");
   assert.equal(createdBody.user.status, "active");
@@ -791,9 +1045,9 @@ test("Admin can create, list, update, deactivate, activate, and reset Police acc
   const updated = await request(`/api/admin/police-users/${createdBody.user.id}`, {
     method: "PATCH",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Metro Command", beat: "Sector 8" })
+    body: JSON.stringify({ name: "Inspector Meera Rao", email: payload.email, station: "Fixture Station", beat: "Sector 8" })
   });
-  assert.equal(updated.status, 200);
+  assert.equal(updated.status, 200, await updated.clone().text());
   assert.equal((await updated.json()).user.name, "Inspector Meera Rao");
 
   const inactive = await request(`/api/admin/police-users/${createdBody.user.id}/deactivate`, {
@@ -850,8 +1104,8 @@ test("password reset rejects old police sessions", async () => {
     email: `session.reset.${timestamp}@rakshakai.local`,
     temporaryPassword: "TempPolice123",
     badgeId: `RESET-${timestamp}`,
-    unitId: `RESET-${timestamp}`,
-    station: "Session Test Station",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Session Test Beat",
     jurisdiction: "Session Test Jurisdiction"
   };
@@ -860,7 +1114,7 @@ test("password reset rejects old police sessions", async () => {
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
 
   const oldLogin = await request("/api/auth/login", {
@@ -900,8 +1154,8 @@ test("account deactivation rejects old police sessions", async () => {
     email: `session.deactivate.${timestamp}@rakshakai.local`,
     temporaryPassword: "TempPolice123",
     badgeId: `DEACT-${timestamp}`,
-    unitId: `DEACT-${timestamp}`,
-    station: "Session Test Station",
+    unitId: "FX-P-01",
+    station: "Fixture Station",
     beat: "Session Test Beat",
     jurisdiction: "Session Test Jurisdiction"
   };
@@ -910,7 +1164,7 @@ test("account deactivation rejects old police sessions", async () => {
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(payload)
   });
-  assert.equal(created.status, 201);
+  assert.equal(created.status, 201, await created.clone().text());
   const createdBody = await created.json();
 
   const activeLogin = await request("/api/auth/login", {
@@ -951,6 +1205,64 @@ test("Admin and Police can access operational routes", async () => {
   }
 });
 
+test("CCTNS search APIs enforce authenticated operational access and expose only simulator data", async () => {
+  assert.equal((await request("/api/cctns/search?q=TS09%20AB%201234")).status, 401);
+  assert.equal((await request("/api/cctns/search?q=TS09%20AB%201234", { headers: authHeaders("Citizen") })).status, 403);
+  const search = await request("/api/cctns/search?q=TS09%20AB%201234", { headers: authHeaders("Admin") });
+  assert.equal(search.status, 200);
+  const payload = await search.json();
+  assert.equal(payload.adapter.provider, "Simulator");
+  assert.equal(payload.records[0].id, "CCTNS-VEH-2026-4587");
+  assert.equal(payload.records[0].simulated, true);
+  const detail = await request("/api/cctns/records/CCTNS-VEH-2026-4587", { headers: authHeaders("Admin") });
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).record.registrationNumber, "TS09 AB 1234");
+  const rejected = await request("/api/cctns/links", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json" },
+    body: JSON.stringify({ cctnsRecordId: "CCTNS-VEH-2026-4587", incidentId: "not-needed", humanConfirmed: false })
+  });
+  assert.equal(rejected.status, 409);
+  const auditLogs = (await readDatabase()).auditLogs;
+  assert.ok(auditLogs.some((entry) => entry.action === "cctns_link_rejected" && /human_confirmation_required/.test(entry.details)));
+});
+
+test("CCTNS audit persistence does not overwrite unrelated JSON operational records", async () => {
+  const before = (await readDatabase()).incidents.map((incident) => incident.id);
+  await withCctnsState((db) => {
+    db.incidents = [];
+    addAuditLog(db, "cctns_search_performed", { id: "test", role: "Admin" }, null, "safe test metadata");
+  });
+  assert.deepEqual((await readDatabase()).incidents.map((incident) => incident.id), before);
+});
+
+test("ERSS saves preserve concurrent unrelated changes and reject stale record edits", async () => {
+  const original = await readDatabase();
+  try {
+    const initial = structuredClone(original);
+    const targetId = "erss_save_isolation_test";
+    initial.incidents.push({ id: targetId, title: "Original", status: "New", severity: "MEDIUM" });
+    await writeDatabase(initial);
+    const baseline = await readDatabase();
+    const pending = structuredClone(baseline);
+    pending.incidents.find((item) => item.id === targetId).title = "ERSS changed title";
+    const concurrent = await readDatabase();
+    concurrent.users[0].name = "Concurrent account update";
+    await writeDatabase(concurrent);
+    await writeErssChanges(pending, baseline);
+    const saved = await readDatabase();
+    assert.equal(saved.users[0].name, "Concurrent account update");
+    assert.equal(saved.incidents.find((item) => item.id === targetId).title, "ERSS changed title");
+    const stale = structuredClone(saved);
+    const staleBaseline = structuredClone(saved);
+    stale.incidents.find((item) => item.id === targetId).title = "Stale title";
+    saved.incidents.find((item) => item.id === targetId).title = "Newer title";
+    await writeDatabase(saved);
+    await assert.rejects(writeErssChanges(stale, staleBaseline), { status: 409 });
+    assert.equal((await readDatabase()).incidents.find((item) => item.id === targetId).title, "Newer title");
+  } finally { await writeDatabase(original); }
+});
+
 test("response unit registry exposes source-safe unit metadata and marks demo units", async () => {
   const response = await request("/api/response-units", { headers: authHeaders("Admin") });
   assert.equal(response.status, 200);
@@ -967,6 +1279,367 @@ test("response unit registry exposes source-safe unit metadata and marks demo un
   assert.equal(demo.lng >= 78 && demo.lng <= 79, true);
   assert.equal(demo.lat >= 28.4 && demo.lat <= 28.8, false);
   assert.equal(demo.lng >= 77.0 && demo.lng <= 77.4, false);
+});
+
+test("response-unit live GPS accepts only an officer's own unit and drives fresh dispatch location", async () => {
+  const original = await readDatabase();
+  const originalUnits = structuredClone(original.responseUnits);
+  const endpoint = "/api/response-units/fixture_unit_alpha/location";
+  const headers = { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" };
+  const payload = {
+    latitude: PATANCHERU_POINT.lat + 0.0003,
+    longitude: PATANCHERU_POINT.lng + 0.0003,
+    accuracy: 7.4,
+    capturedAt: new Date().toISOString(),
+    speed: 4.5,
+    heading: 135,
+    altitude: 542
+  };
+  try {
+    const unauthenticated = await request(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(unauthenticated.status, 401);
+
+    for (const role of ["Citizen", "Admin"]) {
+      const forbiddenResponse = await request(endpoint, {
+        method: "POST",
+        headers: { ...authHeaders(role), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+        body: JSON.stringify(payload)
+      });
+      assert.equal(forbiddenResponse.status, 403, role);
+    }
+
+    const otherUnit = await request("/api/response-units/fixture_unit_beta/location", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    assert.equal(otherUnit.status, 403);
+
+    const invalid = await request(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...payload, latitude: 91 })
+    });
+    assert.equal(invalid.status, 400);
+
+    const future = await request(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...payload, capturedAt: new Date(Date.now() + 2 * 60 * 1000).toISOString() })
+    });
+    assert.equal(future.status, 400);
+
+    const old = await request(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...payload, capturedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() })
+    });
+    assert.equal(old.status, 409);
+
+    const accepted = await request(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+    assert.equal(accepted.status, 200);
+    const acceptedBody = await accepted.json();
+    assert.equal(acceptedBody.unit.lat, payload.latitude);
+    assert.equal(acceptedBody.unit.lng, payload.longitude);
+    assert.equal(acceptedBody.unit.locationAccuracy, payload.accuracy);
+    assert.equal(acceptedBody.unit.locationCapturedAt, payload.capturedAt);
+    assert.equal(acceptedBody.unit.locationSource, "live_gps");
+    assert.equal(acceptedBody.unit.locationFreshnessState, "FRESH");
+    assert.ok(Number.isFinite(Date.parse(acceptedBody.receivedAt)));
+
+    const replay = await request(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+    assert.equal(replay.status, 409);
+    assert.equal((await replay.json()).code, "GPS_OBSERVATION_REPLAYED");
+
+    const nearest = await request(`/api/response-units/nearest?lat=${payload.latitude}&lng=${payload.longitude}`, {
+      headers: authHeaders("Police Officer")
+    });
+    assert.equal(nearest.status, 200);
+    const nearestBody = await nearest.json();
+    assert.equal(nearestBody.units[0].id, "fixture_unit_alpha");
+    assert.equal(nearestBody.units[0].locationFreshnessState, "FRESH");
+
+    const policeRegistry = await request("/api/response-units", { headers: authHeaders("Police Officer") });
+    assert.equal((await policeRegistry.json()).telemetryUnit.id, "fixture_unit_alpha");
+    const adminRegistry = await request("/api/response-units", { headers: authHeaders("Admin") });
+    assert.equal((await adminRegistry.json()).telemetryUnit, null);
+
+    const started = await request("/api/response-units/fixture_unit_alpha/tracking", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ action: "start" })
+    });
+    assert.equal(started.status, 200);
+    const stopped = await request("/api/response-units/fixture_unit_alpha/tracking", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ action: "stop" })
+    });
+    assert.equal(stopped.status, 200);
+
+    const auditResponse = await request("/api/audit-logs", { headers: authHeaders("Admin") });
+    const auditActions = (await auditResponse.json()).auditLogs.map((entry) => entry.action);
+    assert.ok(auditActions.includes("UNIT_GPS_UPDATE_REJECTED"));
+    assert.ok(auditActions.includes("UNIT_GPS_TRACKING_STARTED"));
+    assert.ok(auditActions.includes("UNIT_GPS_TRACKING_STOPPED"));
+    assert.equal(auditActions.includes("UNIT_GPS_LOCATION_UPDATED"), false);
+  } finally {
+    const restored = await readDatabase();
+    restored.responseUnits = originalUnits;
+    await writeDatabase(restored);
+  }
+});
+
+test("dispatch readiness RBAC denies unauthorized operational roles on primary, support and officer endpoints", async () => {
+  const original = await readDatabase();
+  const officerId = users.find((user) => user.role === "Police Officer").id;
+  try {
+    for (const operationalRole of ["CALL_TAKER", "FIELD_OFFICER", null]) {
+      const db = structuredClone(original);
+      const officer = db.users.find((user) => user.id === officerId);
+      officer.operationalRole = operationalRole;
+      officer.data = { ...officer.data, operationalRole };
+      await writeDatabase(db);
+      for (const [method, path, body] of [
+        ["POST", "assign-unit", { unitId: "unused" }],
+        ["POST", "assign-unit", { recommendationId: "unused" }],
+        ["POST", "recommend-unit", {}], ["POST", "release-unit", {}],
+        ["POST", "officer-assignments", { assignments: [] }]
+      ]) {
+        const response = await request(`/api/incidents/dispatch-audit/${path}`, { method,
+          headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        assert.equal(response.status, 403, `${operationalRole}: ${method} ${path}`);
+      }
+    }
+    for (const operationalRole of ["DISPATCHER", "SUPERVISOR"]) {
+      const db = structuredClone(original);
+      const officer = db.users.find((user) => user.id === officerId);
+      officer.operationalRole = operationalRole;
+      officer.data = { ...officer.data, operationalRole };
+      await writeDatabase(db);
+      // Missing fixture incident gives 404 only after the authorization gate succeeds.
+      for (const path of ["recommend-unit", "assign-unit", "officer-assignments"]) {
+        const response = await request(`/api/incidents/dispatch-audit/${path}`, { method: "POST",
+          headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json" }, body: JSON.stringify({ unitId: "unused", assignments: [] }) });
+        assert.equal(response.status, 404, `${operationalRole}: ${path}`);
+      }
+    }
+  } finally { await writeDatabase(original); }
+});
+
+test("dispatch readiness HTTP lifecycle protects primary deployments and persists audit plus realtime", async () => {
+  const original = await readDatabase();
+  let socket;
+  const { once } = require("node:events");
+  const mutate = (path, body, method = "POST") => request(`/api/incidents/dispatch-audit/${path}`, {
+    method, headers: { ...authHeaders("Admin"), "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const db = structuredClone(original);
+    const at = new Date().toISOString();
+    db.policeOfficers ||= [];
+    db.responseUnitMembers ||= [];
+    db.incidents.push({ id: "dispatch-audit", title: "Isolated dispatch audit fixture", status: "Assigned", severity: "HIGH", assignedUnitId: "audit-p", lat: 17.5285, lng: 78.2636, locationStatus: "Verified", locationSource: "manual" });
+    for (const id of ["audit-p", "audit-q"]) db.responseUnits.push({ id, unitCode: id, unitType: "police_patrol", status: id === "audit-p" ? "busy" : "available", operational: true, assignedIncidentId: id === "audit-p" ? "dispatch-audit" : null, lat: 17.5285, lng: 78.2636, locationSource: "live_gps", locationAccuracy: 5, locationCapturedAt: at, locationReceivedAt: at, isDemo: false });
+    for (const id of ["audit-o1", "audit-o2"]) {
+      db.users.push({ id, name: `Isolated fixture ${id}`, role: "Police Officer", status: "active" });
+      db.policeOfficers.push({ id: `profile-${id}`, userId: id, active: true, dutyStatus: "on_duty", availabilityStatus: "available" });
+      db.responseUnitMembers.push({ id: `member-${id}`, unitId: "audit-p", officerUserId: id });
+    }
+    await writeDatabase(db);
+    const { io: connect } = require("socket.io-client");
+    socket = connect(baseUrl, { transports: ["websocket"], reconnection: false, extraHeaders: authHeaders("Admin", true) });
+    await once(socket, "connect", { signal: AbortSignal.timeout(10000) });
+    const event = once(socket, "incident_officer_assignment_changed", { signal: AbortSignal.timeout(10000) });
+    const deployed = await mutate("officer-assignments", { assignments: [{ officerId: "audit-o1", responseRole: "TEAM_LEAD" }, { officerId: "audit-o2", responseRole: "DRIVER" }] });
+    assert.equal(deployed.status, 201);
+    const rows = (await deployed.json()).assignments;
+    assert.equal((await event)[0].incidentId, "dispatch-audit");
+    assert.equal(rows.length, 2);
+    const members = await request("/api/incidents/dispatch-audit/unit-members", { headers: authHeaders("Admin") });
+    assert.equal((await members.json()).members.filter((member) => member.deployment).length, 2);
+    for (const [path, body, method] of [
+      ["release-unit", { expectedAssignedUnitId: "audit-p", reason: "Audit" }, "POST"],
+      ["assign-unit", { unitId: "audit-q", expectedAssignedUnitId: "audit-p", reason: "Audit" }, "POST"],
+      ["status", { status: "Rejected / False Alarm" }, "PATCH"]
+    ]) {
+      const response = await mutate(path, body, method);
+      assert.equal(response.status, 409, path);
+      assert.equal((await response.json()).code, "ACTIVE_OFFICER_DEPLOYMENTS", path);
+    }
+    assert.equal((await mutate(`officer-assignments/${rows[0].id}`, { responseRole: "RESPONSE_OFFICER", reason: "Rotation" }, "PATCH")).status, 200);
+    for (const row of rows) assert.equal((await mutate(`officer-assignments/${row.id}/release`, { reason: "Audit completed" })).status, 200);
+    const released = await readDatabase();
+    assert.equal(released.incidents.find((item) => item.id === "dispatch-audit").assignedUnitId, "audit-p");
+    assert.equal(released.responseUnitMembers.filter((item) => item.unitId === "audit-p").length, 2);
+    assert.equal(released.incidentOfficerAssignments.filter((item) => item.incidentId === "dispatch-audit" && item.status === "RELEASED").length, 2);
+    assert.equal(released.policeOfficers.find((item) => item.userId === "audit-o1").assignedIncidentId || null, null);
+    const audits = released.auditLogs.filter((item) => item.incidentId === "dispatch-audit").map((item) => item.action);
+    for (const action of ["incident_officer_assigned", "incident_officer_role_changed", "incident_officer_released"]) assert.ok(audits.includes(action), action);
+    assert.equal((await mutate("release-unit", { expectedAssignedUnitId: "audit-p", reason: "All officers released" })).status, 200);
+  } finally { socket?.close(); await writeDatabase(original); }
+});
+
+test("primary assignment precedes hybrid support, which reserves capacity once and releases on resolution", async () => {
+  const original = await readDatabase();
+  const snapshot = {
+    users: structuredClone(original.users),
+    incidents: structuredClone(original.incidents),
+    responseUnits: structuredClone(original.responseUnits),
+    policeStations: structuredClone(original.policeStations),
+    policeOfficers: structuredClone(original.policeOfficers || []),
+    responseUnitMembers: structuredClone(original.responseUnitMembers || []),
+    unitCapabilities: structuredClone(original.unitCapabilities || [])
+  };
+  const fresh = new Date().toISOString();
+  original.users.push({ id: "hybrid_support_officer", name: "Support Officer", email: "hybrid-support@example.test", role: "Police Officer", status: "active", passwordHash });
+  original.policeStations = [
+    { id: "hybrid_station_primary", stationId: "HPS-1", stationName: "Primary Base", lat: 17.52, lng: 78.27, operational: true, jurisdiction: "Patancheru" },
+    { id: "hybrid_station_support", stationId: "HPS-2", stationName: "Support Base", lat: 17.50, lng: 78.34, operational: true, jurisdiction: "Patancheru" }
+  ];
+  original.responseUnits = [
+    {
+      id: "hybrid_primary_unit", unitId: "P-70", unitCode: "P-70", name: "Live Patrol 70", unitType: "police_patrol",
+      status: "available", operational: true, stationId: "hybrid_station_primary", lat: 17.529, lng: 78.264,
+      locationSource: "live_gps", source: "live_gps", locationAccuracy: 8, locationCapturedAt: fresh,
+      locationReceivedAt: fresh, lastLocationUpdatedAt: fresh, lastUpdated: fresh, isDemo: false
+    },
+    {
+      id: "hybrid_support_unit", unitId: "P-71", unitCode: "P-71", name: "Support Patrol 71", unitType: "police_patrol",
+      status: "available", operational: true, stationId: "hybrid_station_support", lat: 17.50, lng: 78.34,
+      source: "admin_registry", lastLocationUpdatedAt: fresh, lastUpdated: fresh, isDemo: false
+    }
+  ];
+  original.policeOfficers = [
+    { id: "u_fixture_officer", userId: "u_fixture_officer", stationId: "hybrid_station_primary", rankId: "rank_si", active: true, dutyStatus: "on_duty", availabilityStatus: "available" },
+    { id: "hybrid_support_officer", userId: "hybrid_support_officer", stationId: "hybrid_station_support", rankId: "rank_si", active: true, dutyStatus: "on_duty", availabilityStatus: "available" }
+  ];
+  original.responseUnitMembers = [
+    { id: "hybrid_member_primary", unitId: "hybrid_primary_unit", officerUserId: "u_fixture_officer", role: "commander", assignedAt: fresh },
+    { id: "hybrid_member_support", unitId: "hybrid_support_unit", officerUserId: "hybrid_support_officer", role: "member", assignedAt: fresh }
+  ];
+  original.unitCapabilities = [];
+  await writeDatabase(original);
+  try {
+    const created = await request("/api/incidents", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({
+        title: "Hybrid dispatch integration",
+        category: "security",
+        severity: "low",
+        status: "Verified",
+        lat: PATANCHERU_POINT.lat,
+        lng: PATANCHERU_POINT.lng,
+        address: "Patancheru verified incident",
+        locationStatus: "Verified",
+        locationSource: "manual_latlng"
+      })
+    });
+    assert.equal(created.status, 201);
+    const incident = (await created.json()).incident;
+
+    let fallbackDb = await readDatabase();
+    const fallbackPrimary = fallbackDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit");
+    fallbackPrimary.locationCapturedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    fallbackPrimary.lastLocationUpdatedAt = fallbackPrimary.locationCapturedAt;
+    await writeDatabase(fallbackDb);
+    const fallback = await request(`/api/incidents/${incident.id}/recommend-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: "{}"
+    });
+    assert.equal(fallback.status, 409);
+    const fallbackBody = await fallback.json();
+    assert.equal(fallbackBody.code, "PRIMARY_UNIT_RECOMMENDATION_UNAVAILABLE");
+    assert.equal(fallbackBody.primary, null);
+    assert.deepEqual(fallbackBody.stationSupport.allocations, []);
+    fallbackDb = await readDatabase();
+    const refreshedPrimary = fallbackDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit");
+    refreshedPrimary.locationCapturedAt = new Date().toISOString();
+    refreshedPrimary.locationReceivedAt = refreshedPrimary.locationCapturedAt;
+    refreshedPrimary.lastLocationUpdatedAt = refreshedPrimary.locationCapturedAt;
+    await writeDatabase(fallbackDb);
+
+    const recommended = await request(`/api/incidents/${incident.id}/recommend-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: "{}"
+    });
+    assert.equal(recommended.status, 200);
+    const recommendationBody = await recommended.json();
+    assert.equal(recommendationBody.recommendation.confirmationRequired, true);
+    assert.equal(recommendationBody.recommendation.primary.unitId, "hybrid_primary_unit");
+    assert.deepEqual(recommendationBody.recommendation.stationSupport.allocations, []);
+    let currentDb = await readDatabase();
+    assert.equal(currentDb.incidents.find((item) => item.id === incident.id).assignedUnitId, null);
+    assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit").status, "available");
+
+    const blockedSupport = await request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ recommendationId: recommendationBody.recommendation.id, expectedAssignedUnitId: null })
+    });
+    assert.equal(blockedSupport.status, 409);
+    assert.equal((await blockedSupport.json()).code, "PRIMARY_UNIT_REQUIRED");
+
+    const primaryAssignment = await request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ unitId: "hybrid_primary_unit", expectedAssignedUnitId: null })
+    });
+    assert.equal(primaryAssignment.status, 200);
+
+    const supportRecommendation = await request(`/api/incidents/${incident.id}/recommend-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: "{}"
+    });
+    assert.equal(supportRecommendation.status, 200);
+    const supportRecommendationBody = await supportRecommendation.json();
+    assert.equal(supportRecommendationBody.recommendation.primary.unitId, "hybrid_primary_unit");
+    assert.equal(supportRecommendationBody.recommendation.stationSupport.allocations[0].stationId, "hybrid_station_support");
+
+    const confirmationRequest = () => request(`/api/incidents/${incident.id}/assign-unit`, {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ recommendationId: supportRecommendationBody.recommendation.id, expectedAssignedUnitId: "hybrid_primary_unit" })
+    });
+    const confirmations = await Promise.all([confirmationRequest(), confirmationRequest()]);
+    assert.deepEqual(confirmations.map((response) => response.status).sort(), [200, 409]);
+    currentDb = await readDatabase();
+    assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit").status, "busy");
+    assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_support_unit").status, "busy");
+    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "u_fixture_officer").availabilityStatus, "available");
+    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "hybrid_support_officer").availabilityStatus, "busy");
+
+    for (const status of ["En Route", "On Scene", "Resolved"]) {
+      const changed = await request(`/api/incidents/${incident.id}/status`, {
+        method: "PATCH",
+        headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+        body: JSON.stringify({ status })
+      });
+      assert.equal(changed.status, 200, status);
+    }
+    currentDb = await readDatabase();
+    assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_primary_unit").status, "available");
+    assert.equal(currentDb.responseUnits.find((unit) => unit.id === "hybrid_support_unit").status, "available");
+    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "u_fixture_officer").availabilityStatus, "available");
+    assert.equal(currentDb.policeOfficers.find((officer) => officer.id === "hybrid_support_officer").availabilityStatus, "available");
+    const actions = currentDb.auditLogs.filter((entry) => entry.incidentId === incident.id).map((entry) => entry.action);
+    assert.ok(actions.includes("DISPATCH_RECOMMENDATION_CREATED"));
+    assert.ok(actions.includes("DISPATCH_CONFIRMED"));
+    assert.ok(actions.includes("PRIMARY_RESPONDER_SELECTED"));
+    assert.ok(actions.includes("STATION_SUPPORT_SELECTED"));
+  } finally {
+    const restored = await readDatabase();
+    Object.assign(restored, snapshot);
+    await writeDatabase(restored);
+  }
 });
 
 test("police station registry uses Hyderabad Patancheru BHEL demo area and blocks Citizen", async () => {
@@ -1046,8 +1719,19 @@ test("Admin can manage response unit registry while Police and Citizen cannot", 
   assert.equal(deactivatedBody.unit.operational, false);
   assert.equal(deactivatedBody.unit.status, "offline");
 
+  const archived = await request(`/api/response-units/${createdBody.unit.id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ archive: true, archiveReason: "Vehicle retired from service" })
+  });
+  assert.equal(archived.status, 200);
+  const archivedBody = await archived.json();
+  assert.equal(archivedBody.unit.status, "decommissioned");
+  assert.equal(archivedBody.unit.operational, false);
+  assert.equal(archivedBody.unit.archiveReason, "Vehicle retired from service");
+
   const audits = (await (await request("/api/audit-logs", { headers: authHeaders("Admin") })).json()).auditLogs.map((log) => log.action);
-  for (const action of ["unit_created", "unit_updated", "unit_status_changed", "unit_location_updated"]) {
+  for (const action of ["unit_created", "unit_updated", "unit_status_changed", "unit_location_updated", "unit_archived"]) {
     assert.ok(audits.includes(action), action);
   }
 });
@@ -1572,17 +2256,17 @@ test("Citizen can use report routes but receives only the public-safe contract",
   }
 });
 
-test("Admin video evidence upload creates AI observations and converts only after verification", async () => {
-  const videoData = evidenceDataUrl("video/mp4", "admin-video-evidence");
+test("Admin evidence upload sends image bytes to mocked AI analysis", async (t) => {
+  const received = await stubEvidenceAi(t);
+  const imageData = evidenceDataUrl("image/jpeg", "admin-image-evidence");
   const upload = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify({
-      fileName: "admin-investigation.mp4",
+      fileName: "admin-investigation.jpg",
       fileSize: 20,
-      mimeType: "video/mp4",
-      durationSeconds: 12,
-      dataUrl: videoData,
+      mimeType: "image/jpeg",
+      dataUrl: imageData,
       linkedReportId: createdCitizenReportId,
       notes: "Admin chain-of-custody upload"
     })
@@ -1609,54 +2293,30 @@ test("Admin video evidence upload creates AI observations and converts only afte
     headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
   });
   assert.equal(analyzed.status, 200);
-  const analyzedBody = await analyzed.json();
-  assertNoEvidenceSecrets(analyzedBody);
-  assert.equal("incident" in analyzedBody, false);
-  assert.ok(analyzedBody.observations.length >= 1);
-  const vehicleObservation = analyzedBody.observations.find((item) => item.detectionType === "vehicle_detected");
-  assert.ok(vehicleObservation);
-  assert.equal(vehicleObservation.vehicleType, "possible vehicle");
-  assert.equal(vehicleObservation.possibleColor, "dark");
-  assert.equal(vehicleObservation.plateDetected, true);
-  assert.equal(vehicleObservation.possiblePlateText, "possible plate region");
-  assert.equal(vehicleObservation.actionable, false);
-  assert.match(vehicleObservation.message, /Possible/i);
-  assert.doesNotMatch(vehicleObservation.message, /confirmed/i);
-  const missingObjectObservation = analyzedBody.observations.find((item) => item.detectionType === "missing_object_possible_match");
-  assert.ok(missingObjectObservation);
-  assert.equal(missingObjectObservation.objectType, "backpack");
-  assert.equal(missingObjectObservation.possibleColor, "blue");
-  assert.equal(missingObjectObservation.actionable, false);
-  const observation = analyzedBody.observations[0];
-  assert.equal(observation.source, "video_upload");
-  assert.equal(observation.actionable, false);
-  assert.equal(observation.operationalAlert, false);
-  assert.match(observation.message, /Possible/i);
-
-  const verified = await request(`/api/video-observations/${observation.id}/review`, {
-    method: "POST",
-    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ action: "verify", notes: "Verified by human reviewer" })
-  });
-  assert.equal(verified.status, 200);
-  const verifiedBody = await verified.json();
-  assert.equal(verifiedBody.observation.reviewStatus, "verified");
-  assert.equal(verifiedBody.observation.actionable, true);
-  assert.equal(verifiedBody.observation.operationalAlert, false);
-
-  const converted = await request(`/api/video-observations/${observation.id}/convert-incident`, {
-    method: "POST",
-    headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(converted.status, 200);
-  const convertedBody = await converted.json();
-  assert.equal(convertedBody.incident.sourceType, "video_upload");
-  assert.equal(convertedBody.incident.sourceRecordId, observation.id);
-
-  const audits = (await (await request("/api/audit-logs", { headers: authHeaders("Admin") })).json()).auditLogs.map((log) => log.action);
-  for (const action of ["evidence_uploaded", "video_ai_analysis_started", "ai_observation_created", "observation_verified", "observation_converted_to_incident", "incident_created_from_video_observation"]) {
-    assert.ok(audits.includes(action), action);
-  }
+  const analysisResult = await analyzed.json();
+  assert.ok(analysisResult.analysis);
+  assert.ok(analysisResult.evidence);
+  assert.equal(analysisResult.analysis.evidenceId, uploaded.evidence.id);
+  assert.ok("detections" in analysisResult.analysis);
+  assert.ok("counts" in analysisResult.analysis);
+  assert.ok("inputSha256" in analysisResult.analysis);
+  assert.equal(analysisResult.analysis.inputSha256, uploaded.evidence.checksum);
+  assert.equal(received(), imageData);
+  const after = await readDatabase();
+  assert.ok(after.auditLogs.some((log) => log.action === "evidence_analyzed"));
+  const initialAgain = await request(`/api/video-evidence/${uploaded.evidence.id}/analyze`, { method: "POST", headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" } });
+  assert.equal(initialAgain.status, 409);
+  const invalidRepeat = await request(`/api/video-evidence/${uploaded.evidence.id}/reanalyze`, { method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify({ reason: "no" }) });
+  assert.equal(invalidRepeat.status, 400);
+  const repeat = await request(`/api/video-evidence/${uploaded.evidence.id}/reanalyze`, { method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" }, body: JSON.stringify({ reason: "manual verification" }) });
+  assert.equal(repeat.status, 200);
+  const repeatBody = await repeat.json();
+  assert.notEqual(repeatBody.analysis.id, analysisResult.analysis.id);
+  const history = await request(`/api/video-evidence/${uploaded.evidence.id}/analyses`, { headers: authHeaders("Admin") });
+  const historyBody = await history.json();
+  assert.equal(historyBody.analyses.length, 2);
+  assert.ok(historyBody.analyses.some((run) => run.reason === "manual verification"));
+  assert.ok((await readDatabase()).auditLogs.some((log) => log.action === "EVIDENCE_AI_REANALYSIS_REQUESTED"));
 });
 
 test("Evidence upload rejects MIME and file-signature mismatches", async () => {
@@ -1672,6 +2332,25 @@ test("Evidence upload rejects MIME and file-signature mismatches", async () => {
 
   assert.equal(mismatch.status, 400);
   assert.match((await mismatch.json()).error, /does not match/i);
+});
+
+test("Admin can upload an image while analysis remains fail-closed", async () => {
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3]);
+  const upload = await request("/api/video-evidence", {
+    method: "POST",
+    headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ fileName: "image.jpg", dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}` })
+  });
+  assert.equal(upload.status, 201);
+  const { evidence } = await upload.json();
+  assert.equal(evidence.mimeType, "image/jpeg");
+  assert.equal(evidence.fileSize, bytes.length);
+  const analyzed = await request(`/api/video-evidence/${evidence.id}/analyze`, {
+    method: "POST", headers: { ...authHeaders("Admin"), Origin: "http://localhost:3000" }
+  });
+  assert.equal(analyzed.status, 503);
+  const after = await readDatabase();
+  assert.equal(after.alerts.filter((item) => item.linkedEvidenceId === evidence.id).length, 0);
 });
 
 test("Evidence storage failure does not create successful metadata", async () => {
@@ -1716,46 +2395,32 @@ test("Citizen report storage failure returns an error without saving report or e
   }
 });
 
-test("Police video evidence must be case-linked and rejected observations cannot convert", async () => {
-  const videoData = evidenceDataUrl("video/webm", "police-video-evidence");
+test("Police image evidence requires an assigned case", async (t) => {
+  const received = await stubEvidenceAi(t);
+  const adminUpload = await request("/api/video-evidence", {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ fileName: "admin-unlinked.jpg", dataUrl: evidenceDataUrl("image/jpeg", "admin-unlinked") })
+  });
+  assert.equal(adminUpload.status, 201);
+  const unlinkedAdminEvidence = (await adminUpload.json()).evidence;
+  const denied = await request(`/api/video-evidence/${unlinkedAdminEvidence.id}/analyze`, {
+    method: "POST", headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
+  });
+  assert.equal(denied.status, 403);
+  const imageData = evidenceDataUrl("image/jpeg", "police-image-evidence");
   const unlinked = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ fileName: "unlinked.webm", dataUrl: videoData })
+    body: JSON.stringify({ fileName: "unlinked.jpg", dataUrl: imageData })
   });
   assert.equal(unlinked.status, 400);
 
   const linked = await request("/api/video-evidence", {
     method: "POST",
     headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ fileName: "linked.webm", dataUrl: videoData, linkedReportId: "report_other_citizen" })
+    body: JSON.stringify({ fileName: "linked.jpg", dataUrl: imageData, linkedReportId: "report_other_citizen" })
   });
-  assert.equal(linked.status, 201);
-  const linkedBody = await linked.json();
-  assertNoEvidenceSecrets(linkedBody);
-
-  const analyzed = await request(`/api/video-evidence/${linkedBody.evidence.id}/analyze`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(analyzed.status, 200);
-  const observation = (await analyzed.json()).observations[0];
-
-  const rejected = await request(`/api/video-observations/${observation.id}/review`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: JSON.stringify({ action: "reject", notes: "False positive" })
-  });
-  assert.equal(rejected.status, 200);
-  const rejectedBody = await rejected.json();
-  assert.equal(rejectedBody.observation.reviewStatus, "false_alarm");
-  assert.equal(rejectedBody.observation.actionable, false);
-
-  const convertRejected = await request(`/api/video-observations/${observation.id}/convert-incident`, {
-    method: "POST",
-    headers: { ...authHeaders("Police Officer"), Origin: "http://localhost:3000" }
-  });
-  assert.equal(convertRejected.status, 409);
+  assert.equal(linked.status, 403);
 });
 
 test("Citizen can upload evidence only for own report and cannot access operational video evidence", async () => {
@@ -1804,6 +2469,12 @@ test("Citizen can upload evidence only for own report and cannot access operatio
 
   const firstCannotPreviewSecond = await request(`/api/video-evidence/${secondCitizenEvidenceId}/preview`, { headers: authHeaders("Citizen") });
   assert.equal(firstCannotPreviewSecond.status, 403);
+
+  const missingPreview = await request("/api/video-evidence/nonexistent-evidence/preview", { headers: authHeaders("Citizen") });
+  assert.equal(missingPreview.status, 403);
+  assert.deepEqual(await missingPreview.json(), await firstCannotPreviewSecond.json());
+  assert.equal((await request("/api/video-evidence/nonexistent-evidence/preview", { headers: authHeaders("Admin") })).status, 404);
+  assert.equal((await request("/api/video-evidence/nonexistent-evidence/preview")).status, 401);
 
   assert.equal((await request("/api/video-evidence", { headers: authHeaders("Citizen") })).status, 403);
   const ownReports = await request("/api/missing-persons", { headers: authHeaders("Citizen") });
@@ -2305,6 +2976,121 @@ test("routes outside the local OSRM extract fall back to approximate routing", a
   } finally {
     restoreRoutingEnv(snapshot);
     await new Promise((resolve, reject) => noRouteServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("map snap endpoint snaps clicked points to the nearest routable road", async () => {
+  const snapshot = routingEnvSnapshot();
+  osrmRequests = [];
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = `http://127.0.0.1:${osrmServer.address().port}`;
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "3000";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, true);
+    assert.equal(body.provider, "osrm");
+    assert.ok(body.distanceMeters >= 0);
+    assert.ok(Math.abs(body.snapped.lat - 17.51 - 0.001) < 1e-9);
+    assert.ok(osrmRequests.some((item) => item.url.startsWith("/nearest/v1/driving/78.32,17.51")));
+
+    const police = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Police Officer"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(police.status, 200);
+
+    const anonymous = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(anonymous.status, 401);
+
+    const citizen = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Citizen"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(citizen.status, 403);
+
+    const invalid = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 999, lng: 78.32 })
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    restoreRoutingEnv(snapshot);
+    osrmRequests = [];
+  }
+});
+
+test("map snap reports no nearby road when the snapped point is too far away", async () => {
+  const farSnapServer = http.createServer((req, res) => {
+    const parsedUrl = new URL(req.url, "http://localhost");
+    if (!parsedUrl.pathname.startsWith("/nearest/v1/")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ code: "Ok", routes: [] }));
+    }
+    const coordinates = parsedUrl.pathname.split("/").pop() || "";
+    const [lng, lat] = coordinates.split(";")[0].split(",").map(Number);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      code: "Ok",
+      mapmatching: [{ confidence: 0.1, distance: 1500, nodes: [3, 4] }],
+      waypoints: [{ location: [lng, lat + 0.0135], distance: 1500, name: "", alternatives_count: 0 }]
+    }));
+  });
+  await new Promise((resolve) => farSnapServer.listen(0, "127.0.0.1", resolve));
+  const snapshot = routingEnvSnapshot();
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = `http://127.0.0.1:${farSnapServer.address().port}`;
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "3000";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, false);
+    assert.equal(body.reason, "no_nearby_road");
+    assert.match(body.error, /No routable road found near this location/);
+  } finally {
+    restoreRoutingEnv(snapshot);
+    await new Promise((resolve, reject) => farSnapServer.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("map snap degrades gracefully when OSRM is offline", async () => {
+  const snapshot = routingEnvSnapshot();
+  process.env.GIS_ROUTING_PROVIDER = "self_hosted";
+  process.env.OSRM_BASE_URL = "http://127.0.0.1:1";
+  process.env.PUBLIC_OSRM_FALLBACK = "false";
+  process.env.ROUTE_TIMEOUT_MS = "100";
+  try {
+    const snap = await request("/api/maps/snap", {
+      method: "POST",
+      headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ lat: 17.51, lng: 78.32 })
+    });
+    assert.equal(snap.status, 200);
+    const body = await snap.json();
+    assert.equal(body.available, false);
+    assert.equal(body.reason, "service_unavailable");
+    assert.match(body.error, /Road snap is unavailable/);
+  } finally {
+    restoreRoutingEnv(snapshot);
   }
 });
 
@@ -3462,7 +4248,7 @@ test("frontend login errors are specific and keep submit state recoverable", () 
   const registerStart = appSource.indexOf("$(\"#registerForm\").addEventListener(\"submit\"", loginStart);
   const loginBlock = appSource.slice(loginStart, registerStart);
 
-  assert.match(apiSource, /const API_TIMEOUT_MS = Number\(import\.meta\.env\.VITE_API_TIMEOUT_MS \|\| 15000\)/);
+  assert.match(apiSource, /const API_TIMEOUT_MS = Number\(import\.meta\.env\?\.VITE_API_TIMEOUT_MS \|\| 15000\)/);
   assert.match(apiSource, /function safeApiMessage\(path, status, data = \{\}, code = ""\)/);
   assert.match(apiSource, /Network request timed out\. Check that RakshakAI services are reachable and try again\./);
   assert.match(apiSource, /Backend unavailable\. Start the RakshakAI backend service and try again\./);
@@ -3557,14 +4343,15 @@ test("frontend CSS assets load statically and render paths preserve document hea
   assert.equal(/serviceWorker|caches\.open|navigator\.serviceWorker/.test(html + appSource + assetHealth), false);
 });
 
-test("frontend production build emits a stylesheet bundle", () => {
+test("frontend production build emits a stylesheet bundle", async () => {
   const frontendRoot = path.join(__dirname, "..", "..", "frontend");
   const buildOut = path.join(testDirectory, "frontend-dist-css");
   fs.rmSync(buildOut, { recursive: true, force: true });
-  childProcess.execFileSync(process.execPath, [path.join(frontendRoot, "node_modules", "vite", "bin", "vite.js"), "build", "--outDir", buildOut, "--emptyOutDir"], {
-    cwd: frontendRoot,
-    env: { ...process.env, FORCE_COLOR: "0" },
-    stdio: "pipe"
+  await new Promise((resolve, reject) => {
+    childProcess.execFile(process.execPath, [path.join(frontendRoot, "node_modules", "vite", "bin", "vite.js"), "build", "--outDir", buildOut, "--emptyOutDir"], {
+      cwd: frontendRoot,
+      env: { ...process.env, FORCE_COLOR: "0" }
+    }, (error) => error ? reject(error) : resolve());
   });
 
   const distHtml = fs.readFileSync(path.join(buildOut, "index.html"), "utf8");
@@ -3573,13 +4360,18 @@ test("frontend production build emits a stylesheet bundle", () => {
   assert.equal(distHtml.includes("/src/styles.css"), false);
   assert.match(distHtml, /src="\/assets\/[^"]+\.js"/);
 
+  // Design tokens live in the app bundle; vendor CSS chunks (leaflet, socket.io) are separate files.
+  const combinedCss = [];
   for (const href of cssLinks) {
     const cssPath = path.join(buildOut, href.replace(/^\//, ""));
     assert.ok(fs.existsSync(cssPath), `missing built stylesheet ${href}`);
     const css = fs.readFileSync(cssPath, "utf8");
-    assert.match(css, /--teal:\s*#087d78/);
-    assert.match(css, /\.portal-login/);
+    assert.ok(css.trim().length > 0, `built stylesheet ${href} is empty`);
+    combinedCss.push(css);
   }
+  const stylesheetBundle = combinedCss.join("\n");
+  assert.match(stylesheetBundle, /--teal:\s*#087d78/);
+  assert.match(stylesheetBundle, /\.portal-login/);
 });
 
 test("CSP builder supports same-origin and explicit HTTPS production API origins only", () => {
@@ -3618,7 +4410,7 @@ test("frontend CSP allowlist covers maps, Browser AI Vision, previews, and API c
   assert.equal(csp["connect-src"].includes("https://router.project-osrm.org"), false);
   assert.equal(csp["connect-src"].includes("https://nominatim.openstreetmap.org"), false);
 
-  assert.match(apiSource, /const API_BASE_URL = import\.meta\.env\.VITE_API_BASE_URL \|\| "\/api"/);
+  assert.match(apiSource, /const API_BASE_URL = import\.meta\.env\?\.VITE_API_BASE_URL \|\| "\/api"/);
   assert.match(apiSource, /credentials:\s*"include"/);
   assert.ok(csp["connect-src"].includes("'self'"));
   assert.ok(csp["connect-src"].includes("http://127.0.0.1:5000"));
@@ -3664,16 +4456,22 @@ test("frontend Incident Command uses a fluid enterprise workspace without weaken
 
   assert.match(appSource, /commandFilters: \{ search: "", severity: "all", status: "all", source: "all", assignment: "all" \}/);
   assert.match(appSource, /function commandIncidentMatchesFilters\(incident\)/);
-  assert.match(appSource, /const visibleIncidents = active\.filter\(commandIncidentMatchesFilters\)/);
-  assert.match(appSource, /row\.setAttribute\("aria-pressed", String\(incident\.id === state\.selectedIncidentId\)\)/);
+  assert.match(appSource, /const visibleIncidents = prioritizeIncidents\(active\.filter\(commandIncidentMatchesFilters\)\)/);
+  assert.match(appSource, /row\.setAttribute\("aria-pressed", String\(incident\.id === selectedVisible\?\.id\)\)/);
   assert.match(appSource, /node\("span", "command-row-meta"\)/);
   assert.match(appSource, /scheduleMapResizeRender\(\)/);
   assert.match(appSource, /\$\("#commandIncidentSearch"\)\?\.addEventListener\("input"/);
   assert.match(appSource, /state\.commandFilters\[key\] = event\.currentTarget\.value/);
 
   assert.match(appSource, /if \(incidentNavigationReady\(incident\)\) addAction\("Navigate", "navigate"\)/);
-  assert.match(appSource, /if \(incident\.status === "Verified" && isDispatchableIncident\(incident\) && !incident\.assignedUnitId\) addAction\("Assign Nearest Unit", "assign", "primary"\)/);
-  assert.match(appSource, /if \(incident\.assignedUnitId && incident\.status === "Assigned"\) addAction\("Mark En Route", "En Route"\)/);
+  assert.match(appSource, /if \(incident\.status === "Verified" && isDispatchableIncident\(incident\) && !incident\.assignedUnitId && !incident\.dispatchConfirmedAt\) addAction\("Review Dispatch", "assign", "primary"\)/);
+  assert.match(appSource, /if \(incident\.status === "Assigned" && \(incident\.assignedUnitId \|\| incident\.dispatchConfirmedAt\)\) addAction\("Mark En Route", "En Route"\)/);
+  assert.match(appSource, /confirmHybridDispatchRecommendation/);
+  assert.match(appSource, /"Confirm Dispatch"/);
+  assert.match(appSource, /"View Alternatives"/);
+  assert.match(appSource, /Alternatives and exclusions/);
+  assert.match(appSource, /dispatchSupportRoutes/);
+  assert.match(appSource, /leaflet-route-line station-support/);
   assert.match(appSource, /if \(incident\.status === "En Route"\) addAction\("Mark On Scene", "On Scene"\)/);
   assert.match(appSource, /if \(incident\.status === "On Scene"\) addAction\("Resolve", "Resolved"\)/);
   assert.match(appSource, /if \(incident\.status === "Resolved"\) addAction\("Close", "Closed"\)/);
@@ -3713,7 +4511,7 @@ test("frontend Incident Command map simplifies markers with default layers and c
   assert.match(appSource, /function activeRouteWorkflow\(\)/);
   assert.match(appSource, /\[routeWorkflow \? start : null, "route-marker start-marker", "S"\]/);
   assert.match(appSource, /previousView === "gis" && view !== "gis" && activeRouteWorkflow\(\)/);
-  assert.match(appSource, /resetGisNavigationState\("GIS route markers cleared after leaving route workflow\."\)/);
+  assert.match(appSource, /resetGisNavigationState\("GIS route markers cleared after leaving route workflow\.", \{ preserveSupportRoutes: true \}\)/);
 
   assert.match(appSource, /function clusterMarkerDescriptors\(descriptors\)/);
   assert.match(appSource, /Math\.hypot\(item\.point\.lat - descriptor\.point\.lat, item\.point\.lng - descriptor\.point\.lng\) <= 0\.004/);
@@ -3738,6 +4536,7 @@ test("frontend Incident Command map simplifies markers with default layers and c
 
 test("frontend GIS navigation controls are gated and mode-driven", () => {
   const appSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "src", "app.js"), "utf8");
+  const geolocationSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "src", "browserGeolocation.js"), "utf8");
   const searchUiSource = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "src", "gisPlaceSearchUi.js"), "utf8");
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "index.html"), "utf8");
   const styles = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "src", "styles.css"), "utf8");
@@ -3754,7 +4553,8 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(gisSection, /id="satelliteMapLayer" class="ghost"[\s\S]*aria-pressed="false"/);
   assert.match(gisSection, /id="resetGisMap"[\s\S]*Reset Map/);
   assert.match(gisSection, /aria-label="Reset Map View\. Return to the local operational center and clear stale route markers\."/);
-  assert.match(gisSection, /id="gisMap"[\s\S]*data-map-layer="satellite"/);
+  assert.match(gisSection, /id="gisMap"[\s\S]*data-map-layer="streets"/);
+  assert.doesNotMatch(gisSection, /data-map-layer="satellite"/);
   assert.doesNotMatch(gisSection, /<span class="heat heat-two"><\/span>/);
   assert.match(gisSection, /id="navigateMap"[\s\S]*aria-label="Calculate Route\. Choose a route start and destination before calculating\."/);
   assert.match(gisSection, /id="recalculateRoute"[\s\S]*aria-label="Recalculate\. Calculate a route before using this action\."/);
@@ -3762,7 +4562,9 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(gisSection, /id="clearMapRoute"[\s\S]*aria-label="Clear Route\. Choose a point or calculate a route before clearing\."/);
   assert.match(gisSection, /class="panel gis-map-card"/);
   assert.match(gisSection, /class="gis-toolbar" aria-label="GIS navigation controls"/);
-  assert.match(gisSection, /<span>Map<\/span>[\s\S]*id="streetMapLayer"[\s\S]*id="satelliteMapLayer"[\s\S]*id="useMyLocation"[\s\S]*id="fitGisMap"[\s\S]*id="resetGisMap"/);
+  assert.match(gisSection, /id="gisModeMap"[\s\S]*id="gisModeRoute"[\s\S]*id="gisModeNavigate"/);
+  assert.match(gisSection, /<span>Map<\/span>[\s\S]*id="streetMapLayer"[\s\S]*id="satelliteMapLayer"[\s\S]*id="fitGisMap"[\s\S]*id="resetGisMap"/);
+  assert.match(gisSection, /id="useMyLocation"[\s\S]*id="setMapStart"[\s\S]*id="setMapDestination"/);
   assert.match(gisSection, /<span>Points<\/span>[\s\S]*id="setMapStart"[\s\S]*id="setMapDestination"/);
   assert.match(gisSection, /<span>Route<\/span>[\s\S]*id="navigateMap"[\s\S]*id="clearMapRoute"/);
   assert.match(gisSection, /id="mapNavigationStatus" class="gis-status-bar" aria-live="polite"/);
@@ -3778,26 +4580,27 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /state\.mapNavigation\.selectionMode === "start"/);
   assert.match(appSource, /state\.mapNavigation\.selectionMode === "destination"/);
   assert.match(appSource, /async function selectNavigationPointFromMap\(event\)/);
-  assert.match(appSource, /return event\.target\.closest\("\.map-control, \.map-zoom-slider, \.map-search, \.map-layer-control, \.operational-marker"\)/);
-  assert.match(appSource, /instance\.map\.addEventListener\("click", \(event\) => \{[\s\S]*selectNavigationPointFromMap\(event\)/);
+  assert.match(appSource, /return Boolean\(event\.target\?\.closest\?\.\("\.map-control, \.map-zoom-slider, \.map-search, \.map-layer-control, \.operational-marker, \.selected-location-card, \.leaflet-marker-icon, \.leaflet-interactive"\)\)/);
+  assert.match(appSource, /instance\.map\.addEventListener\("click", \(event\) => \{[\s\S]*if \(!instance\.leafletMap\) selectNavigationPointFromMap\(event\)/);
   assert.match(appSource, /if \(instance\.map\.id === "gisMap" && state\.mapNavigation\.selectionMode && !blockedMapSelectionTarget\(event\)\) return/);
-  assert.match(appSource, /setRouteStart\(validPoint, "Selected map start"\)/);
-  assert.match(appSource, /setRouteDestination\(validPoint, "Selected map destination", \{ locationStatus: "Approximate" \}\)/);
-  assert.match(appSource, /Route start selected\./);
-  assert.match(appSource, /Destination selected\. Click Calculate Route\./);
+  assert.match(appSource, /setRouteStart\(chosen, "Selected map start", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
+  assert.match(appSource, /setRouteDestination\(chosen, "Selected map destination", \{ locationStatus: snap\.snapped \? "Snapped to road" : "Approximate" \}\)/);
+  assert.match(appSource, /Route start selected\. \$\{snapNote\}/);
+  assert.match(appSource, /Destination selected\. \$\{snapNote\}/);
+  assert.match(appSource, /snapRoutePointToRoad\(validPoint\)/);
+  assert.match(appSource, /No routable road found near this location/);
+  assert.match(appSource, /Snapped to the nearest routable road/);
   assert.match(appSource, /state\.mapNavigation\.selectionMode = null;[\s\S]*setMapStart"\)\?\.classList\.remove\("active"\)[\s\S]*setMapDestination"\)\?\.classList\.remove\("active"\)/);
   assert.match(appSource, /function canonicalRoutePoint\(point, fallbackLabel = "Route point"\)/);
   assert.match(appSource, /mapNavigation: emptyRouteNavigationState\(\)/);
-  assert.match(appSource, /function clearSearchPreview\(\)/);
-  assert.match(appSource, /function setSearchPreview\(point, label = "Search preview", metadata = \{\}\)/);
-  assert.match(appSource, /state\.mapNavigation = previewPlace\(state\.mapNavigation/);
-  assert.match(searchUiSource, /Confirm Destination/);
-  assert.match(searchUiSource, /Cancel Preview/);
-  assert.match(appSource, /Preview shown for \$\{fullLabel\}\. Confirm it to set destination D\./);
-  assert.match(appSource, /route-marker search-preview-marker/);
-  assert.match(appSource, /const \{ currentLocation, searchPreview, routes = \[\], selectedRouteId \} = state\.mapNavigation/);
+  assert.match(searchUiSource, /onSelect\(place\)/);
+  assert.doesNotMatch(searchUiSource, /Confirm Destination|Cancel Preview|confirm-search-destination/);
+  assert.match(appSource, /function showSelectedGisLocation\(instance, location, \{ reverseGeocode = false \} = \{\}\)/);
+  assert.match(appSource, /function applySelectedLocationAction\(action\)/);
+  assert.match(appSource, /selected-location-marker/);
+  assert.match(appSource, /const \{ currentLocation, routes = \[\], selectedRouteId \} = state\.mapNavigation/);
   assert.match(appSource, /const start = routeValidation\.start;[\s\S]*const destination = routeValidation\.destination/);
-  assert.match(appSource, /clearSearchPreview\(\);[\s\S]*clearRouteResult\(\);[\s\S]*return true;/);
+  assert.match(appSource, /state\.mapNavigation\.destination = canonicalPoint;[\s\S]*clearRouteResult\(\);[\s\S]*return true;/);
   assert.match(appSource, /function routePointValidation\(\)/);
   assert.match(appSource, /return routePointValidation\(\)\.valid/);
   assert.match(appSource, /const routeValidation = routePointValidation\(\);[\s\S]*start: routeValidation\.start,[\s\S]*destination: routeValidation\.destination,[\s\S]*routePointError: routeValidation\.valid \? "" : routeValidation\.message/);
@@ -3834,19 +4637,19 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /function renderRoutePointCards\(\)/);
   assert.match(appSource, /Not selected/);
   assert.match(appSource, /if \(!routeValidation\.valid\) return updateNavigationPanel\(routeValidation\.message\)/);
-  assert.match(appSource, /state\.mapNavigation\.routeLoading = true;[\s\S]*clearRouteResult\(\);[\s\S]*updateNavigationPanel\("Calculating route\.\.\."\)/);
+  assert.match(appSource, /clearRouteResult\(\);[\s\S]*const requestId = \+\+routeRequestGeneration;[\s\S]*state\.mapNavigation\.routeLoading = true;[\s\S]*updateNavigationPanel\("Calculating route\.\.\."\)/);
   assert.match(appSource, /api\("\/api\/maps\/route", \{[\s\S]*body: \{[\s\S]*start: \{ lat: start\.lat, lng: start\.lng \},[\s\S]*destination: \{ lat: destination\.lat, lng: destination\.lng \},[\s\S]*mode: "driving"[\s\S]*\}/);
   assert.match(appSource, /logRouteDevelopment\("request", \{ start, destination \}\)/);
   assert.match(appSource, /logRouteDevelopment\(route\?\.isApproximate \? "approximate_fallback" : "success", \{ start, destination \}\)/);
-  assert.match(appSource, /state\.mapNavigation\.routeLoading = false;[\s\S]*updateNavigationPanel\(\)/);
-  assert.match(appSource, /catch \(error\) \{[\s\S]*clearRouteResult\(\);[\s\S]*Route could not be calculated/);
+  assert.match(appSource, /if \(requestId === routeRequestGeneration\) \{[\s\S]*state\.mapNavigation\.routeLoading = false;[\s\S]*updateGisButtonStates\(\);/);
+  assert.match(appSource, /catch \(error\) \{[\s\S]*clearRouteResult\(\);[\s\S]*Road routing unavailable - route could not be calculated/);
   assert.match(appSource, /Calculate a route before opening full navigation\./);
   assert.match(appSource, /Choose a route start and destination before calculating\./);
   assert.match(appSource, /function clearRouteStart\(\)/);
   assert.match(appSource, /function clearRouteDestination\(\)/);
-  assert.match(appSource, /function clearRouteDestination\(\) \{[\s\S]*state\.mapNavigation\.destination = null;[\s\S]*clearSearchPreview\(\)/);
+  assert.match(appSource, /function clearRouteDestination\(\) \{[\s\S]*state\.mapNavigation\.destination = null;[\s\S]*clearRouteResult\(\)/);
   assert.match(appSource, /function emptyMapNavigationState\(\) \{[\s\S]*return emptyRouteNavigationState\(\)/);
-  assert.match(appSource, /function resetGisNavigationState\(message = "", \{ preserveRoute = false \} = \{\}\)/);
+  assert.match(appSource, /function resetGisNavigationState\(message = "", \{ preserveRoute = false, preserveSupportRoutes = false \} = \{\}\)/);
   assert.match(appSource, /state\.mapNavigation = emptyMapNavigationState\(\)/);
   assert.match(appSource, /satelliteMaps\.forEach\(removeNavigationLayerArtifacts\)/);
   assert.match(appSource, /if \(instance\.navigationLayer\) instance\.navigationLayer\.textContent = ""/);
@@ -3860,10 +4663,14 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /setView\("gis", \{ preserveGisNavigation: true \}\)/);
   assert.match(appSource, /function swapRoutePoints\(\)/);
 
-  assert.match(appSource, /navigator\.geolocation\.getCurrentPosition/);
+  assert.match(appSource, /getBrowserLocation\(navigator\.geolocation\)/);
+  assert.match(geolocationSource, /provider\.getCurrentPosition/);
+  assert.match(geolocationSource, /provider\.watchPosition/);
+  assert.match(geolocationSource, /provider\.clearWatch/);
+  assert.match(gisSection, /id="toggleLocationTracking"[\s\S]*Start GPS Tracking/);
   assert.match(appSource, /Getting location\.\.\./);
   assert.match(appSource, /Current location selected as route start\./);
-  assert.match(appSource, /Location permission denied\. Use manual search or map click\./);
+  assert.match(geolocationSource, /Location permission denied\. Use manual search or map click\./);
   assert.match(appSource, /current-location-marker/);
 
   assert.match(appSource, /\$\(\"\#streetMapLayer\"\)\.addEventListener\(\"click\", \(\) => \{[\s\S]*setBaseLayer\(instance, "streets"\)/);
@@ -3872,7 +4679,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /makeMapControl\("FIT", "zoom-fit", "Fit map to local operational markers", fitGisMapToOperationalMarkers\)/);
   assert.match(appSource, /function fitGisMapToPoints\(points, label = "Operational markers"\)/);
   assert.match(appSource, /\.filter\(\(point\) => point && isLocalOperationalPoint\(point\) && !isDefaultFallbackPoint\(point\)\)/);
-  assert.match(appSource, /clearSearchPreview\(\);[\s\S]*setRouteStart\(point, `\$\{unitLabel\(unit\)\} location`\);[\s\S]*fitGisMapToPoints\(\[point, \.\.\.validOperationalMapPoints\(\)\]/);
+  assert.match(appSource, /setRouteStart\(point, `\$\{unitLabel\(unit\)\} location`\);[\s\S]*fitGisMapToPoints\(\[point, \.\.\.validOperationalMapPoints\(\)\]/);
   assert.match(appSource, /function makeMapLayersControl\(instance\)/);
   assert.match(appSource, /\["incidents", "Incidents"\]/);
   assert.match(appSource, /\["responseUnits", "Response Units"\]/);
@@ -3890,7 +4697,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /Satellite tiles failed to load|tiles failed to load/);
   assert.match(styles, /\.event-map\.selection-active/);
   assert.match(styles, /\.current-location-marker/);
-  assert.match(styles, /\.search-preview-marker/);
+  assert.match(styles, /\.selected-location-marker/);
   assert.match(styles, /\.heatmap-hidden \.heat \{ display: none; \}/);
   assert.match(styles, /\.map-layer-control/);
   assert.match(styles, /\.satellite-tiles \{[\s\S]*pointer-events: none/);
@@ -3935,7 +4742,7 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /selected-unit-section/);
   assert.match(appSource, /unit-mini-list/);
   assert.match(appSource, /route\.warning/);
-  assert.match(appSource, /Air-line estimate ready\. Road distance and travel time are unavailable\./);
+  assert.match(appSource, /Road routing unavailable - straight-line estimate shown\. Road distance and ETA are unavailable\./);
   assert.match(appSource, /const GIS_HOME_ZOOM = 12/);
   assert.match(appSource, /const LOCAL_OPERATIONAL_BOUNDS/);
   assert.match(appSource, /function isLocalOperationalPoint\(point\)/);
@@ -3947,18 +4754,20 @@ test("frontend GIS navigation controls are gated and mode-driven", () => {
   assert.match(appSource, /function resetGisMapToOperationalCenter/);
   assert.match(appSource, /setMapView\(instance, DEFAULT_MAP_CENTER, GIS_HOME_ZOOM, "Operational center"\)/);
   assert.match(appSource, /const DEFAULT_MAP_CENTER = \{ lat: 17\.5109, lng: 78\.3276 \}/);
-  assert.match(appSource, /function resetGisMapView\(\) \{[\s\S]*resetGisNavigationState\(""\);[\s\S]*resetGisMapToOperationalCenter\("Map reset to local operational center\. Route markers cleared\."\)/);
+  assert.match(appSource, /function resetGisMapView\(\) \{[\s\S]*resetGisNavigationState\("", \{ preserveSupportRoutes: true \}\);[\s\S]*resetGisMapToOperationalCenter\("Map reset to local operational center\. Route markers cleared\."\)/);
   assert.match(appSource, /\$\(\"\#resetGisMap\"\)\.addEventListener\(\"click\", resetGisMapView\)/);
-  assert.match(appSource, /Route cleared\. Map restored to Patancheru\/BHEL operational center\./);
+  assert.match(appSource, /Route line cleared\. Start and destination are kept; distance and ETA were reset\./);
   const clearRouteBlock = appSource.match(/function clearMapRoute\(\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.doesNotMatch(clearRouteBlock, /showWorldMap|zoom\s*=\s*[0-9]/);
-  assert.match(clearRouteBlock, /resetGisMapToOperationalCenter/);
-  assert.match(clearRouteBlock, /resetGisNavigationState\(""\)/);
+  assert.match(clearRouteBlock, /clearRouteResult\(\)/);
+  assert.doesNotMatch(clearRouteBlock, /resetGisNavigationState/);
+  assert.doesNotMatch(clearRouteBlock, /state\.mapNavigation\.start = null/);
+  assert.doesNotMatch(clearRouteBlock, /state\.mapNavigation\.destination = null/);
 
   assert.match(appSource, /\[routeWorkflow \? destination : null, "route-marker destination-marker", "D"\]/);
   assert.match(appSource, /addLeafletMarker\(instance, point, className, label, kind/);
   assert.match(appSource, /L\.marker\(\[validPoint\.lat, validPoint\.lng\]/);
-  assert.match(appSource, /addLeafletMarker\(instance, preview, "route-marker search-preview-marker", "P", "Search preview"/);
+  assert.match(appSource, /addLeafletMarker\(instance, selectedGisLocation, "route-marker selected-location-marker", "●", "Selected location"/);
   assert.match(appSource, /markerLabel: "!",[\s\S]*kind: "Incident"/);
   assert.match(appSource, /Incident \$\{incident\.id\}: \$\{incidentTitle\(incident\)\} - severity \$\{displayValue\(incident\.severity\)\} - status \$\{displayValue\(incident\.status\)\} - source \$\{incidentSource\(incident\)\} - \$\{point\.lat\.toFixed\(5\)\}, \$\{point\.lng\.toFixed\(5\)\}/);
   assert.match(appSource, /Click to set as destination/);
@@ -3997,7 +4806,7 @@ test("frontend GIS route button state table keeps controls visible and synchroni
 
   const initial = gisRouteButtonStates({});
   assert.equal(initial.street.disabled, false);
-  assert.equal(initial.street.label, "Street View");
+  assert.equal(initial.street.label, "Street Map");
   assert.equal(initial.street.active, true);
   assert.equal(initial.satellite.disabled, false);
   assert.equal(initial.satellite.label, "Satellite View");
@@ -4020,14 +4829,14 @@ test("frontend GIS route button state table keeps controls visible and synchroni
   assert.match(startOnly.calculate.reason, /destination/);
   assert.equal(startOnly.recalculate.disabled, true);
   assert.equal(startOnly.external.disabled, true);
-  assert.equal(startOnly.clear.disabled, false);
+  assert.equal(startOnly.clear.disabled, true);
 
   const pointsOnly = gisRouteButtonStates({ start, destination, hasRouteWork: true });
   assert.equal(pointsOnly.calculate.disabled, false);
   assert.equal(pointsOnly.calculate.label, "Calculate Route");
   assert.equal(pointsOnly.recalculate.disabled, true);
   assert.equal(pointsOnly.external.disabled, true);
-  assert.equal(pointsOnly.clear.disabled, false);
+  assert.equal(pointsOnly.clear.disabled, true);
 
   const invalidPoints = gisRouteButtonStates({ start, destination, hasRouteWork: true, routePointError: "Route start and destination cannot be the same point." });
   assert.equal(invalidPoints.calculate.disabled, true);
@@ -4051,7 +4860,7 @@ test("frontend GIS route button state table keeps controls visible and synchroni
   assert.equal(failed.calculate.disabled, false);
   assert.equal(failed.recalculate.disabled, true);
   assert.equal(failed.external.disabled, true);
-  assert.equal(failed.clear.disabled, false);
+  assert.equal(failed.clear.disabled, true);
 
   const loading = gisRouteButtonStates({ start, destination, route, routeLoading: true, hasRouteWork: true });
   assert.equal(loading.calculate.disabled, true);
@@ -4138,7 +4947,7 @@ test("frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safel
   assert.match(appSource, /function scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /window\.setTimeout\(\(\) => \{[\s\S]*!hasVisibleUsableLeafletTiles\(instance, "satellite"\)[\s\S]*fallbackSatelliteToStreet\(instance\)/);
   assert.match(appSource, /const hasVisibleTiles = hasVisibleUsableLeafletTiles\(instance, instance\.baseLayer\)/);
-  assert.match(appSource, /if \(tileState\.loaded > 0 && hasVisibleTiles && !tileState\.failedCompletely\) \{[\s\S]*instance\.status\.textContent = `\$\{source\.label\} tiles - zoom/);
+  assert.match(appSource, /if \(baseLayerReady\(hasVisibleTiles, tileState\.failedCompletely\)\) \{[\s\S]*instance\.status\.textContent = `\$\{source\.label\} tiles - zoom/);
   assert.match(appSource, /if \(instance\.baseLayer === "satellite" && tileState\.loaded > 0 && !hasVisibleTiles\) \{[\s\S]*scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /instance\.status\.textContent = message \|\| `Loading \$\{source\.label\} imagery - zoom/);
   assert.match(appSource, /function fallbackSatelliteToStreet\(instance, reason = "Satellite imagery unavailable"\)/);
@@ -4146,11 +4955,11 @@ test("frontend GIS Satellite View uses ArcGIS imagery tiles and falls back safel
   assert.match(appSource, /instance\.baseLayer = "streets"/);
   assert.match(appSource, /instance\.activeBaseLayer = "streets"/);
   assert.match(appSource, /instance\.leafletTileLayers\?\.streets\?\.redraw\(\)/);
-  assert.match(appSource, /updateNavigationPanel\(`\$\{reason\}; switched to Street View\.`\)/);
+  assert.match(appSource, /updateNavigationPanel\(`\$\{reason\}; switched to Street Map\.`\)/);
   assert.match(appSource, /if \(key === "satellite" && tileState\.failedCompletely\) \{[\s\S]*fallbackSatelliteToStreet\(instance\)/);
   assert.match(appSource, /if \(key === "satellite" && tileState\.loaded > 0 && !hasVisibleUsableLeafletTiles\(instance, "satellite"\)\) \{[\s\S]*scheduleSatelliteVisibilityFallback\(instance\)/);
   assert.match(appSource, /updateNavigationPanel\(`Loading \$\{TILE_SOURCES\[instance\.baseLayer\]\.label\} imagery\.\.\.`\)/);
-  assert.match(appSource, /if \(tileState\.loaded > 0 && hasVisibleTiles && !tileState\.failedCompletely\) \{[\s\S]*instance\.activeBaseLayer = instance\.baseLayer;[\s\S]*syncLayerButtons\(instance\)/);
+  assert.match(appSource, /if \(baseLayerReady\(hasVisibleTiles, tileState\.failedCompletely\)\) \{[\s\S]*instance\.activeBaseLayer = instance\.baseLayer;[\s\S]*syncLayerButtons\(instance\)/);
   assert.match(appSource, /function syncLayerButtons\(instance\) \{[\s\S]*const activeLayer = instance\.activeBaseLayer \|\| null/);
   assert.match(appSource, /if \(instance\.baseLayer === "satellite"\) scheduleSatelliteVisibilityFallback\(instance\)/);
 
@@ -4216,7 +5025,7 @@ test("Docker OSRM service is internal only and backend public fallback is disabl
   const osrmBlock = compose.match(/\n  osrm:\n([\s\S]*?)\n\n  backend:/)?.[1] || "";
   const backendBlock = compose.match(/\n  backend:\n([\s\S]*?)\n\n  frontend:/)?.[1] || "";
 
-  assert.match(osrmBlock, /image:\s*osrm\/osrm-backend:v5\.27\.1/);
+  assert.match(osrmBlock, /image:\s*ghcr\.io\/project-osrm\/osrm-backend:v5\.27\.1/);
   assert.match(osrmBlock, /osrm-routed/);
   assert.match(osrmBlock, /--algorithm", "mld"/);
   assert.match(osrmBlock, /expose:\s*\n\s*-\s*"5000"/);
@@ -4749,7 +5558,7 @@ test("manual reassignment succeeds only when expected assignment matches", async
   const response = await request(`/api/incidents/${incident.id}/assign-unit`, {
     method: "POST",
     headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
-    body: unitAssignmentBody(secondUnit.id, firstUnit.id)
+    body: JSON.stringify({ unitId: secondUnit.id, expectedAssignedUnitId: firstUnit.id, reason: "Closer unit became available" })
   });
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -4765,6 +5574,42 @@ test("manual reassignment succeeds only when expected assignment matches", async
   assert.equal(updatedFirstUnit.currentIncidentId, null);
   assert.equal(updatedSecondUnit.status, "busy");
   assert.equal(updatedSecondUnit.assignedIncidentId, incident.id);
+  assert.ok(updatedDb.dispatchEvents.some((event) => event.incidentId === incident.id && event.type === "unit_reassigned"));
+  assert.ok(updatedDb.auditLogs.some((event) => event.incidentId === incident.id && event.action === "unit_reassigned" && /Closer unit/.test(event.details)));
+  assert.ok(updatedDb.incidentTimeline.some((event) => event.incidentId === incident.id && event.eventType === "UNIT_REASSIGNED"));
+});
+
+test("manual reassignment requires a reason and release returns the unit to available", async () => {
+  const db = await readDatabase();
+  const adminUser = users.find((u) => u.role === "Admin");
+  const firstUnit = createAssignmentTestUnit({ unitCode: `RELEASE-A-${Date.now()}`, status: "busy" });
+  const secondUnit = createAssignmentTestUnit({ unitCode: `RELEASE-B-${Date.now()}` });
+  const incident = createAssignmentTestIncident(adminUser, { status: "Assigned", assignedUnitId: firstUnit.id });
+  firstUnit.assignedIncidentId = incident.id;
+  firstUnit.currentIncidentId = incident.id;
+  db.responseUnits.unshift(firstUnit, secondUnit);
+  db.incidents.unshift(incident);
+  await writeDatabase(db);
+
+  const missingReason = await request(`/api/incidents/${incident.id}/assign-unit`, {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: unitAssignmentBody(secondUnit.id, firstUnit.id)
+  });
+  assert.equal(missingReason.status, 400);
+
+  const released = await request(`/api/incidents/${incident.id}/release-unit`, {
+    method: "POST", headers: { ...authHeaders("Admin"), "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    body: JSON.stringify({ expectedAssignedUnitId: firstUnit.id, reason: "Incident cancelled" })
+  });
+  assert.equal(released.status, 200);
+  const updatedDb = await readDatabase();
+  const updatedIncident = updatedDb.incidents.find((item) => item.id === incident.id);
+  const updatedUnit = updatedDb.responseUnits.find((item) => item.id === firstUnit.id);
+  assert.equal(updatedIncident.assignedUnitId, null);
+  assert.equal(updatedIncident.status, "Verified");
+  assert.equal(updatedUnit.status, "available");
+  assert.ok(updatedDb.auditLogs.some((event) => event.incidentId === incident.id && event.action === "unit_released"));
+  assert.ok(updatedDb.incidentTimeline.some((event) => event.incidentId === incident.id && event.eventType === "UNIT_RELEASED"));
 });
 
 test("manual reassignment rejects stale expected assignment without side effects", async () => {

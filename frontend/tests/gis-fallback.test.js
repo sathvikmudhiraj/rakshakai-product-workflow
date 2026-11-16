@@ -5,6 +5,7 @@ import {
   GIS_OPERATIONAL_ZOOM,
   STREET_TILE_LOAD_TIMEOUT_MS,
   activateLeafletBaseLayer,
+  baseLayerReady,
   beginBaseLayerSwitch,
   isCurrentBaseLayerSwitch,
   preserveLeafletViewport,
@@ -77,4 +78,10 @@ test("Street loading has a bounded timeout and explicit error outcome", () => {
   assert.equal(STREET_TILE_LOAD_TIMEOUT_MS, 5000);
   assert.equal(streetTileLoadOutcome(false), "unavailable");
   assert.equal(streetTileLoadOutcome(true), "ready");
+});
+
+test("a cached visible base-layer tile is ready without a fresh tileload event", () => {
+  assert.equal(baseLayerReady(true, false), true);
+  assert.equal(baseLayerReady(false, false), false);
+  assert.equal(baseLayerReady(true, true), false);
 });

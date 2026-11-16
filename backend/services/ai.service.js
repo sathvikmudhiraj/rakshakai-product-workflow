@@ -342,7 +342,7 @@ async function requestJson(url, options, timeoutMs) {
     } catch {
       throw new Error("AI service returned invalid JSON");
     }
-    if (!response.ok) throw new Error(data.error || `AI service returned HTTP ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(data.error || `AI service returned HTTP ${response.status}`), { failureCode: "AI_HTTP_ERROR" });
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       throw new Error("AI service returned an invalid response");
     }
@@ -355,10 +355,37 @@ async function requestJson(url, options, timeoutMs) {
   }
 }
 
-async function analyzeFrame(payload) {
+function validEvidenceInference(raw) {
+  const performance = raw?.performance;
+  if (raw?.configured !== true || !Array.isArray(raw.detections) || !performance ||
+      !Number.isInteger(performance.imageWidth) || performance.imageWidth < 1 ||
+      !Number.isInteger(performance.imageHeight) || performance.imageHeight < 1 ||
+      !Number.isFinite(performance.inferenceMs) || performance.inferenceMs < 0 ||
+      Number.isNaN(Date.parse(performance.analyzedAt))) return false;
+  return raw.detections.length <= 100 && raw.detections.every((item) => {
+    if (typeof item?.label !== "string" || !Number.isFinite(item.confidence) ||
+        item.confidence < 0 || item.confidence > 1 || !Array.isArray(item.box) ||
+        item.box.length !== 4 || !item.box.every(Number.isFinite)) return false;
+    const [x, y, width, height] = item.box;
+    return x >= 0 && y >= 0 && width > 0 && height > 0 &&
+      x + width <= performance.imageWidth + 1 && y + height <= performance.imageHeight + 1;
+  });
+}
+
+async function analyzeFrame(payload, { strictEvidence = false } = {}) {
   const baseUrl = serviceUrl();
   if (!baseUrl) return { ...SAFE_NOT_CONFIGURED };
   try {
+    let modelMetadata = null;
+    if (strictEvidence) {
+      const url = new URL(baseUrl);
+      if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]", "ai-service"].includes(url.hostname) || url.username || url.password) {
+        throw new Error("Evidence analysis requires the configured local AI service");
+      }
+      const health = await requestJson(`${baseUrl}/health`, { method: "GET" }, Number(process.env.AI_HEALTH_TIMEOUT_MS || 3000));
+      if (health.modelLoaded !== true || typeof health.modelName !== "string" || !Number.isFinite(health.minimumConfidence) || health.minimumConfidence < 0 || health.minimumConfidence > 1) throw new Error("AI model is unavailable");
+      modelMetadata = { model: health.modelName, threshold: health.minimumConfidence };
+    }
     const raw = await requestJson(`${baseUrl}/analyze-frame`, {
       method: "POST",
       headers: {
@@ -367,8 +394,12 @@ async function analyzeFrame(payload) {
       },
       body: JSON.stringify(payload)
     }, Number(process.env.AI_SERVICE_TIMEOUT_MS || 8000));
-    return normalizeResponse(raw);
+    if (strictEvidence && !validEvidenceInference(raw)) throw new Error("AI inference did not produce a valid image result");
+    return { ...normalizeResponse(raw), ...(modelMetadata || {}) };
   } catch (error) {
+    const failureCode = error.failureCode || (/timed out/i.test(error.message) ? "AI_TIMEOUT"
+      : /invalid json|invalid response|valid image result/i.test(error.message) ? "AI_MALFORMED_RESPONSE"
+        : /http \d{3}/i.test(error.message) ? "AI_HTTP_ERROR" : "AI_UNAVAILABLE");
     return {
       configured: true,
       threatDetected: false,
@@ -388,7 +419,8 @@ async function analyzeFrame(payload) {
       personIdentity: { identified: false, status: "unsupported" },
       duplicateSuppressed: false,
       message: "AI service is temporarily unreachable",
-      serviceError: error.message
+      serviceError: error.message,
+      ...(strictEvidence ? { failureCode } : {})
     };
   }
 }

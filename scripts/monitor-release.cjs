@@ -14,12 +14,13 @@ function createMonitor({ baseUrl, webhook, fetcher = fetch, output = (event) => 
   const delivered = new Map();
   let failures = [];
   let wasHealthy;
+  let wasRateLimited = false;
   let polling = false;
-  async function alert(kind, state, severity = "critical") {
+  async function alert(kind, state, severity = "critical", details = {}) {
     const key = `${kind}:${state}`;
     if (delivered.has(key) && now() - delivered.get(key) < 60000) return;
     delivered.set(key, now());
-    const event = { event: "operational_alert", service: "RakshakAI", kind, state, severity, timestamp: new Date(now()).toISOString() };
+    const event = { event: "operational_alert", service: "RakshakAI", kind, state, severity, timestamp: new Date(now()).toISOString(), ...details };
     output(event);
     if (!receiver) return;
     try {
@@ -35,14 +36,23 @@ function createMonitor({ baseUrl, webhook, fetcher = fetch, output = (event) => 
     polling = true;
     try {
       let healthy = false;
+      let health;
       try {
         const response = await fetcher(new URL("/api/health", base), { signal: AbortSignal.timeout(10000), redirect: "error" });
-        healthy = response.ok && (await response.json()).status === "ok";
+        health = await response.json();
+        healthy = response.ok && health.status === "ok";
       } catch {}
       if (!healthy) await alert("readiness", "firing");
       else if (wasHealthy === false) await alert("readiness", "resolved", "info");
       if (healthy !== wasHealthy) delivered.delete(`readiness:${healthy ? "firing" : "resolved"}`);
       wasHealthy = healthy;
+      if (healthy) {
+        const recent429 = Number(health.rateLimits?.http429LastMinute || 0);
+        const rateLimited = Number.isFinite(recent429) && recent429 >= 3;
+        if (rateLimited && !wasRateLimited) await alert("http_429_burst", "firing", "warning", { countLastMinute: recent429 });
+        if (!rateLimited && wasRateLimited) await alert("http_429_burst", "resolved", "info", { countLastMinute: recent429 });
+        wasRateLimited = rateLimited;
+      }
     } finally { polling = false; }
   }
   async function consume(line) {

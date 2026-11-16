@@ -1,8 +1,11 @@
 const express = require("express");
+const http = require("http");
 const helmet = require("helmet");
 const { rateLimit } = require("express-rate-limit");
+const { recordHttpResponse, rateLimitSnapshot, routeGroup } = require("./services/httpObservability");
 const net = require("node:net");
 const crypto = require("node:crypto");
+const { Server } = require("socket.io");
 
 const authRoutes = require("./routes/auth.routes");
 const incidentRoutes = require("./routes/incidents.routes");
@@ -11,13 +14,23 @@ const cameraRoutes = require("./routes/cameras.routes");
 const aiRoutes = require("./routes/ai.routes");
 const missingPersonRoutes = require("./routes/missingPersons.routes");
 const deviceHealthRoutes = require("./routes/deviceHealth.routes");
+const cameraHealthRoutes = require("./routes/cameraHealth.routes");
 const auditRoutes = require("./routes/audit.routes");
+const copilotRoutes = require("./routes/copilot.routes");
+const notificationRoutes = require("./routes/notifications.routes");
+const aiObservationsRoutes = require("./routes/aiObservations.routes");
+const mediaGatewayRoutes = require("./routes/mediaGateway.routes");
+const erssRoutes = require("./routes/erss.routes");
+const cctnsRoutes = require("./routes/cctns.routes");
+const trackingController = require("./controllers/tracking.controller");
 const incidentController = require("./controllers/incidents.controller");
 const auditController = require("./controllers/audit.controller");
 const { errorMiddleware } = require("./middleware/error.middleware");
 const { validateJson } = require("./middleware/validate.middleware");
 const { aiFrameLimiter } = require("./middleware/aiFrameLimiter.middleware");
-const { readDatabase, userFromReq, hasRole, repairLegacyPersistedData, runEscalationSweep } = require("./services/core.service");
+const { readDatabase, userFromReq, userFromReqForSession, hasRole, repairLegacyPersistedData, runEscalationSweep, runSlaEscalationSweep } = require("./services/core.service");
+const { installSocketSessionGuard } = require("./services/socketSession.service");
+const { joinAuthorizedIncidentRoom } = require("./services/socketIncidentAccess.service");
 const { getDatabaseMode, query, closePool } = require("./services/postgres.service");
 const { resolveOsrmBaseUrl, routeTimeoutMs, routeUnavailableWarning, routingProvider } = require("./services/routingConfig.service");
 const { normalizeNominatimResult, normalizeNominatimResults } = require("./services/geocoding.service");
@@ -25,8 +38,182 @@ const { approximateRouteResponse, haversineDistanceKm, normalizeOsrmRoutes } = r
 const { legacyHandler } = require("./services/legacyRoute.service");
 const { validateEvidenceStorageConfig, checkEvidenceStorage } = require("./services/evidenceStorage.service");
 const { validateCameraCredentialConfig } = require("./services/cameraSecrets.service");
-const { installShutdownHandlers } = require("./services/shutdown.service");
+const { installShutdownHandlers, createDrainMiddleware } = require("./services/shutdown.service");
+const realtimeEvents = require("./services/realtimeEvents.service");
+const { runCameraHealthSweep } = require("./services/cameraHealthMonitor.service");
+const { gateway: mediaGateway, startConfiguredStreams } = require("./services/mediaGatewayRuntime.service");
 const { helmetDirectives } = require("../csp.config.cjs");
+
+let io = null;
+
+function initializeSocketIO(httpServer) {
+  io = new Server(httpServer, {
+    cors: {
+      origin: (origin, callback) => {
+        if (!origin || isAllowedOrigin(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Origin not allowed"));
+        }
+      },
+      credentials: true
+    }
+  });
+
+  io.use(async (socket, next) => {
+    try {
+      const db = await readDatabase();
+      const user = userFromReq(socket.request, db);
+      if (!user || !hasRole(user, ["Admin", "Police Officer"])) {
+        return next(new Error("Authentication required"));
+      }
+      socket.data.user = user;
+      return next();
+    } catch (error) {
+      return next(new Error("Authentication unavailable"));
+    }
+  });
+
+  const sessionGuard = installSocketSessionGuard(io, { resolveUser: userFromReqForSession, intervalMs: Number(process.env.SOCKET_SESSION_CHECK_MS || 30000) });
+  io.revalidateSessions = sessionGuard.checkAll;
+  io.stopSessionGuard = sessionGuard.stop;
+  httpServer.once("close", () => sessionGuard.stop());
+
+  io.on("connection", (socket) => {
+    sessionGuard.attach(socket);
+    // The handshake already verified this role. Subscribe before the client can
+    // receive a connect event, avoiding a gap during async packet validation.
+    socket.join(`dashboard:${socket.data.user.role}`);
+    console.log(`Socket.IO client connected: ${socket.id}`);
+
+    socket.on("join_incident_room", async (incidentId, acknowledge) => {
+      let joined = false;
+      try {
+        joined = await joinAuthorizedIncidentRoom({ socket, user: socket.data.user, incidentId, readDatabase });
+      } catch {
+        joined = false;
+      }
+      if (typeof acknowledge === "function") acknowledge({ ok: joined });
+    });
+
+    socket.on("join_dashboard", () => {
+      const role = socket.data.user.role;
+      socket.join(`dashboard:${role}`);
+      console.log(`Client ${socket.id} joined dashboard room: ${role}`);
+    });
+
+    socket.on("leave_incident_room", (incidentId) => {
+      if (incidentId) socket.leave(`incident:${incidentId}`);
+    });
+
+    socket.on("disconnect", () => {
+      console.log(`Socket.IO client disconnected: ${socket.id}`);
+    });
+  });
+
+  const criticalHandler = (incident) => {
+    broadcastToAllDashboards("critical_incident_created", { incident });
+    emitToIncidentRoom(incident.id, "critical_incident_created", { incident });
+  };
+  realtimeEvents.on("critical_incident_created", criticalHandler);
+  httpServer.once("close", () => realtimeEvents.off("critical_incident_created", criticalHandler));
+  const cameraHealthEvents = ["camera_health_changed", "camera_offline", "camera_online", "camera_no_signal", "camera_no_video_frames", "camera_low_fps", "camera_tamper_suspected", "camera_obstructed", "camera_storage_error", "camera_health_alert_created", "camera_health_alert_acknowledged", "camera_health_alert_resolved"];
+  const cameraHealthHandlers = new Map(cameraHealthEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of cameraHealthHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of cameraHealthHandlers) realtimeEvents.off(event, handler);
+  });
+  const gatewayEvents = ["camera_stream_state_changed", "camera_health_updated", "camera_reconnected", "ai_detection_received", "observation_created", "observation_reviewed", "alert_created_from_observation", "ai_service_unavailable"];
+  const gatewayHandlers = new Map(gatewayEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of gatewayHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of gatewayHandlers) realtimeEvents.off(event, handler);
+  });
+  const assignmentEvents = ["unit_assigned", "unit_reassigned", "unit_released", "incident_assignment_changed", "incident_officer_assignment_changed"];
+  const assignmentHandlers = new Map(assignmentEvents.map((event) => [event, (payload) => {
+    broadcastToAllDashboards(event, payload);
+    const incidentId = payload?.incident?.id || payload?.incidentId;
+    if (incidentId) emitToIncidentRoom(incidentId, event, payload);
+  }]));
+  for (const [event, handler] of assignmentHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of assignmentHandlers) realtimeEvents.off(event, handler);
+  });
+
+  const trackingEvents = [
+    "tracking_session_created",
+    "tracking_candidates_found",
+    "tracking_candidate_verified",
+    "tracking_session_closed",
+    "tracking_last_seen_updated"
+  ];
+  const trackingHandlers = new Map(trackingEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of trackingHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of trackingHandlers) realtimeEvents.off(event, handler);
+  });
+
+  const { ERSS_REALTIME_EVENT_NAMES } = require("./services/erssRealtimeEvents.service");
+  const erssEvents = ERSS_REALTIME_EVENT_NAMES;
+  const erssHandlers = new Map(erssEvents.map((event) => [event, (payload) => broadcastToAllDashboards(event, payload)]));
+  for (const [event, handler] of erssHandlers) realtimeEvents.on(event, handler);
+  httpServer.once("close", () => {
+    for (const [event, handler] of erssHandlers) realtimeEvents.off(event, handler);
+  });
+
+  return io;
+}
+
+const SLA_REALTIME_EVENTS = {
+  ASSIGNMENT_WARNING: "incident_assignment_warning",
+  ASSIGNMENT_BREACH: "incident_assignment_breached",
+  RESPONSE_BREACH: "response_sla_breached",
+  INVESTIGATION_MISSING_IO: "investigation_overdue",
+  INVESTIGATION_INACTIVE: "investigation_overdue"
+};
+
+function emitSlaSweepEvents(result) {
+  for (const alert of result.createdAlerts || []) {
+    const payload = { alert, incidentId: alert.incidentId, escalationLevel: alert.escalationLevel };
+    broadcastToAllDashboards("escalation_alert_created", payload);
+    emitToIncidentRoom(alert.incidentId, "escalation_alert_created", payload);
+    const specificEvent = alert.alertType.startsWith("ESCALATION_")
+      ? "escalation_level_changed"
+      : SLA_REALTIME_EVENTS[alert.alertType];
+    if (specificEvent) {
+      broadcastToAllDashboards(specificEvent, payload);
+      emitToIncidentRoom(alert.incidentId, specificEvent, payload);
+    }
+  }
+  for (const alert of result.resolvedAlerts || []) {
+    const payload = { alert, incidentId: alert.incidentId };
+    broadcastToAllDashboards("escalation_alert_resolved", payload);
+    emitToIncidentRoom(alert.incidentId, "escalation_alert_resolved", payload);
+  }
+}
+
+function getIO() {
+  return io;
+}
+
+function emitToIncidentRoom(incidentId, event, data) {
+  if (io) {
+    io.to(`incident:${incidentId}`).emit(event, data);
+  }
+}
+
+function emitToDashboard(role, event, data) {
+  if (io) {
+    io.to(`dashboard:${role}`).emit(event, data);
+  }
+}
+
+function broadcastToAllDashboards(event, data) {
+  if (io) {
+    io.to("dashboard:Admin").emit(event, data);
+    io.to("dashboard:Police Officer").emit(event, data);
+  }
+}
 
 const app = express();
 let draining = false;
@@ -106,6 +293,13 @@ const geocodeLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many place searches. Please wait and try again.", code: "GEOCODER_RATE_LIMIT" }
 });
+const unitTelemetryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.UNIT_GPS_RATE_LIMIT || 30),
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many unit GPS updates. Reduce the tracking update rate.", code: "UNIT_GPS_RATE_LIMIT" }
+});
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -114,20 +308,21 @@ app.use(helmet({
     directives: helmetDirectives()
   }
 }));
-app.use(generalLimiter);
 app.use((req, res, next) => {
   req.requestId = crypto.randomUUID();
   res.setHeader("X-Request-Id", req.requestId);
+  if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   const started = performance.now();
-  if (process.env.NODE_ENV === "production") {
-    res.once("finish", () => {
-      if (["/api/health", "/api/live"].includes(req.path) && res.statusCode < 400) return;
+  res.once("finish", () => {
+    recordHttpResponse(res.statusCode, req.path);
+    if (process.env.NODE_ENV === "production" && !(["/api/health", "/api/live"].includes(req.path) && res.statusCode < 400)) {
       console.log(JSON.stringify({ event: "http_request", requestId: req.requestId, method: req.method,
-        route: req.route?.path || "unmatched", status: res.statusCode, durationMs: Math.round(performance.now() - started) }));
-    });
-  }
+        route: req.route?.path || routeGroup(req.path), status: res.statusCode, durationMs: Math.round(performance.now() - started) }));
+    }
+  });
   next();
 });
+app.use(generalLimiter);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (isAllowedOrigin(origin)) {
@@ -143,6 +338,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+// Readiness reports draining; liveness stays a cheap, dependency-free 200.
+app.use(createDrainMiddleware(() => draining));
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1.5mb", strict: true }));
 app.use(validateJson);
 
@@ -176,6 +373,7 @@ app.get("/api/health", async (req, res) => {
         reachable: gisHealth.geocoder.reachable,
         status: gisHealth.geocoder.status
       },
+      rateLimits: rateLimitSnapshot(),
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -310,6 +508,61 @@ function nominatimJson(pathname, params) {
 
 function straightLineRoute(start, destination, warning = routeUnavailableWarning()) {
   return approximateRouteResponse(start, destination, warning);
+}
+
+const ROAD_SNAP_MAX_METERS = (() => {
+  const value = Number(process.env.MAP_SNAP_MAX_METERS);
+  return Number.isFinite(value) && value > 0 ? value : 150;
+})();
+
+function snapUnavailable(reason, message) {
+  return { available: false, reason, error: message };
+}
+
+async function snapPointToRoad(point, requestId = "no-request-id") {
+  let routingConfig;
+  try {
+    routingConfig = resolveOsrmBaseUrl();
+  } catch (error) {
+    gisHealth.routing = { ...gisHealth.routing, configured: false, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
+    return snapUnavailable("service_unavailable", "Road snap is unavailable because the routing service is offline.");
+  }
+  const url = `${routingConfig.baseUrl.replace(/\/$/, "")}/nearest/v1/driving/${point.lng},${point.lat}?number=1`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), routeTimeoutMs());
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Routing service returned HTTP ${response.status}`);
+    const data = await response.json();
+    if (data?.code !== "Ok") throw new Error(`Routing service responded ${data?.code || "unsuccessfully"}`);
+    const tracepoint = (Array.isArray(data.waypoints) ? data.waypoints[0] : null)
+      ?? (Array.isArray(data.tracepoints) ? data.tracepoints[0] : null);
+    const location = tracepoint?.location;
+    const snapped = validPoint({ lat: location?.[1], lng: location?.[0] });
+    if (!snapped) return snapUnavailable("no_nearby_road", "No routable road found near this location.");
+    const measuredMeters = haversineDistanceKm(point, snapped) * 1000;
+    const distanceMeters = Math.round((Number(tracepoint?.distance) >= 0 ? Number(tracepoint.distance) : measuredMeters) * 10) / 10;
+    if (distanceMeters > ROAD_SNAP_MAX_METERS) {
+      return snapUnavailable("no_nearby_road", "No routable road found near this location.");
+    }
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: true, mode: "osrm", status: "connected", lastError: null };
+    return {
+      available: true,
+      provider: "osrm",
+      requested: { lat: point.lat, lng: point.lng },
+      snapped: { lat: snapped.lat, lng: snapped.lng },
+      distanceMeters,
+      roadName: String(tracepoint?.name || "")
+    };
+  } catch (error) {
+    gisHealth.routing = { ...gisHealth.routing, provider: routingConfig.provider, configured: true, reachable: false, mode: "approximate-fallback", status: "degraded", lastError: error.message };
+    gisHealth.lastRouteError = { requestId, message: error.message, timestamp: new Date().toISOString() };
+    console.warn(`[GIS ${requestId}] Snap error: ${error.message}`);
+    if (/No routable road/.test(error.message)) return snapUnavailable("no_nearby_road", error.message);
+    return snapUnavailable("service_unavailable", "Road snap is unavailable because the routing service is offline.");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function buildRoute(start, destination, mode = "driving", requestId = "no-request-id") {
@@ -461,6 +714,17 @@ app.post("/api/maps/route", async (req, res, next) => {
   }
 });
 
+app.post("/api/maps/snap", async (req, res, next) => {
+  try {
+    await requireMapUser(req);
+    const point = validPoint(await readJsonBody(req));
+    if (!point) return res.status(400).json({ error: "Valid lat and lng coordinates are required" });
+    return res.json(await snapPointToRoad(point, req.requestId));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/maps/health", async (req, res, next) => {
   try {
     await requireMapUser(req);
@@ -471,6 +735,10 @@ app.get("/api/maps/health", async (req, res, next) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/copilot", copilotRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/erss", erssRoutes);
+app.use("/api/cctns", cctnsRoutes);
 app.get("/api/me", legacyHandler("/api/me"));
 app.post("/api/login", authLimiter, legacyHandler("/api/login"));
 app.post("/api/register", legacyHandler("/api/register"));
@@ -478,6 +746,16 @@ app.post("/api/logout", legacyHandler("/api/logout"));
 app.get("/api/admin/users", legacyHandler("/api/admin/users"));
 app.post("/api/admin/users", legacyHandler("/api/admin/users"));
 app.get("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
+app.get("/api/admin/police-reference", legacyHandler("/api/admin/police-reference"));
+for (const resource of ["officer-ranks", "police-beats"]) {
+  app.post(`/api/admin/${resource}`, legacyHandler(`/api/admin/${resource}`));
+  app.patch(`/api/admin/${resource}/:id`, legacyHandler((req) => `/api/admin/${resource}/${req.params.id}`));
+}
+app.get("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
+app.get("/api/admin/response-units/:id/member-candidates", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/member-candidates`));
+app.post("/api/admin/response-units/:id/members", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members`));
+app.patch("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
+app.delete("/api/admin/response-units/:id/members/:memberId", legacyHandler((req) => `/api/admin/response-units/${req.params.id}/members/${req.params.memberId}`));
 app.post("/api/admin/police-users", legacyHandler("/api/admin/police-users"));
 app.patch("/api/admin/police-users/:id", legacyHandler((req) => `/api/admin/police-users/${req.params.id}`));
 app.patch("/api/admin/police-users/:id/activate", legacyHandler((req) => `/api/admin/police-users/${req.params.id}/activate`));
@@ -497,6 +775,7 @@ app.post("/api/incidents/:id/acknowledge", legacyHandler((req) => `/api/incident
 app.post("/api/dispatch/check-escalations", legacyHandler("/api/dispatch/check-escalations"));
 app.post("/api/send-alert", legacyHandler("/api/send-alert"));
 app.use("/api/cameras", cameraRoutes);
+app.use("/api/camera-health", cameraHealthRoutes);
 app.post("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-sources", legacyHandler("/api/camera-sources"));
 app.get("/api/camera-feeds", legacyHandler("/api/camera-feeds"));
@@ -504,7 +783,26 @@ app.patch("/api/camera-sources/:id/config", legacyHandler((req) => `/api/camera-
 app.post("/api/camera-sources/:id/test", legacyHandler((req) => `/api/camera-sources/${req.params.id}/test`));
 app.post("/api/camera-sources/:id/analyze", legacyHandler((req) => `/api/camera-sources/${req.params.id}/analyze`));
 app.delete("/api/camera-sources/:id", legacyHandler((req) => `/api/camera-sources/${req.params.id}`));
+
+app.post("/api/tracking/sessions", trackingController.createTrackingSession);
+app.get("/api/tracking/sessions", trackingController.listTrackingSessions);
+app.get("/api/tracking/sessions/:sessionId", trackingController.getTrackingSession);
+app.post("/api/tracking/sessions/:sessionId/search", trackingController.searchCandidates);
+app.get("/api/tracking/sessions/:sessionId/timeline", trackingController.getSessionTimeline);
+app.get("/api/tracking/sessions/:sessionId/map", trackingController.getSessionMapData);
+app.get("/api/tracking/sessions/:sessionId/recommendations", trackingController.getSessionRecommendations);
+app.post("/api/tracking/sessions/:sessionId/handoff", trackingController.handoffSession);
+app.post("/api/tracking/sessions/:sessionId/candidates/:candidateId/verify", trackingController.verifyCandidate);
+app.get("/api/tracking/sessions/:sessionId/candidates/:candidateId", trackingController.getCandidateDetails);
+app.post("/api/tracking/sessions/:sessionId/close", trackingController.closeTrackingSession);
+
+app.get("/api/tracking/camera-adjacency", trackingController.getCameraAdjacency);
+app.post("/api/tracking/camera-adjacency", trackingController.createCameraAdjacency);
+app.get("/api/tracking/score-config", trackingController.getScoreConfig);
+app.post("/api/tracking/score-config", trackingController.updateScoreConfig);
 app.use("/api/ai", aiRoutes);
+app.use("/api/ai-observations", aiObservationsRoutes);
+app.use("/api/media-gateway", mediaGatewayRoutes);
 app.post("/api/rakshak/analyze-frame", aiFrameLimiter, require("./controllers/ai.controller").analyzeFrame);
 app.use("/api/missing-persons", missingPersonRoutes);
 app.get("/api/reports", legacyHandler("/api/reports"));
@@ -513,6 +811,9 @@ app.get("/api/video-evidence", legacyHandler("/api/video-evidence"));
 app.post("/api/video-evidence", legacyHandler("/api/video-evidence"));
 app.get("/api/video-evidence/:id/preview", legacyHandler((req) => `/api/video-evidence/${req.params.id}/preview`));
 app.post("/api/video-evidence/:id/analyze", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyze`));
+app.post("/api/video-evidence/:id/reanalyze", legacyHandler((req) => `/api/video-evidence/${req.params.id}/reanalyze`));
+app.get("/api/video-evidence/:id/analyses", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyses`));
+app.get("/api/video-evidence/:id/analyses/:analysisId", legacyHandler((req) => `/api/video-evidence/${req.params.id}/analyses/${req.params.analysisId}`));
 app.post("/api/video-observations/:id/review", legacyHandler((req) => `/api/video-observations/${req.params.id}/review`));
 app.post("/api/video-observations/:id/convert-incident", legacyHandler((req) => `/api/video-observations/${req.params.id}/convert-incident`));
 app.post("/api/browser-observations/:id/review", legacyHandler((req) => `/api/browser-observations/${req.params.id}/review`));
@@ -523,6 +824,8 @@ app.use("/api/audit-logs", auditRoutes);
 app.get("/api/integrations/status", auditController.integrations);
 app.get("/api/response-units", legacyHandler("/api/response-units"));
 app.post("/api/response-units", legacyHandler("/api/response-units"));
+app.post("/api/response-units/:id/location", unitTelemetryLimiter, legacyHandler((req) => `/api/response-units/${req.params.id}/location`));
+app.post("/api/response-units/:id/tracking", unitTelemetryLimiter, legacyHandler((req) => `/api/response-units/${req.params.id}/tracking`));
 app.patch("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
 app.delete("/api/response-units/:id", legacyHandler((req) => `/api/response-units/${req.params.id}`));
 app.get("/api/police-stations", legacyHandler("/api/police-stations"));
@@ -530,6 +833,27 @@ app.post("/api/police-stations", legacyHandler("/api/police-stations"));
 app.patch("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.delete("/api/police-stations/:id", legacyHandler((req) => `/api/police-stations/${req.params.id}`));
 app.get("/api/response-units/nearest", legacyHandler("/api/response-units/nearest"));
+app.get("/api/sla/config", legacyHandler("/api/sla/config"));
+app.get("/api/sla/monitoring", legacyHandler("/api/sla/monitoring"));
+app.get("/api/sla/deadlines/preview", legacyHandler("/api/sla/deadlines/preview"));
+app.post("/api/sla/deadlines/reconcile", legacyHandler("/api/sla/deadlines/reconcile"));
+app.post("/api/sla/incidents/:id/classification", legacyHandler((req) => `/api/sla/incidents/${req.params.id}/classification`));
+app.patch("/api/sla/config", legacyHandler("/api/sla/config"));
+app.post("/api/sla/escalation-sweep", legacyHandler("/api/sla/escalation-sweep"));
+app.get("/api/escalation/alerts", legacyHandler("/api/escalation/alerts"));
+app.post("/api/escalation/alerts/:id/acknowledge", legacyHandler((req) => `/api/escalation/alerts/${req.params.id}/acknowledge`));
+app.post("/api/escalation/alerts/:id/resolve", legacyHandler((req) => `/api/escalation/alerts/${req.params.id}/resolve`));
+app.post("/api/incidents/:id/severity", legacyHandler((req) => `/api/incidents/${req.params.id}/severity`));
+app.get("/api/incidents/:id/timeline", legacyHandler((req) => `/api/incidents/${req.params.id}/timeline`));
+app.get("/api/incidents/:id/sla-status", legacyHandler((req) => `/api/incidents/${req.params.id}/sla-status`));
+app.post("/api/incidents/:id/investigation/assign-officer", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/assign-officer`));
+app.post("/api/incidents/:id/investigation/update", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/update`));
+app.post("/api/incidents/:id/investigation/complete", legacyHandler((req) => `/api/incidents/${req.params.id}/investigation/complete`));
+app.get("/api/severity/rules", legacyHandler("/api/severity/rules"));
+app.post("/api/severity/rules", legacyHandler("/api/severity/rules"));
+app.patch("/api/severity/rules/:id", legacyHandler((req) => `/api/severity/rules/${req.params.id}`));
+app.get("/api/investigation/categories", legacyHandler("/api/investigation/categories"));
+app.post("/api/investigation/categories", legacyHandler("/api/investigation/categories"));
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
@@ -541,13 +865,60 @@ function validateAiServiceConfig() {
   if (!url) return null;
   const apiKey = String(process.env.AI_SERVICE_API_KEY || "").trim();
   const insecureDevelopment = String(process.env.AI_SERVICE_ALLOW_INSECURE || "").trim().toLowerCase() === "true";
+  if (insecureDevelopment && process.env.NODE_ENV === "production") {
+    throw new Error("AI_SERVICE_ALLOW_INSECURE must be disabled in production");
+  }
   if (!apiKey && !insecureDevelopment) {
     throw new Error("AI_SERVICE_API_KEY is required when AI_SERVICE_URL is configured. Set AI_SERVICE_API_KEY, or set AI_SERVICE_ALLOW_INSECURE=true only for local development without authentication.");
   }
   return { url, authenticated: Boolean(apiKey), insecureDevelopment };
 }
 
+async function runStartupDataRepair() {
+  if (process.env.SKIP_STARTUP_DATA_REPAIR === "true") {
+    console.log("RakshakAI startup data repair skipped by explicit configuration.");
+    return;
+  }
+  const legacyRepairs = await repairLegacyPersistedData();
+  if (legacyRepairs.length) {
+    console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
+  }
+}
+
+function createBackgroundJobs() {
+  const timers = [];
+  const active = new Set();
+  return {
+    every(name, intervalMs, run) {
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        let task;
+        task = Promise.resolve()
+          .then(run)
+          .catch((error) => {
+            console.error(`RakshakAI ${name} failed:`, error.message);
+          })
+          .finally(() => {
+            running = false;
+            active.delete(task);
+          });
+        active.add(task);
+      }, intervalMs);
+      timer.unref();
+      timers.push(timer);
+    },
+    async stop() {
+      for (const timer of timers) clearInterval(timer);
+      timers.length = 0;
+      if (active.size) await Promise.allSettled([...active]);
+    }
+  };
+}
+
 async function start(listenPort = port) {
+  require("./services/googleWorkspace.service").config();
   validateAiServiceConfig();
   validateCameraCredentialConfig({ production: process.env.NODE_ENV === "production" });
   if (process.env.NODE_ENV === "production") {
@@ -575,9 +946,12 @@ async function start(listenPort = port) {
       "audit_logs",
       "missing_persons",
       "app_state"
+      , "notifications"
+      , "notification_receipts"
+      , "ai_observations"
     ];
     const result = await query(
-      "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1::text[])",
+      "SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename = ANY($1::text[])",
       [requiredTables]
     );
     const available = new Set(result.rows.map((row) => row.tablename));
@@ -586,47 +960,77 @@ async function start(listenPort = port) {
       throw new Error("PostgreSQL schema is missing. Run: npm run migrate");
     }
   }
-  const legacyRepairs = await repairLegacyPersistedData();
-  if (legacyRepairs.length) {
-    console.log(`RakshakAI legacy location repair applied ${legacyRepairs.length} update(s).`);
-  }
+  await runStartupDataRepair();
   return new Promise((resolve, reject) => {
-    const server = app.listen(listenPort, () => {
-      const address = server.address();
+    const httpServer = http.createServer(app);
+    initializeSocketIO(httpServer);
+
+    httpServer.listen(listenPort, () => {
+      const address = httpServer.address();
       const activePort = typeof address === "object" && address ? address.port : listenPort;
       console.log(`RakshakAI Backend running at http://localhost:${activePort}/api (${getDatabaseMode()})`);
+      const backgroundJobs = createBackgroundJobs();
+      const streamsStartup = startConfiguredStreams().then((count) => {
+        if (count) console.log(`RakshakAI media gateway started ${count} configured stream(s).`);
+      }).catch((error) => console.error("RakshakAI media gateway startup failed:", error.message));
       // Dispatch escalation sweep: flips expired "pending" ACK windows and auto-dispatches
       // backup units. In-process guard prevents overlap; a session-level pg advisory lock
       // (in runEscalationSweep) ensures only one instance sweeps in multi-instance setups.
       const sweepIntervalMs = Math.max(5000, Number(process.env.ESCALATION_SWEEP_INTERVAL_MS || 15000));
-      let sweepRunning = false;
-      const escalationTimer = setInterval(async () => {
-        if (sweepRunning) return;
-        sweepRunning = true;
-        try {
-          await runEscalationSweep();
-        } catch (error) {
-          console.error("RakshakAI escalation sweep failed:", error.message);
-        } finally {
-          sweepRunning = false;
+      backgroundJobs.every("escalation sweep", sweepIntervalMs, runEscalationSweep);
+
+      // SLA Escalation sweep - runs every 30 seconds
+      const slaSweepIntervalMs = Math.max(30000, Number(process.env.SLA_SWEEP_INTERVAL_MS || 30000));
+      backgroundJobs.every("SLA escalation sweep", slaSweepIntervalMs, async () => {
+        const result = await runSlaEscalationSweep();
+        emitSlaSweepEvents(result);
+        if (result.escalated > 0) {
+          console.log(`SLA Escalation sweep: ${result.escalated} alerts created for ${result.results.filter(r => r.alertsCreated > 0).length} incidents`);
         }
-      }, sweepIntervalMs);
-      escalationTimer.unref();
-      server.once("close", () => clearInterval(escalationTimer));
+      });
+
+      const cameraHealthSweepIntervalMs = Math.max(5_000, Number(process.env.CAMERA_HEALTH_SWEEP_INTERVAL_MS || 15_000));
+      backgroundJobs.every("camera health sweep", cameraHealthSweepIntervalMs, runCameraHealthSweep);
+
+      // Timers and in-flight sweeps are stopped before the PostgreSQL pool closes.
+      const shutdownResources = {
+        stopBackgroundJobs: async () => {
+          io?.stopSessionGuard?.();
+          await backgroundJobs.stop();
+        },
+        stopApplicationResources: async () => {
+          await streamsStartup;
+          await mediaGateway.stopAll();
+        }
+      };
+      Object.defineProperty(httpServer, "shutdownResources", { value: shutdownResources, enumerable: false });
+      httpServer.once("close", () => {
+        shutdownResources.stopBackgroundJobs().catch(() => {});
+        shutdownResources.stopApplicationResources().catch(() => {});
+      });
       console.log(`RakshakAI escalation sweep every ${sweepIntervalMs}ms`);
-      resolve(server);
+      console.log(`RakshakAI SLA escalation sweep every ${slaSweepIntervalMs}ms`);
+      console.log(`RakshakAI camera health sweep every ${cameraHealthSweepIntervalMs}ms`);
+      resolve(httpServer);
     });
-    server.once("error", reject);
+    httpServer.once("error", reject);
   });
 }
 
 if (require.main === module) {
   start().then((server) => {
-    installShutdownHandlers(server, { closePool, onDrain: () => { draining = true; } });
+    installShutdownHandlers(server, {
+      closePool,
+      io: getIO(),
+      onDrain: () => { draining = true; },
+      stopBackgroundJobs: server.shutdownResources.stopBackgroundJobs,
+      stopResources: server.shutdownResources.stopApplicationResources,
+      exit: (code) => process.exit(code)
+    });
   }).catch((error) => {
     console.error("RakshakAI Backend failed to start:", error.message);
     process.exitCode = 1;
   });
 }
 
-module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig };
+module.exports = { app, start, validateAiServiceConfig, validateCameraCredentialConfig, getIO, emitToIncidentRoom, emitToDashboard, broadcastToAllDashboards, emitSlaSweepEvents, __testables: { buildRoute } };

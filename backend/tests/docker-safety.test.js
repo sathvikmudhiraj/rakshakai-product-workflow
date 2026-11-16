@@ -43,10 +43,13 @@ test("Compose base is shared and environment-specific settings live in overrides
 
   assert.doesNotMatch(baseBackend, /NODE_ENV:\s*development|CORS_ORIGIN:\s*http:\/\/localhost:3000/);
   assert.match(devBackend, /NODE_ENV:\s*development/);
-  assert.match(devBackend, /CORS_ORIGIN:\s*http:\/\/localhost:3000/);
+  assert.match(devBackend, /CORS_ORIGIN:\s*\$\{CORS_ORIGIN:\?Set CORS_ORIGIN in \.env\.docker\}/);
+  assert.match(devBackend, /FRONTEND_ORIGINS:\s*\$\{FRONTEND_ORIGINS:\?Set FRONTEND_ORIGINS in \.env\.docker\}/);
   assert.match(devFrontend, /CSP_ENV:\s*development/);
   assert.match(prodBackend, /NODE_ENV:\s*production/);
-  assert.match(prodBackend, /CORS_ORIGIN:\s*\$\{CORS_ORIGIN:\?Set CORS_ORIGIN to the production frontend origin\}/);
+  assert.match(prodBackend, /CORS_ORIGIN:\s*\$\{PRODUCTION_CORS_ORIGIN:\?Set PRODUCTION_CORS_ORIGIN to the production frontend origin\}/);
+  assert.match(prodBackend, /FRONTEND_ORIGINS:\s*\$\{PRODUCTION_FRONTEND_ORIGINS:\?Set PRODUCTION_FRONTEND_ORIGINS to the production frontend origin\}/);
+  assert.match(prodBackend, /ALLOW_CITIZEN_REGISTRATION:\s*\$\{PRODUCTION_ALLOW_CITIZEN_REGISTRATION:\?Set PRODUCTION_ALLOW_CITIZEN_REGISTRATION to true or false\}/);
   assert.match(prodFrontend, /CSP_ENV:\s*production/);
 });
 

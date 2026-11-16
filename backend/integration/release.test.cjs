@@ -44,14 +44,14 @@ test.after(closePool);
 test("production Nginx sends the exact restrictive CSP on HTML and SPA responses", async () => {
   const expected = buildRakshakaiCsp({ environment: "production", connectSrc: "", imgSrc: "" }).header;
   for (const route of ["/", "/index.html", "/rakshak/live-vision"]) {
-    const response = await fetch(`http://frontend${route}`);
+    const response = await fetch(`http://frontend:8080${route}`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-security-policy"), expected);
     assert.match(response.headers.get("content-type"), /text\/html/);
     const html = await response.text();
     const css = html.match(/href="([^\"]+\.css)"/);
     assert.ok(css, "built CSS reference exists");
-    const stylesheet = await fetch(new URL(css[1], "http://frontend"));
+    const stylesheet = await fetch(new URL(css[1], "http://frontend:8080"));
     assert.equal(stylesheet.status, 200);
     assert.match(stylesheet.headers.get("content-type"), /text\/css/);
   }
@@ -169,8 +169,27 @@ async function assignmentFixture(suffix) {
 }
 test("real PostgreSQL concurrent assignment produces one winner and one audit/event", async () => {
   const { incident, unit } = await assignmentFixture("same-incident");
-  const police = await login("Police Officer");
-  const responses = await Promise.all([admin, police].map((cookie) => request(`/api/incidents/${incident.id}/assign-unit`, { cookie, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })));
+  // Approved dispatch policy (incidentOfficerAssignment.service assertAssignmentActor):
+  // Admin is always authorized to dispatch; a Police Officer is authorized only
+  // with an operationalRole of DISPATCHER or SUPERVISOR; every other role is denied.
+  const dbBefore = await readDatabase();
+  const seededOfficer = dbBefore.users.find((user) => user.email === "officer@example.test");
+  assert.equal(seededOfficer.data?.operationalRole, "DISPATCHER", "seeded Police Officer fixture carries dispatcher authorization");
+  const plainOfficer = { ...seededOfficer, id: "release_plain_officer", email: "plain-officer@example.test", name: "Plain Officer", data: { ...seededOfficer.data, operationalRole: "FIELD_OFFICER" } };
+  dbBefore.users.push(plainOfficer);
+  await writeDatabase(dbBefore);
+  const plainLogin = await request("/api/login", { method: "POST", body: { email: plainOfficer.email, password } });
+  assert.equal(plainLogin.status, 200);
+  const plainCookie = plainLogin.headers.getSetCookie().find((value) => value.startsWith("rakshakai_session=") && !value.startsWith("rakshakai_session=;"))?.split(";")[0];
+  assert.ok(plainCookie, "plain officer session cookie issued");
+  const forbidden = await request(`/api/incidents/${incident.id}/assign-unit`, { cookie: plainCookie, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } });
+  assert.equal(forbidden.status, 403, "Police Officer without dispatcher authorization cannot dispatch a unit");
+  const citizen = await login("Citizen");
+  assert.equal((await request(`/api/incidents/${incident.id}/assign-unit`, { cookie: citizen, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })).status, 403, "Citizen cannot dispatch a unit");
+  assert.equal((await request(`/api/incidents/${incident.id}/assign-unit`, { method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })).status, 401, "Unauthenticated users cannot dispatch a unit");
+  const dispatcher = await login("Police Officer");
+  assert.notEqual(dispatcher, admin, "concurrent dispatch uses independent sessions");
+  const responses = await Promise.all([admin, dispatcher].map((cookie) => request(`/api/incidents/${incident.id}/assign-unit`, { cookie, method: "POST", body: { unitId: unit.id, expectedAssignedUnitId: null } })));
   assert.deepEqual(responses.map((r) => r.status).sort(), [200, 409]);
   const db = await readDatabase();
   assert.equal(db.incidents.find((item) => item.id === incident.id).assignedUnitId, unit.id);

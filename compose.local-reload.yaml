@@ -1,0 +1,8 @@
+# Opt-in local reload of an ALREADY MIGRATED database. Never use to initialize it.
+# Use after compose.yaml (and the same environment overlays as the running stack).
+# up --no-deps backend frontend leaves database and infrastructure containers alone.
+services:
+  backend:
+    command: ["node", "server.js"]
+    environment:
+      SKIP_STARTUP_DATA_REPAIR: "true"

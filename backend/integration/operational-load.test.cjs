@@ -61,6 +61,12 @@ if (process.env.RAKSHAKAI_LOAD_TEST === "isolated") {
       assert.equal(login.status, 200);
       cookies.push(login.headers.getSetCookie().find((item) => item.startsWith("rakshakai_session=")).split(";")[0]);
     }
+    const secondAdminLogin = await request("/api/login", null, {
+      email: db.users.find((item) => item.role === "Admin").email,
+      password: process.env.RELEASE_TEST_PASSWORD
+    }, { backendIndex: 1 });
+    assert.equal(secondAdminLogin.status, 200);
+    const assignmentCookies = [cookies[0], secondAdminLogin.headers.getSetCookie().find((item) => item.startsWith("rakshakai_session=")).split(";")[0]];
     assert.equal((await request("/api/incidents", cookies[0], null, { method: "GET", backendIndex: 1 })).status, 200, "A session issued by replica 1 must work on replica 2");
     const revocable = await request("/api/login", null, { email: db.users.find((item) => item.role === "Police Officer").email, password: process.env.RELEASE_TEST_PASSWORD }, { backendIndex: 0 });
     assert.equal(revocable.status, 200);
@@ -73,7 +79,7 @@ if (process.env.RAKSHAKAI_LOAD_TEST === "isolated") {
       db.responseUnits.push({ id: `load_unit_${i}`, unitCode: `LOAD-${i}`, unitId: `LOAD-${i}`, name: "Synthetic load unit", unitName: "Synthetic load unit", type: "police_patrol", unitType: "police_patrol", status: "available", lat: 17.5285, lng: 78.2636, source: "admin_registry", operational: true, isDemo: false, lastSeen: now, lastUpdated: now, lastLocationUpdatedAt: now, assignedIncidentId: null, currentIncidentId: null });
     }
     await writeDatabase(db);
-    const assign = (i) => request(`/api/incidents/load_incident_${i}/assign-unit`, cookies[i % 2], { unitId: `load_unit_${i}`, expectedAssignedUnitId: null }, { backendIndex: i % backends.length });
+    const assign = (i) => request(`/api/incidents/load_incident_${i}/assign-unit`, assignmentCookies[i % assignmentCookies.length], { unitId: `load_unit_${i}`, expectedAssignedUnitId: null }, { backendIndex: i % backends.length });
     const blocker = await getPool().connect();
     await blocker.query("SELECT pg_advisory_lock(724211)");
     let maxLockWaiters = 0;
@@ -154,7 +160,10 @@ if (process.env.RAKSHAKAI_LOAD_TEST === "isolated") {
       RELEASE_TEST_JWT: crypto.randomBytes(32).toString("hex"),
       RELEASE_TEST_CAMERA_KEY: crypto.randomBytes(32).toString("hex"),
     };
-    env.DATABASE_URL = `postgresql://release_test:${env.RELEASE_TEST_PASSWORD}@postgres:5432/rakshakai_test_release`;
+    env.TEST_DATABASE_URL = `postgresql://release_test:${env.RELEASE_TEST_PASSWORD}@postgres:5432/rakshakai_test_release`;
+    env.DATABASE_URL = `${env.TEST_DATABASE_URL}?options=-csearch_path%3Drakshakai_test_release`;
+    env.RAKSHAKAI_TEST_DATABASE_NAME = "rakshakai_test_release";
+    env.RAKSHAKAI_TEST_SCHEMA = "rakshakai_test_release";
     const args = ["compose", "--project-name", project, "--file", "compose.test.yaml"];
     function docker(command, quiet = false) {
       const result = spawnSync("docker", command, { cwd: path.resolve(__dirname, "../.."), env, encoding: "utf8", timeout: 240000, maxBuffer: 15 * 1024 * 1024 });
@@ -170,7 +179,7 @@ if (process.env.RAKSHAKAI_LOAD_TEST === "isolated") {
       docker([...args, "up", "--build", "--detach", "--wait", "--wait-timeout", "180", "--scale", "backend=2", "backend"]);
       docker(["run", "--rm", "--name", client, "--network", `${project}_default`, "--pid", `container:${project}-backend-1`,
         "--mount", `type=bind,source=${__filename},target=/app/backend/integration/operational-load.test.cjs,readonly`,
-        "-e", "RAKSHAKAI_LOAD_TEST=isolated", "-e", "DATABASE_URL", "-e", "RELEASE_TEST_PASSWORD", "-e", "PG_SSL_MODE=disable",
+        "-e", "RAKSHAKAI_LOAD_TEST=isolated", "-e", "NODE_ENV=test", "-e", "DATABASE_URL", "-e", "TEST_DATABASE_URL", "-e", "RAKSHAKAI_TEST_DATABASE_NAME", "-e", "RAKSHAKAI_TEST_SCHEMA", "-e", "RELEASE_TEST_PASSWORD", "-e", "PG_SSL_MODE=disable",
         `${project}-backend`, "node", "--test", "integration/operational-load.test.cjs"]);
     } finally {
       // Names and volume labels below are unique to this disposable drill.

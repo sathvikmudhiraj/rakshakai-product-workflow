@@ -20,7 +20,10 @@ function docker(command, { quiet = false } = {}) {
     process.stdout.write(redact(result.stdout));
     process.stderr.write(redact(result.stderr));
   }
-  if (result.error || result.status !== 0) throw new Error(`Docker ${command[0]} failed (exit ${result.status})`);
+  if (result.error || result.status !== 0) {
+    const detail = [result.error?.message, result.stderr?.trim(), result.stdout?.trim()].filter(Boolean).join("\n");
+    throw new Error(`Docker ${command.join(" ")} failed (exit ${result.status})${detail ? `\n${detail}` : ""}`);
+  }
   return result.stdout;
 }
 
@@ -29,7 +32,7 @@ try {
   docker(["version", "--format", "{{.Server.Version}}"]);
   docker([...args, "config", "--quiet"]);
   docker([...args, "up", "--build", "--detach", "--wait", "--wait-timeout", "180", "frontend"]);
-  const address = docker([...args, "port", "frontend", "80"], { quiet: true }).trim();
+  const address = docker([...args, "port", "frontend", "8080"], { quiet: true }).trim();
   env.RELEASE_TEST_ORIGIN = `http://${address}`;
   env.RELEASE_TEST_HTTPS_ORIGIN = env.RELEASE_TEST_ORIGIN.replace(/^http:/, "https:");
   env.RELEASE_TEST_PORT = new URL(env.RELEASE_TEST_ORIGIN).port;

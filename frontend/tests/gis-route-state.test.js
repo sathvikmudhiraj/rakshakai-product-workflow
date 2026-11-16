@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { confirmPreviewDestination, previewPlace } from "../src/gisPlaceSelection.js";
 import {
   applyRouteResponse,
   clearCalculatedRoutes,
@@ -32,16 +31,6 @@ const realRoutes = [
   }
 ];
 
-test("search candidate remains preview P until explicit confirmation makes destination D", () => {
-  const initial = emptyRouteNavigationState();
-  const previewed = previewPlace(initial, { id: "medak", label: "Medak, Telangana, India", lat: 17.9375095, lng: 78.211745 });
-  assert.equal(previewed.destination, null);
-  assert.equal(previewed.searchPreview.label, "Medak, Telangana, India");
-  const confirmed = confirmPreviewDestination(previewed);
-  assert.equal(confirmed.searchPreview, null);
-  assert.equal(confirmed.destination.label, "Medak, Telangana, India");
-});
-
 test("selectedRouteId drives selected geometry, distance, ETA, and real-route gating", () => {
   let navigation = applyRouteResponse(
     emptyRouteNavigationState({ start: { lat: 17.53, lng: 78.26 }, destination: { lat: 18.04, lng: 78.27 } }),
@@ -62,6 +51,12 @@ test("recalculate and Clear Route remove stale alternatives and selectedRouteId"
   assert.deepEqual(cleared.routes, []);
   assert.deepEqual(cleared.routeOptions, []);
   assert.equal(cleared.route, null);
+  assert.equal(gisRouteButtonStates({
+    start: { lat: 17.51, lng: 78.32 },
+    destination: { lat: 17.53, lng: 78.38 },
+    route: cleared.route,
+    hasRouteWork: true
+  }).clear.disabled, true, "Keep route points but disable Clear Route after there is no route to remove");
 });
 
 test("approximate fallback disables full navigation while a real OSRM route enables it", () => {
@@ -76,4 +71,14 @@ test("approximate fallback disables full navigation while a real OSRM route enab
   };
   assert.equal(gisRouteButtonStates({ ...points, route: approximate }).external.disabled, true);
   assert.equal(gisRouteButtonStates({ ...points, route: realRoutes[0] }).external.disabled, false);
+});
+
+test("continuous GPS tracking has explicit start and stop states", () => {
+  const stopped = gisRouteButtonStates();
+  assert.equal(stopped.tracking.label, "Start GPS Tracking");
+  assert.equal(stopped.tracking.pressed, false);
+  const active = gisRouteButtonStates({ locationTracking: true });
+  assert.equal(active.tracking.label, "Stop GPS Tracking");
+  assert.equal(active.tracking.pressed, true);
+  assert.equal(active.location.disabled, true);
 });

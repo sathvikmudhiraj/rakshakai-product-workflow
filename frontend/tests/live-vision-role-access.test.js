@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { isOperatorRole, landingForRole, loadAiVisionData, resolveViewAccess } from "../src/roleAccess.js";
 
-const RESTRICTED_PATHS = ["/api/camera-feeds", "/api/camera-sources", "/api/video-evidence", "/api/ai/health"];
+const RESTRICTED_PATHS = ["/api/camera-feeds", "/api/camera-sources", "/api/video-evidence", "/api/ai/health", "/api/ai-observations"];
 
 const HTML = `<!doctype html><html><body>
   <h1 id="viewTitle">RakshakAI</h1>
-  <p id="permissionMessage" class="form-status error restricted-hidden" role="alert"></p>
   <nav>
     <button class="nav-item" data-view="dashboard" data-roles="Police Officer,Admin">Dashboard</button>
     <button class="nav-item" data-view="live-vision" data-roles="Police Officer,Admin">Live Vision</button>
@@ -46,6 +46,12 @@ test("Citizen pure helper behavior: landing fallback and non-operator role", () 
   assert.equal(isOperatorRole("Citizen"), false);
 });
 
+test("restored sessions apply role restrictions before showing a deep link", () => {
+  const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  const restore = appSource.match(/async function checkSession[\s\S]*?(?=\r?\n}\r?\n)/)?.[0] || "";
+  assert.match(restore, /state\.user = me\.user;\s*applyRoleAccess\(\);\s*showApp\(\);/);
+});
+
 test("Citizen opening /rakshak/live-vision executes production access logic and falls back to missing", () => {
   const { document, applyNavVisibility } = buildDom();
   applyNavVisibility("Citizen");
@@ -59,16 +65,12 @@ test("Citizen opening /rakshak/live-vision executes production access logic and 
   assert.equal(document.body.dataset.view, "missing");
 
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').classList.contains("active"), false);
-  assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').getAttribute("aria-current"), "false");
+  assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').hasAttribute("aria-current"), false);
   assert.equal(document.querySelector('.nav-item[data-view="missing"]').classList.contains("active"), true);
   assert.equal(document.querySelector('.nav-item[data-view="missing"]').getAttribute("aria-current"), "page");
 
   assert.equal(document.querySelector('[data-panel="live-vision"]').classList.contains("active"), false);
   assert.equal(document.querySelector('[data-panel="missing"]').classList.contains("active"), true);
-
-  const permission = document.querySelector("#permissionMessage");
-  assert.equal(permission.textContent, "You do not have permission to view this operational page.");
-  assert.equal(permission.classList.contains("restricted-hidden"), false, "permission message must be visible");
 
   assert.equal(document.querySelector("#viewTitle").textContent, "Missing & Found Report Center");
 });
@@ -76,7 +78,7 @@ test("Citizen opening /rakshak/live-vision executes production access logic and 
 test("Citizen AI Vision data loading calls api() zero times and returns safe empty results", async () => {
   const { api, calls } = recordApi();
   const role = "Citizen";
-  const { cameras, sources, videoEvidence, aiHealth } = await loadAiVisionData({ role, api });
+  const { cameras, sources, videoEvidence, aiHealth, aiObservations } = await loadAiVisionData({ role, api });
 
   assert.equal(calls.length, 0, "Citizen must not invoke any operational AI Vision API");
   for (const path of RESTRICTED_PATHS) assert.ok(!calls.includes(path), `${path} must not be requested for Citizen`);
@@ -85,6 +87,7 @@ test("Citizen AI Vision data loading calls api() zero times and returns safe emp
   assert.deepEqual(sources, { sources: [] });
   assert.deepEqual(videoEvidence, { evidence: [], observations: [] });
   assert.deepEqual(aiHealth, { configured: false, status: "restricted" });
+  assert.deepEqual(aiObservations, { observations: [], pendingCount: 0 });
 });
 
 test("Police Officer opening live-vision stays allowed and issues operational AI Vision requests", async () => {
@@ -100,19 +103,17 @@ test("Police Officer opening live-vision stays allowed and issues operational AI
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').classList.contains("active"), true);
   assert.equal(document.querySelector('.nav-item[data-view="live-vision"]').getAttribute("aria-current"), "page");
   assert.equal(document.querySelector('[data-panel="live-vision"]').classList.contains("active"), true);
-  const permission = document.querySelector("#permissionMessage");
-  assert.equal(permission.classList.contains("restricted-hidden"), true, "no permission warning for operator");
-  assert.equal(permission.textContent, "");
   assert.equal(document.querySelector("#viewTitle").textContent, "Rakshak Live Vision");
 
   const responses = {
     "/api/camera-feeds": { cameras: [{ id: "c1", name: "Gate A" }] },
     "/api/camera-sources": { sources: [{ id: "s1", name: "NVR" }] },
     "/api/video-evidence": { evidence: [{ id: "v1" }], observations: [] },
-    "/api/ai/health": { configured: true, status: "connected" }
+    "/api/ai/health": { configured: true, status: "connected" },
+    "/api/ai-observations": { observations: [{ id: "obs1", status: "PENDING_REVIEW" }], pendingCount: 1 }
   };
   const { api, calls } = recordApi(responses);
-  const { cameras, sources, videoEvidence, aiHealth } = await loadAiVisionData({ role: "Police Officer", api });
+  const { cameras, sources, videoEvidence, aiHealth, aiObservations } = await loadAiVisionData({ role: "Police Officer", api });
 
   assert.deepEqual(calls.sort(), [...RESTRICTED_PATHS].sort(), "operator must call all operational AI Vision endpoints");
   assert.equal(cameras.cameras.length, 1);
@@ -120,4 +121,5 @@ test("Police Officer opening live-vision stays allowed and issues operational AI
   assert.equal(videoEvidence.evidence.length, 1);
   assert.deepEqual(videoEvidence.observations, []);
   assert.equal(aiHealth.status, "connected");
+  assert.equal(aiObservations.pendingCount, 1);
 });

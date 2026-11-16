@@ -48,6 +48,9 @@ function getPool() {
   if (getDatabaseMode() !== "postgres") {
     throw new Error("DATABASE_URL is required for PostgreSQL mode");
   }
+  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === "test") {
+    require("./testDatabaseSafety").assertSafeTestDatabase(process.env, { scoped: true });
+  }
   if (!pool) {
     pool = new Pool({
       ...connectionOptions(),
@@ -63,8 +66,12 @@ function getPool() {
 }
 
 function query(sql, params = []) {
-  const activeClient = transactionStorage.getStore()?.client;
-  if (activeClient) return activeClient.query(sql, params);
+  const context = transactionStorage.getStore();
+  if (context?.client) {
+    const pending = context.queryTail.then(() => context.client.query(sql, params));
+    context.queryTail = pending;
+    return pending;
+  }
   return getPool().query(sql, params);
 }
 
@@ -79,12 +86,13 @@ async function withTransaction(callback, transactionPool) {
   const activeClient = transactionStorage.getStore()?.client;
   if (activeClient) return callback(activeClient);
   const client = await (transactionPool || getPool()).connect();
-  const context = { client, onFailure: [] };
+  const context = { client, onFailure: [], queryTail: Promise.resolve() };
   let commitAttempted = false;
   let discardClient = false;
   try {
     await client.query("BEGIN");
     const result = await transactionStorage.run(context, () => callback(client));
+    await context.queryTail;
     commitAttempted = true;
     const committed = await client.query("COMMIT");
     if (committed.command === "ROLLBACK") {
@@ -93,16 +101,22 @@ async function withTransaction(callback, transactionPool) {
     return result;
   } catch (error) {
     // A lost COMMIT acknowledgement is ambiguous. Never delete evidence that may be committed.
-    const outcome = !commitAttempted || /^(23|40)/.test(error.code || "") ? "rolled_back" : "unknown";
+    // A server-reported PL/pgSQL exception from a deferred trigger rejects
+    // COMMIT, just like a constraint or serialization failure. Transport
+    // errors still leave the commit outcome unknown.
+    const outcome = !commitAttempted || /^(23|40)/.test(error.code || "") || error.code === "P0001" ? "rolled_back" : "unknown";
+    await context.queryTail.catch(() => {});
+    let rollbackConfirmed = false;
     try {
       await client.query("ROLLBACK");
+      rollbackConfirmed = true;
     } catch {
       discardClient = true;
     }
     if (outcome === "unknown") discardClient = true;
     for (const callback of context.onFailure.reverse()) {
       try {
-        await callback({ outcome });
+        await callback({ outcome, rollbackConfirmed });
       } catch {
         console.error(JSON.stringify({ event: "transaction_cleanup_failed", outcome }));
       }

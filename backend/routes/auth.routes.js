@@ -1,6 +1,8 @@
 const express = require("express");
 const controller = require("../controllers/auth.controller");
+const google = require("../controllers/googleWorkspace.controller");
 const { rateLimit } = require("express-rate-limit");
+const { requireCitizenRegistrationEnabled } = require("../middleware/citizenRegistration.middleware");
 
 const router = express.Router();
 const authLimiter = rateLimit({
@@ -20,8 +22,14 @@ const passwordChangeLimiter = rateLimit({
 });
 
 router.get("/me", controller.me);
+router.get("/google/status", google.status);
+router.get("/google/start", authLimiter, google.start);
+router.get("/google/callback", authLimiter, google.callback);
+router.get("/sessions", controller.sessions);
+router.post("/sessions/revoke-others", passwordChangeLimiter, controller.revokeOtherSessions);
+router.delete("/sessions/:id", passwordChangeLimiter, controller.revokeSession);
 router.post("/login", authLimiter, controller.login);
-router.post("/register", controller.register);
+router.post("/register", requireCitizenRegistrationEnabled, controller.register);
 router.post("/logout", controller.logout);
 router.post("/change-password", passwordChangeLimiter, controller.changePassword);
 

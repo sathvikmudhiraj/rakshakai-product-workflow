@@ -11,6 +11,12 @@ module.exports = createRepository({
     { name: "unit_subtype", value: (item) => item.unitSubtype || item.unit_subtype || null },
     { name: "last_ack_at", value: (item) => (item.lastAckAt || item.last_ack_at ? dateValue(item.lastAckAt || item.last_ack_at) : null) },
     { name: "ack_timeout_seconds", value: (item) => Number(item.ackTimeoutSeconds || item.ack_timeout_seconds || 60) },
+    { name: "latitude", value: (item) => item.latitude ?? item.lat ?? null },
+    { name: "longitude", value: (item) => item.longitude ?? item.lng ?? null },
+    { name: "location_accuracy", value: (item) => item.locationAccuracy ?? item.accuracy ?? null },
+    { name: "location_captured_at", value: (item) => item.locationCapturedAt || null },
+    { name: "location_received_at", value: (item) => item.locationReceivedAt || null },
+    { name: "location_source", value: (item) => item.locationSource || item.source || null },
     { name: "updated_at", value: (item) => dateValue(item.lastUpdated) }
   ],
   serialize: (record) => {
@@ -33,6 +39,14 @@ module.exports = createRepository({
     last_ack_at: row.data?.last_ack_at || row.last_ack_at || null,
     ackTimeoutSeconds: row.data?.ack_timeout_seconds ?? row.ack_timeout_seconds ?? 60,
     ack_timeout_seconds: row.data?.ack_timeout_seconds ?? row.ack_timeout_seconds ?? 60,
+    latitude: row.latitude ?? row.data?.latitude ?? row.data?.lat ?? null,
+    lat: row.latitude ?? row.data?.lat ?? row.data?.latitude ?? null,
+    longitude: row.longitude ?? row.data?.longitude ?? row.data?.lng ?? null,
+    lng: row.longitude ?? row.data?.lng ?? row.data?.longitude ?? null,
+    locationAccuracy: row.location_accuracy ?? row.data?.locationAccuracy ?? row.data?.accuracy ?? null,
+    locationCapturedAt: row.location_captured_at || row.data?.locationCapturedAt || null,
+    locationReceivedAt: row.location_received_at || row.data?.locationReceivedAt || null,
+    locationSource: row.location_source || row.data?.locationSource || row.data?.source || null,
     lastUpdated: row.data?.lastUpdated || row.updated_at || null,
     updated_at: row.data?.updatedAt || row.updated_at || null
   })
