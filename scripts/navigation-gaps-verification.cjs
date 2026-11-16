@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const fs = require('node:fs');
 const path = require('node:path');
+const { localDemoPassword } = require('./local-demo-auth.cjs');
 const base = process.env.NAV_BASE_URL || 'http://localhost:3000';
 const output = process.env.NAV_REPORT_PATH || path.join(process.env.TEMP || '.', 'rakshak-navigation-gaps.json');
 const users = [ ['admin','admin@rakshakai.local'], ['police','police@rakshakai.local'], ['citizen','citizen@rakshakai.local'] ].filter(([role]) => !process.env.NAV_ROLE || process.env.NAV_ROLE === role);
@@ -66,7 +67,7 @@ async function notification(page, entityId, expectedView, notificationId) {
     try {
       await page.goto(base,{waitUntil:'domcontentloaded'});
       await page.locator('#loginForm input[name=email]').fill(email);
-      await page.locator('#loginForm input[name=password]').fill(process.env.NAV_DEMO_PASSWORD||'demo123');
+      await page.locator('#loginForm input[name=password]').fill(localDemoPassword(role));
       await page.locator('#loginForm button[type=submit]').click();
       await page.locator('#appShell:not(.app-hidden)').waitFor({state:'visible',timeout:20000});
       console.log(`${role}: authenticated once`);

@@ -1,11 +1,16 @@
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
+const { assertSafeTestDatabase } = require('../services/testDatabaseSafety');
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const testDatabaseUrl = assertSafeTestDatabase(process.env);
+const testPassword = process.env.TEST_USER_PASSWORD || '';
+if (testPassword.length < 12 || testPassword.length > 128 || !/[a-z]/.test(testPassword) || !/[A-Z]/.test(testPassword) || !/\d/.test(testPassword)) {
+  throw new Error('TEST_USER_PASSWORD must be 12-128 characters and include uppercase, lowercase, and a number');
+}
+const pool = new Pool({ connectionString: testDatabaseUrl.toString(), ssl: false });
 
 async function main() {
-  const hash = await bcrypt.hash('RakshakAI@2024', 12);
+  const hash = await bcrypt.hash(testPassword, 12);
   const now = new Date().toISOString();
   
   const users = [
@@ -20,10 +25,8 @@ async function main() {
       'INSERT INTO users (id, name, email, role, password_hash, created_at, data) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) ON CONFLICT (id) DO UPDATE SET password_hash = $5, data = $7::jsonb',
       [u.id, u.name, u.email, u.role, hash, now, data]
     );
-    console.log('Created:', u.email, '-', u.role);
   }
-  
-  console.log('ALL TEST USERS CREATED SUCCESSFULLY');
+  console.log(`Created ${users.length} synthetic test users in the validated disposable test database.`);
   await pool.end();
 }
 

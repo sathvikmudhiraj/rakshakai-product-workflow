@@ -7,13 +7,14 @@
 //
 // Usage: node scripts/gis-mobile-layer-acceptance.cjs
 // Env: GIS_BASE_URL (default http://localhost:3001 — the Compose stack with the local
-// Telangana OSRM graph), GIS_ADMIN_PASSWORD (default demo123)
+// Telangana OSRM graph), plus SEED_ADMIN_PASSWORD from backend/.env.
 
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
+const { localDemoPassword } = require("./local-demo-auth.cjs");
 
 const base = process.env.GIS_BASE_URL || "http://localhost:3001";
-const password = process.env.GIS_ADMIN_PASSWORD || "demo123";
+const password = localDemoPassword("admin");
 const VIEWPORTS = [
   [390, 844],
   [430, 932],

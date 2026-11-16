@@ -1,23 +1,15 @@
 /**
- * Reset local/demo users to the documented demo credentials.
+ * Reset local JSON demo users to passwords configured in backend/.env.
  *
  * Usage:
  *   npm --prefix backend run reset:demo-users
  *
- * This script refuses to run in production. It supports the current database
- * mode: JSON when DATABASE_URL is empty, PostgreSQL when DATABASE_URL is set.
+ * This script is deliberately JSON-only so it cannot change PostgreSQL users.
  */
 
 const bcrypt = require("bcryptjs");
-const usersRepository = require("../repositories/users.repository");
-const { readDb, writeDb, now } = require("../services/core.service");
-const {
-  closePool,
-  getDatabaseMode,
-  query
-} = require("../services/postgres.service");
+const { getDatabaseMode } = require("../services/postgres.service");
 
-const DEMO_PASSWORD = "demo123";
 const DEMO_USERS = [
   { id: "u_admin", name: "Admin Control Room", email: "admin@rakshakai.local", role: "Admin" },
   { id: "u_police", name: "Inspector Kavya Rao", email: "police@rakshakai.local", role: "Police Officer" },
@@ -28,9 +20,30 @@ function assertNonProduction() {
   if (process.env.NODE_ENV === "production") {
     throw new Error("Refusing to reset demo users when NODE_ENV=production");
   }
+  if (getDatabaseMode() !== "json") {
+    throw new Error("Refusing to reset demo users while DATABASE_URL is configured; local demo accounts are JSON-only");
+  }
 }
 
-async function resetJsonUsers(passwordHash) {
+function configuredPasswords() {
+  const passwords = {
+    Admin: process.env.SEED_ADMIN_PASSWORD || "",
+    "Police Officer": process.env.SEED_POLICE_PASSWORD || "",
+    Citizen: process.env.SEED_CITIZEN_PASSWORD || ""
+  };
+  for (const [role, password] of Object.entries(passwords)) {
+    if (password.length < 12 || password.length > 128 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password)) {
+      throw new Error(`SEED password for ${role} must be 12-128 characters and include uppercase, lowercase, and a number`);
+    }
+  }
+  if (new Set(Object.values(passwords)).size !== Object.keys(passwords).length) {
+    throw new Error("SEED password values must be distinct");
+  }
+  return passwords;
+}
+
+async function resetJsonUsers(passwordHashes) {
+  const { readDb, writeDb, now } = require("../services/core.service");
   const db = readDb();
   db.users = Array.isArray(db.users) ? db.users : [];
   for (const demo of DEMO_USERS) {
@@ -39,7 +52,7 @@ async function resetJsonUsers(passwordHash) {
     const record = {
       ...(existing || {}),
       ...demo,
-      passwordHash,
+      passwordHash: passwordHashes[demo.role],
       sessionVersion: null,
       createdAt: existing?.createdAt || now()
     };
@@ -50,32 +63,18 @@ async function resetJsonUsers(passwordHash) {
   writeDb(db);
 }
 
-async function resetPostgresUsers(passwordHash) {
-  for (const demo of DEMO_USERS) {
-    const existing = await query("SELECT id, created_at FROM users WHERE lower(email) = lower($1) LIMIT 1", [demo.email]);
-    const record = {
-      ...demo,
-      id: existing.rows[0]?.id || demo.id,
-      passwordHash,
-      sessionVersion: null,
-      createdAt: existing.rows[0]?.created_at || now()
-    };
-    await usersRepository.upsert(record);
-  }
-}
-
 async function main() {
   assertNonProduction();
-  const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 12);
-  if (getDatabaseMode() === "postgres") await resetPostgresUsers(passwordHash);
-  else await resetJsonUsers(passwordHash);
-  console.log(`Demo users reset in ${getDatabaseMode()} mode:`);
-  for (const user of DEMO_USERS) console.log(`- ${user.email} / ${DEMO_PASSWORD} (${user.role})`);
+  const passwords = configuredPasswords();
+  const passwordHashes = Object.fromEntries(await Promise.all(
+    Object.entries(passwords).map(async ([role, password]) => [role, await bcrypt.hash(password, 12)])
+  ));
+  await resetJsonUsers(passwordHashes);
+  console.log("Local JSON demo accounts reset. Password values were not displayed.");
 }
 
 main()
   .catch((error) => {
     console.error("Failed to reset demo users:", error.message);
     process.exitCode = 1;
-  })
-  .finally(() => closePool().catch(() => {}));
+  });

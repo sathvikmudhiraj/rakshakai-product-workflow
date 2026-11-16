@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const { localDemoPassword } = require('./local-demo-auth.cjs');
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -15,7 +16,7 @@ const { chromium } = require('playwright');
     });
     await page.goto('http://127.0.0.1:3001/', { waitUntil: 'domcontentloaded' });
     await page.locator('#loginForm input[name=email]').fill('admin@rakshakai.local');
-    await page.locator('#loginForm input[name=password]').fill(process.env.NAV_DEMO_PASSWORD || 'demo123');
+    await page.locator('#loginForm input[name=password]').fill(localDemoPassword('admin'));
     await page.locator('#loginForm button[type=submit]').click();
     await page.locator('#appShell:not(.app-hidden)').waitFor({ state: 'visible', timeout: 25000 });
     const nav = page.locator('.nav-item[data-view="gis"]');

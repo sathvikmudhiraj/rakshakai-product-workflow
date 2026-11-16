@@ -8922,7 +8922,7 @@ $$("[data-demo-login]").forEach((button) => {
   button.addEventListener("click", () => {
     setAuthMode("login");
     $("#loginForm input[name='email']").value = button.dataset.demoLogin;
-    $("#loginForm input[name='password']").value = "demo123";
+    $("#loginForm input[name='password']").value = "";
   });
 });
 

@@ -29,6 +29,8 @@ backups/
 
 # Local runtime JSON database. Keep sanitized examples trackable.
 /backend/data/db.json
+/backend/data/db.local.json
+/backend/data/db.backup.json
 /backend/data/*.local.json
 /backend/data/*.backup.json
 !/backend/data/db.example.json

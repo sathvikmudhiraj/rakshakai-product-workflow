@@ -164,7 +164,31 @@ const repositories = [
   copilotConversationsRepository,
   copilotMessagesRepository
 ];
-const DEMO_PASSWORD_HASH = "$2b$12$6jsUZFcGM/YnWgHEIbP95.v0Zo.8eQtTpSCDuQ3MN8.7/ugAfpPwW";
+const LOCAL_DEMO_PASSWORD_ENV = {
+  Admin: "SEED_ADMIN_PASSWORD",
+  "Police Officer": "SEED_POLICE_PASSWORD",
+  Citizen: "SEED_CITIZEN_PASSWORD"
+};
+const localDemoPasswordHashes = new Map();
+
+function localDemoPasswordHashesFromEnv() {
+  const entries = Object.entries(LOCAL_DEMO_PASSWORD_ENV).map(([role, envName]) => [role, envName, process.env[envName] || ""]);
+  const configured = entries.some(([, , password]) => password.length > 0);
+  if (!configured) return Object.fromEntries(entries.map(([role]) => [role, null]));
+  const configuredEntries = entries.filter(([, , password]) => password);
+  if (new Set(configuredEntries.map(([, , password]) => password)).size !== configuredEntries.length) {
+    throw new Error("Local demo account password values must be distinct");
+  }
+  for (const [role, envName, password] of configuredEntries) {
+    const policyError = passwordPolicyError(password, envName);
+    if (policyError) throw new Error(policyError);
+    const cached = localDemoPasswordHashes.get(envName);
+    if (!cached || cached.password !== password) {
+      localDemoPasswordHashes.set(envName, { password, hash: bcrypt.hashSync(String(password), 12) });
+    }
+  }
+  return Object.fromEntries(entries.map(([role, envName, password]) => [role, password ? localDemoPasswordHashes.get(envName).hash : null]));
+}
 
 function uid(prefix) {
   return `${prefix}_${crypto.randomBytes(4).toString("hex")}`;
@@ -176,13 +200,17 @@ function now() {
 
 function seedDb() {
   const t = now();
+  const localPasswordHashes = localDemoPasswordHashesFromEnv();
+  const adminPasswordHash = localPasswordHashes.Admin;
+  const policePasswordHash = localPasswordHashes["Police Officer"];
+  const citizenPasswordHash = localPasswordHashes.Citizen;
   return {
     users: [
-      { id: "u_police", name: "Inspector Kavya Rao", email: "police@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "DISPATCHER" } },
-      { id: "u_admin", name: "Admin Control Room", email: "admin@rakshakai.local", role: "Admin", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "SUPERVISOR" } },
-      { id: "u_citizen", name: "Citizen Reporter", email: "citizen@rakshakai.local", role: "Citizen", passwordHash: DEMO_PASSWORD_HASH },
-      { id: "u_calltaker", name: "Call Taker Priya", email: "calltaker@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "CALL_TAKER" } },
-      { id: "u_field", name: "Field Officer Rajesh", email: "field@rakshakai.local", role: "Police Officer", passwordHash: DEMO_PASSWORD_HASH, data: { operationalRole: "FIELD_OFFICER" } }
+      { id: "u_police", name: "Inspector Kavya Rao", email: "police@rakshakai.local", role: "Police Officer", passwordHash: policePasswordHash, data: { operationalRole: "DISPATCHER" } },
+      { id: "u_admin", name: "Admin Control Room", email: "admin@rakshakai.local", role: "Admin", passwordHash: adminPasswordHash, data: { operationalRole: "SUPERVISOR" } },
+      { id: "u_citizen", name: "Citizen Reporter", email: "citizen@rakshakai.local", role: "Citizen", passwordHash: citizenPasswordHash },
+      { id: "u_calltaker", name: "Call Taker Priya", email: "calltaker@rakshakai.local", role: "Police Officer", passwordHash: policePasswordHash, data: { operationalRole: "CALL_TAKER" } },
+      { id: "u_field", name: "Field Officer Rajesh", email: "field@rakshakai.local", role: "Police Officer", passwordHash: policePasswordHash, data: { operationalRole: "FIELD_OFFICER" } }
     ],
     cameras: [
       { id: "cam_c19", cameraId: "C-19", name: "C-19 Red Zone", zone: "Red Zone", health: "online", aiStatus: "Demo AI sample: possible person", density: 68, scene: "cctv-red-zone.svg", sourceType: "demo_seed", isDemo: true, aiEnabled: false },
@@ -336,7 +364,18 @@ function defaultInvestigationCategories(timestamp = now()) {
 
 function ensureDb() {
   fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, JSON.stringify(seedDb(), null, 2));
+  if (fs.existsSync(dbPath)) return;
+  if (process.env.NODE_ENV !== "test") {
+    const seedNames = Object.values(LOCAL_DEMO_PASSWORD_ENV);
+    const seedPasswords = seedNames.map((name) => process.env[name] || "");
+    if (seedPasswords.some((password) => !password)) {
+      throw new Error("Set all three SEED_*_PASSWORD values in backend/.env before the first local run");
+    }
+    if (new Set(seedPasswords).size !== seedPasswords.length) {
+      throw new Error("Local demo account password values must be distinct");
+    }
+  }
+  fs.writeFileSync(dbPath, JSON.stringify(seedDb(), null, 2));
 }
 
 function readDb() {

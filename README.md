@@ -23,6 +23,13 @@ npm run dev
 Run this from the project root. It starts the backend and frontend together.
 Press `Ctrl+C` once to stop both services.
 
+For local demo sign-in, first copy `backend/.env.example` to `backend/.env`,
+then set distinct `SEED_ADMIN_PASSWORD`, `SEED_POLICE_PASSWORD`, and
+`SEED_CITIZEN_PASSWORD` values there. Use 12-128 characters with uppercase,
+lowercase, and a number. The ignored local runtime database is seeded from
+these values on first start. Existing local account passwords are left intact;
+the explicit `npm run reset:demo-users` command only works in JSON mode.
+
 If port `3000` or `5000` is already occupied, stop the older app process and run the command again.
 
 ## Local Demo Data
@@ -47,13 +54,9 @@ Reset the local/demo accounts only in development:
 npm run reset:demo-users
 ```
 
-Demo credentials:
-
-```text
-admin@rakshakai.local / demo123
-police@rakshakai.local / demo123
-citizen@rakshakai.local / demo123
-```
+Admin, Police Officer, and Citizen demo accounts are available locally after
+the environment setup above. Local password values stay in ignored environment
+files; committed example fixtures contain only synthetic test records.
 
 The reset script refuses to run when `NODE_ENV=production`.
 

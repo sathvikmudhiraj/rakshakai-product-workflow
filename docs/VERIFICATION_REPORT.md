@@ -41,11 +41,9 @@
 | `GET /api/camera-sources` | ✅ Pass | Admin/Police only |
 
 ### Login Test Accounts
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | `verify_admin@test.local` | `RakshakAI@2024` |
-| Police Officer | `verify_police@test.local` | `RakshakAI@2024` |
-| Citizen | `verify_citizen@test.local` | `RakshakAI@2024` |
+Synthetic test accounts use reserved `test.local` addresses. Their password is
+provided through `TEST_USER_PASSWORD` in an isolated test environment and is
+not recorded in this report.
 
 ### Role-Based Access Control
 | Endpoint | Unauthenticated | Citizen | Police | Admin |

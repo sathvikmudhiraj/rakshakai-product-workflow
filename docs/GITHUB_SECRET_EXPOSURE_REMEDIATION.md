@@ -116,3 +116,21 @@ Do not dismiss any matching GitHub alert unless its exact alert metadata and mat
 **Consequence for the GitHub alert.** If a GoCardless Live Access Token alert is outstanding for this repository, its matching blob is not present in this clone. That leaves, locally indistinguishable: (a) pushed content from a different clone/machine that was later rewritten or pruned locally, or (b) a different repository entirely. Only the GitHub Security UI alert metadata (alert ID, repository, state, validity, per-location blob/commit SHAs) can decide between these.
 
 **Status change.** Local-repository component of the investigation is now **VERIFIED CLEAN (this clone, full history, all refs, dangling included)**. Overall status remains **PARTIAL / UNVERIFIED** until the GitHub-side alert records are captured, because local cleanliness cannot rule out exposure via a different clone. The provider-side revocation guidance is unchanged, but local evidence now weighs strongly against this repository having been the exposure vector.
+
+## Addendum 2026-11-09 (b): tracked `login.json` seed credential
+
+**Finding.** A file `login.json` at the repository root was committed in `efc1abe` ("fix: harden backend safety and release configuration") and removed from the tree in `5db536e`. Its blob (`e8f48f93a210ab316783fdc0281959ce6c39ccfe`) is reachable from pushed `origin/*` refs, so **it remains in GitHub history today**. `.gitignore` now contains `/login.json` and the file is untracked at HEAD; the worktree copy is byte-identical to the pushed blob.
+
+**Contents (redacting classification, values never printed):** a JSON object `{ username, password }`; username 5 chars, password 7 chars lowercase-alphanumeric (weak, human-chosen). Hash comparison (SHA-256 fingerprints only) shows:
+
+- It is **not** the Neon `DATABASE_URL` password in `backend/.env`.
+- It **is** the shared password of the Admin, Police Officer, and Citizen seed accounts in `backend/data/db.json` — the same duplicate/short seed password flagged by `npm run docker:config`.
+
+**Impact.** Anyone who has read this public repository's history can obtain a working username + password pair for the application's seed accounts. If the operational database was seeded with the same credentials (likely, given the seed pipeline), those accounts are openable by third parties. A direct read-only verification against the operational database was attempted and **blocked by the local permission system**; validity in the operational DB is therefore **UNVERIFIED**.
+
+**Owner actions (priority).**
+1. **Rotate the seed-account passwords** in the operational deployment immediately (Admin first) via the app's change-password flow or the seed settings, independent of GitHub cleanup. If demo/seed accounts have no business role in the operational database, deactivate them instead.
+2. Treat the login as compromised until rotated; review the operational audit log for logins from those accounts between the push date and the rotation.
+3. The GitHub-side blob purge (filter-repo/history rewrite + force-push, then GitHub Support secret-removal request) is an owner decision; rotation makes the history harmless even without the purge. No history rewrite was performed here.
+
+**Scope note.** This finding is independent of the 8 secret-scanning alerts (see Addendum (a) and the main report): the login.json credential is a generic username/password pair, not a provider token, which is why provider-token scanning did not flag it.

@@ -1,15 +1,5 @@
-const bcrypt = require("bcryptjs");
-const { query, closePool } = require("../services/postgres.service");
-
-async function fixPasswords() {
-  const hash = await bcrypt.hash("demo123", 12);
-  console.log("hash:", hash);
-  await query("UPDATE users SET password_hash = $1 WHERE email = $2", [hash, "admin@example.test"]);
-  await query("UPDATE users SET password_hash = $1 WHERE email = $2", [hash, "admin@rakshakai.local"]);
-  await query("UPDATE users SET password_hash = $1 WHERE email = $2", [hash, "police@rakshakai.local"]);
-  await query("UPDATE users SET password_hash = $1 WHERE email = $2", [hash, "officer@example.test"]);
-  console.log("done");
-  await closePool();
-}
-
-fixPasswords().catch(console.error);
+// Legacy helper intentionally disabled: it embedded a shared password and could
+// update PostgreSQL accounts. Use reset-demo-users.js with distinct local
+// SEED_*_PASSWORD values in backend/.env; that command only updates JSON mode.
+console.error("This legacy password helper is disabled. Configure local SEED_*_PASSWORD values and use reset-demo-users.js in JSON mode.");
+process.exitCode = 1;
